@@ -75,14 +75,15 @@ export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: P
     return () => clearInterval(tick);
   }, []);
 
+  // The player object exists before onReady but its methods are attached only then.
   const toggle = () => {
     const p = api.current;
-    if (!p) return;
+    if (!p?.playVideo) return;
     if (playing) p.pauseVideo(); else p.playVideo();
   };
   const seek = (by: number) => {
     const p = api.current;
-    if (!p) return;
+    if (!p?.seekTo) return;
     p.seekTo(Math.max(0, Math.min(length || Infinity, p.getCurrentTime() + by)), true);
   };
   const onScrubKey = (e: KeyboardEvent) => {
