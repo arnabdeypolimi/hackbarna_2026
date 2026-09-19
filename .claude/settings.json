@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(mkdir *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(tree *)",
+      "Bash(pwd)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(sudo *)"
+    ]
+  },
+  "model": "sonnet",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "pr-review-toolkit@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true,
+    "claude-mem@thedotmack": true,
+    "github@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "ui-ux-pro-max@ui-ux-pro-max-skill": true,
+    "academic-research-skills@academic-research-skills": true,
+    "huggingface-skills@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true,
+    "marketing-skills@marketingskills": true,
+    "agent-skills@addy-agent-skills": true
+  },
+  "context": {
+    "include": [
+      ".claude/rules.md",
+      ".claude/config.yaml",
+      "CLAUDE.md"
+    ]
+  }
+}

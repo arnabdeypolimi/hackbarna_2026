@@ -1,0 +1,43 @@
+[project]
+name = "tv-avatar"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pipecat-ai[silero,webrtc,runner]>=1.8.0,<2.0.0",
+    "pipecat-slng==0.5.2",
+    "pipecat-anam==0.2.0a6",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "loguru>=0.7",
+    "openai>=3.16.2",
+    "polars>=1.44.2",
+    "pyarrow>=25.0.1",
+    "aiosqlite>=0.22.1",
+    "qdrant-client>=1.19.1",
+    "sentence-transformers>=3.0,<6",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.uv]
+# pipecat-anam's modern line is a prerelease; the stable 0.1.0 targets legacy Pipecat.
+prerelease = "explicit"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tv_avatar"]

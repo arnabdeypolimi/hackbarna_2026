@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.serena/
+.claude/.headroom_wrap_*
+claude-setup.lock.json
+.worktrees/
+
+# Phase 2 — local data, never committed
+data/
+.DS_Store
