@@ -1,0 +1,384 @@
+/* Layout is drawn at 1920×1080 inside #stage and scaled to the screen.
+   Avoids CSS newer than Chrome 84 (no inset, aspect-ratio, :has, backdrop-filter). */
+:root {
+  /* Surfaces. The room is the light; the glass is smoked, not milky, because a living
+     room is dim in the evening and white ink needs a dark plane to sit on. */
+  --glass: rgba(26, 22, 18, 0.58);
+  --glass-edge: rgba(255, 255, 255, 0.3);
+  --solid: #322e2a;            /* dialogs and the profile form: glass with nothing behind it */
+  --shade: rgba(20, 18, 16, 0.28);
+
+  /* Two scrims, because two kinds of overlay sit on them. One dims the screen behind a panel
+     that carries its own fill; the other IS the surface, so it has to put the room out. */
+  --scrim: rgba(20, 18, 16, 0.55);
+  --scrim-full: rgba(20, 18, 16, 0.96);
+
+  /* One ring width for every focusable that takes a ring rather than inverting. Focus is the
+     state a viewer hunts for from the sofa, so it is never thinner on one control than another. */
+  --ring: 5px;
+
+  /* Controls, by rank. Value carries the hierarchy so no hue is spent on it. */
+  --primary: rgba(255, 255, 255, 0.28);
+  --primary-edge: rgba(255, 255, 255, 0.4);
+  --chip: rgba(255, 255, 255, 0.16);
+  --chip-quiet: rgba(255, 255, 255, 0.1);
+
+  --ink: #fff;
+  --ink-2: rgba(255, 255, 255, 0.78);
+  --ink-3: rgba(255, 255, 255, 0.6);
+  --focus-bg: #fff;
+  --focus-ink: #23211f;
+
+  /* The four meaning-bearing colours. Each one means exactly one thing, and two of them
+     are the colours of the physical keys on the remote in the viewer's hand. */
+  --key-red: #e5484d;          /* the RED key: My List */
+  --key-yellow: #f5c542;       /* the YELLOW key: the import path, shown on the drop overlay */
+  --kids: #5fd0bb;             /* a kids profile, the one cool note in a warm room */
+  --alert: #a33a2b;            /* consequence: destructive, or an action that did not happen */
+
+  /* Spacing, on a 4px base, named for the relationship each value expresses. The steps are
+     far apart on purpose: at 10 feet a 4px difference is below what the eye resolves, so two
+     intervals closer together than one step would read as the same interval. */
+  --frame: 64px;         /* the stage's margin, identical on all four sides */
+  --gutter: 40px;        /* between the two panels */
+  --pad-panel: 40px;     /* a panel's own inner padding */
+  --pad-text: 56px;      /* the text column inset inside the browse panel */
+  --gap-section: 32px;   /* between two areas of one panel */
+  --gap-block: 24px;     /* between blocks: heading, row, detail */
+  --gap-group: 16px;     /* between related lines of one block */
+  --gap-item: 12px;      /* between peers in a set, such as chips */
+  --gap-tight: 8px;      /* inside a single group */
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+body {
+  background: #8d8a86;
+  color: var(--ink);
+  font-family: 'Sora', system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input { caret-color: var(--ink); }
+::selection { background: rgba(255, 255, 255, 0.26); color: var(--ink); }
+
+
+#stage { position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
+
+/* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter. */
+.room {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  background:
+    radial-gradient(900px 700px at 12% 18%, rgba(255, 240, 219, 0.55), transparent 70%),
+    radial-gradient(700px 500px at 92% 10%, rgba(255, 247, 234, 0.35), transparent 70%),
+    radial-gradient(1400px 420px at 35% 105%, rgba(52, 48, 45, 0.85), transparent 70%),
+    radial-gradient(600px 900px at 75% 60%, rgba(120, 112, 104, 0.5), transparent 70%),
+    linear-gradient(180deg, #b9b5b0 0%, #9a9690 55%, #7b7771 100%);
+}
+.room::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--shade); }
+
+.panel { position: absolute; background: var(--glass); border: 1.5px solid var(--glass-edge); border-radius: 48px; }
+.main { left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0; }
+/* Its right edge lands on the frame, so the screen has one right edge instead of two. The
+   tilt is deliberate and gives the screen depth, which is why its top is not aligned to
+   the browse panel's. */
+.side {
+  left: 1308px; top: 74px; width: 548px; height: 900px; overflow: hidden;
+  padding: var(--pad-panel) var(--pad-panel) var(--gap-section);
+  transform: perspective(2200px) rotateY(-7deg); transform-origin: 0 50%;
+  display: flex; flex-direction: column;
+}
+
+h1 { margin: 0 0 0 56px; font-size: 56px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* Search */
+.search {
+  left: 720px; top: var(--gap-block); width: 480px; height: 70px; border-radius: 35px;
+  display: flex; align-items: center; gap: var(--gap-group); padding: 0 var(--gap-section);
+}
+.search svg { flex: none; opacity: 0.85; }
+.search input { flex: 1; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
+.search input::placeholder { color: var(--ink-3); }
+.search:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+
+
+/* Poster row */
+.rowwrap { position: relative; height: 344px; margin-top: var(--gap-group); overflow: hidden; }
+/* With no posters there is no detail block under the row either, so the row takes the panel
+   it would otherwise leave empty and the message sits in the middle of it. */
+.rowwrap.bare { height: 660px; }
+.track {
+  position: absolute; left: 0; top: 0; height: 100%;
+  display: flex; align-items: center; gap: var(--gap-block); padding: 0 var(--pad-text);
+  transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.poster { position: relative; flex: none; width: 214px; height: 272px; border-radius: 24px; overflow: hidden; background: #46423e; transition: transform 0.2s; }
+.poster.sel { width: 262px; height: 334px; border-radius: 28px; }
+.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; transform: scale(1.03); }
+
+/* Over artwork of any colour, so the mark brings its own dark ground. */
+.savemark {
+  position: absolute; z-index: 1; right: 12px; top: 12px; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(18, 15, 13, 0.9); box-shadow: 0 2px 10px rgba(20, 18, 16, 0.45);
+  color: var(--key-red);
+}
+.savemark svg { width: 22px; height: 22px; fill: var(--key-red); stroke: var(--key-red); }
+.poster.sel .savemark { right: 16px; top: 16px; width: 46px; height: 46px; }
+.poster.sel .savemark svg { width: 25px; height: 25px; }
+
+.art { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; padding: 22px; text-align: left; }
+/* Painted after the fallback title (it comes later in the markup), so artwork covers the title
+   the moment it lands. Waiting for the load event to hide it leaves both on screen for a frame.
+   Order rather than z-index: the panels above this one are stacked by document order too. */
+.art img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.art .t { position: relative; font-weight: 700; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35); }
+.art.has-img .t { display: none; }
+
+.empty { padding: 0 var(--pad-text); height: 100%; display: flex; flex-direction: column; justify-content: center; gap: var(--gap-item); color: var(--ink-2); font-size: 24px; max-width: 760px; }
+/* The track already carries that inset; taking it twice put the message a step to the right
+   of the heading it sits under. */
+.track .empty { padding: 0; }
+.empty b { color: var(--ink); font-size: 32px; font-weight: 600; }
+.data-state { height: 560px; }
+/* Fills the panel under the heading so the message sits in the middle of the space it has,
+   instead of pooling at the top and leaving the tallest element on screen looking unfinished. */
+.side-empty { padding: 0; flex: 1; height: auto; margin-top: 0; }
+
+/* Detail */
+.detail { display: flex; gap: var(--gutter); padding: var(--gap-block) var(--pad-text) 0; }
+.info { flex: 1; min-width: 0; }
+/* Two lines, always reserved: a third of this catalogue is franchise titles that need the
+   second one, and the part number at the end is what tells two of them apart. Reserved rather
+   than grown, so Watch stays on the same line as the viewer arrows along the row. */
+.info h3 {
+  margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15;
+  min-height: 92px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.meta { display: flex; gap: var(--gap-group); margin-top: var(--gap-tight); font-size: 17px; color: var(--ink-3); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--gap-item); margin-top: var(--gap-group); }
+.chip { padding: 5px 16px; border-radius: 18px; background: var(--chip-quiet); font-size: 16px; color: var(--ink-2); }
+.desc {
+  margin: var(--gap-group) 0 0; font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 62ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.actions { display: flex; gap: var(--gap-group); margin-top: var(--gap-block); }
+
+.btn { display: inline-flex; align-items: center; gap: 12px; height: 56px; padding: 0 28px; border-radius: 28px; background: var(--chip); font-size: 19px; font-weight: 500; white-space: nowrap; }
+.btn.wide { width: 100%; justify-content: center; height: 62px; font-size: 21px; }
+/* Watch and Continue are why the screen exists, so they are the brightest plane on it. */
+.btn.primary { background: var(--primary); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
+.btn:focus, .tab:focus, .link:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+.btn.primary:focus { box-shadow: none; }
+/* Delete and Exit cost something. Focus makes that plain instead of looking like consent. */
+.btn.danger:focus { background: var(--alert); color: var(--ink); }
+/* A filled heart is the saved state; the row carries the same mark on the poster itself. */
+.btn.saved svg { fill: var(--key-red); stroke: var(--key-red); }
+
+.trailer { position: relative; flex: none; width: 470px; height: 268px; border-radius: 30px; overflow: hidden; align-self: flex-start; }
+.trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.trailer .scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
+.trailer .bar { position: absolute; left: 18px; right: 22px; bottom: 18px; display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
+.trailer .pill { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 24px; background: rgba(255, 255, 255, 0.2); }
+.trailer:focus .pill { background: #fff; color: var(--focus-ink); }
+
+/* Side panel */
+/* flex: none because the panel is a column now — the backdrop keeps its height when a long
+   title fills the rest, rather than being squeezed to make room. */
+.resume-art { position: relative; flex: none; height: 250px; border-radius: 30px; overflow: hidden; }
+.side h3 { margin: var(--gap-group) 0 0; font-size: 38px; font-weight: 600; }
+.side .chips { margin-top: var(--gap-item); }
+.side .label { margin-top: var(--gap-group); }
+/* Three lines, as in the browse panel: this panel exists to resume a title, not to read
+   about one, and the fourth line was what pushed a series past the panel's edge. */
+.side .desc { -webkit-line-clamp: 3; }
+.label { margin: var(--gap-block) 0 0; font-size: 19px; color: var(--ink-2); }
+.side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: var(--gap-group); }
+.link { display: block; margin: var(--gap-tight) auto 0; padding: var(--gap-item) var(--gap-block); border-radius: 24px; font-size: 19px; color: var(--ink-2); }
+
+/* Tab bar */
+/* Centred on the browse panel, because four of its five controls filter that panel's row.
+   A 16px gap to the panel against a 32px gap to the screen edge is what makes it read as
+   belonging to the panel instead of floating at the bottom of the screen. */
+.tabs {
+  left: 276px; top: 956px; width: 780px; height: 92px; border-radius: 46px;
+  display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-item) 0 var(--gap-group);
+}
+.tab { height: 62px; padding: 0 26px; border-radius: 31px; font-size: 19px; color: var(--ink-2); white-space: nowrap; }
+.tab.cur { background: rgba(255, 255, 255, 0.22); color: var(--ink); }
+.avatar { position: relative; margin-left: auto; width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #3e3a36; font-weight: 600; font-size: 20px; }
+.avatar:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+
+/* Kids profiles are named the same everywhere: one cool tag against the warm room. */
+.ktag, .ptag {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  background: var(--kids); color: var(--focus-ink);
+  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.ktag { bottom: -7px; padding: 3px 11px; border-radius: 11px; font-size: 15px; }
+.ptag { bottom: 14px; padding: 4px 16px; border-radius: 14px; font-size: 17px; }
+.kidsflag {
+  display: inline-block; vertical-align: 12px; margin-left: 22px; padding: 5px 18px; border-radius: 20px;
+  background: var(--kids); color: var(--focus-ink); font-size: 20px; font-weight: 600; letter-spacing: 0.02em;
+}
+
+/* Footer */
+/* bottom: 32px puts its lower edge on the tab bar's, so the bottom chrome shares one line. */
+.hint { position: absolute; right: var(--frame); bottom: var(--gap-section); display: flex; gap: var(--gap-block); font-size: 17px; color: var(--ink-2); }
+.dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; }
+.dot.red { background: var(--key-red); }
+
+/* Overlays */
+/* Aligned to the browse panel's left edge, in the top band beside the search field rather than
+   centred across it: a toast naming a long title is wider than the room between them, and it
+   reports on something the viewer just did to that panel. It wraps instead of running off. */
+.toast {
+  position: absolute; left: var(--frame); top: var(--gap-block); transform: translateY(-30px); opacity: 0;
+  max-width: 620px; padding: 16px 30px; border-radius: 30px; background: rgba(35, 33, 31, 0.85); font-size: 20px;
+  transition: opacity 0.25s, transform 0.25s; pointer-events: none;
+}
+.toast.alert { background: rgba(140, 49, 37, 0.92); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.24); }
+.toast.show { opacity: 1; transform: translateY(0); }
+/* The player expands to fill the Recommended panel it lives in, nothing beyond it.
+   The embed letterboxes itself inside the box, so the chrome sits over the black. */
+.player {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 30px; overflow: hidden;
+  transition: left 0.7s cubic-bezier(0.22, 1, 0.36, 1), top 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    right 0.7s cubic-bezier(0.22, 1, 0.36, 1), bottom 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.player.grown { border-radius: 48px; }
+/* Watch owns the whole stage, so it ends square to the screen edges rather than rounded
+   inside a panel. A 16:9 trailer fills a 16:9 screen exactly, with no letterboxing left. */
+.player.full { border-radius: 48px; }
+.player.full.grown { border-radius: 0; }
+/* Older sets overscan, so full-screen chrome sits inside a safe margin instead of the
+   44px that was fine while the player lived inside an already-inset panel. */
+.player.full .playertop { left: 96px; top: 76px; right: 96px; }
+.player.full .playertop h4 { font-size: 46px; }
+.player.full .playerbar { left: 88px; right: 88px; bottom: 72px; }
+.player.full .bigplay { width: 128px; height: 128px; margin: -64px 0 0 -64px; }
+.player.full .bigplay svg { width: 50px; height: 50px; }
+/* Chrome waits for the box to finish opening, then fades up. */
+.playertop, .playerbar, .bigplay { opacity: 0; transition: opacity 0.4s ease 0.45s; }
+.player.grown .playertop, .player.grown .playerbar, .player.grown .bigplay { opacity: 1; }
+.playerbox { position: relative; width: 100%; height: 100%; background: #000; }
+.playerframe { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 0; pointer-events: none; }
+.playerframe iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+/* Chrome floats over the video, lifted off it by gradients at both ends. */
+.playerbox::before, .playerbox::after { content: ''; position: absolute; left: 0; right: 0; z-index: 1; pointer-events: none; }
+.playerbox::before { top: 0; height: 200px; background: linear-gradient(rgba(0, 0, 0, 0.6), transparent); }
+.playerbox::after { bottom: 0; height: 260px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.72)); }
+
+.playertop { position: absolute; left: 44px; top: 38px; right: 44px; z-index: 2; pointer-events: none; }
+.playertop h4 { margin: 0; font-size: 36px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.playertop .chips { margin-top: 10px; }
+.playertop .chip { background: rgba(255, 255, 255, 0.18); }
+
+.bigplay { position: absolute; z-index: 2; left: 50%; top: 50%; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.22); border: 1.5px solid var(--glass-edge); color: var(--ink); }
+.bigplay svg { width: 40px; height: 40px; margin-left: 4px; }
+.bigplay:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+
+.playerbar { position: absolute; z-index: 2; left: 34px; right: 34px; bottom: 32px; display: flex; align-items: center; gap: 16px; }
+.transport { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 32px; background: rgba(28, 26, 24, 0.66); border: 1.5px solid var(--glass-edge); }
+.ctl { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink); }
+.ctl:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+
+.scrub { position: relative; flex: 1; min-width: 0; height: 64px; padding: 0 26px; border-radius: 32px; background: rgba(28, 26, 24, 0.66); border: 1.5px solid var(--glass-edge); display: flex; align-items: center; }
+.scrub:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.scrubtrack { position: absolute; left: 26px; right: 26px; top: 50%; height: 5px; margin-top: -2px; border-radius: 3px; background: rgba(255, 255, 255, 0.28); }
+.scrubfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #fff; }
+.scrubnow, .scrubend { position: absolute; bottom: 4px; font-size: 15px; color: var(--ink-2); }
+.scrubnow { left: 26px; }
+.scrubend { right: 26px; }
+
+.shut { flex: none; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink); }
+.shut svg { width: 20px; height: 20px; }
+.shut:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+
+.dialog { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
+.dialog .panel { position: relative; width: 640px; padding: var(--pad-panel); text-align: center; background: var(--solid); }
+.dialog p { margin: 0 0 30px; font-size: 32px; font-weight: 600; }
+.dialog .actions { justify-content: center; margin: 0; }
+/* Profiles — "Who's watching?" over the whole stage, same glass, same focus rules.
+   Its tiles sit on the scrim itself rather than on a panel, the way the exit dialog does, so
+   the scrim has to carry them: at anything lighter the poster row reads straight through the
+   faces and the question stops being a room of its own. */
+.profiles {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  background: var(--scrim-full);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.profiles h2 { margin: 0 0 56px; font-size: 56px; font-weight: 700; letter-spacing: -0.02em; }
+
+.pgrid { display: flex; align-items: flex-start; gap: var(--gutter); }
+.ptile { width: 208px; display: flex; flex-direction: column; align-items: center; }
+.ptile:focus { outline: none; }
+.pface {
+  position: relative; width: 196px; height: 196px; border-radius: 40px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--glass-edge);
+  font-size: 64px; font-weight: 600; letter-spacing: -0.02em;
+}
+.ptile:focus .pface { box-shadow: 0 0 0 var(--ring) #fff; }
+.pface.add { background: var(--chip); color: var(--ink-2); }
+.pface.add svg { width: 56px; height: 56px; }
+/* Manage mode dims the face and puts a pencil on it, so the tile still reads as that viewer. */
+.pmask {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 40px;
+  display: flex; align-items: center; justify-content: center; background: rgba(20, 18, 16, 0.55);
+}
+.pmask svg { width: 48px; height: 48px; }
+.pname {
+  margin-top: var(--gap-block); max-width: 100%; font-size: 22px; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ptile:focus .pname { color: var(--ink); }
+.ptile.cur .pname { color: var(--ink); }
+.ptile.cur .pname::after {
+  content: ''; display: block; width: 28px; height: 3px; margin: 10px auto 0; border-radius: 2px; background: var(--ink);
+}
+.pmanage { margin-top: 56px; }
+
+/* One profile's form */
+.pform { position: relative; width: 760px; padding: var(--pad-panel); background: var(--solid); }
+.pform h2 { margin: 0 0 28px; font-size: 40px; font-weight: 600; }
+.pformtop { display: flex; align-items: center; gap: var(--gap-block); }
+.pformtop .pface { flex: none; width: 124px; height: 124px; border-radius: 28px; font-size: 42px; }
+.field {
+  flex: 1; min-width: 0; display: flex; align-items: center; height: 70px; padding: 0 28px;
+  border-radius: 35px; background: var(--chip); border: 1.5px solid var(--glass-edge);
+}
+.field input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
+.field input::placeholder { color: var(--ink-3); }
+.field:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+.swatches { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
+.swatch { width: 54px; height: 54px; border-radius: 50%; border: 1.5px solid var(--glass-edge); }
+.swatch.cur { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.5); }
+.swatch:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.pkinds { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
+.kind {
+  height: 56px; padding: 0 32px; border-radius: 28px;
+  background: var(--chip); border: 1.5px solid var(--glass-edge); font-size: 20px; font-weight: 500;
+}
+.kind.cur { background: rgba(255, 255, 255, 0.3); }
+.kind:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+.pnote { margin: var(--gap-group) 0 0; font-size: 19px; color: var(--ink-3); }
+.pid { margin: var(--gap-block) 0 0; font-size: 17px; color: var(--ink-3); }
+.pid b { margin-left: 8px; font-family: 'Courier New', monospace; font-weight: 400; letter-spacing: 0.06em; color: var(--ink-2); }
+.pform .actions { margin-top: var(--gap-section); }
+
+.drop {
+  position: absolute; top: 24px; right: 24px; bottom: 24px; left: 24px;
+  border: 4px dashed var(--key-yellow); border-radius: 48px; display: flex; align-items: center; justify-content: center;
+  font-size: 40px; font-weight: 600; background: var(--scrim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The player's 700ms expansion is the largest movement in the app, so it is the one this
+     setting exists for. Its chrome fades on a delay, which has to go with it or the controls
+     arrive late on a player that is already open. */
+  .track, .poster, .toast, .player, .playertop, .playerbar, .bigplay { transition: none; }
+}
