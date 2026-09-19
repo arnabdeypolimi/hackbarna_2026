@@ -1,0 +1,708 @@
+{
+  "awaits_result": [
+    "search_catalog"
+  ],
+  "client_messages": {
+    "$defs": {
+      "AckMsg": {
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "ack",
+            "default": "ack",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "ok"
+        ],
+        "title": "AckMsg",
+        "type": "object"
+      },
+      "Playback": {
+        "properties": {
+          "position_s": {
+            "default": 0.0,
+            "minimum": 0,
+            "title": "Position S",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "stopped",
+              "playing",
+              "paused"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title Id"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "Playback",
+        "type": "object"
+      },
+      "ResultMsg": {
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "type": {
+            "const": "result",
+            "default": "result",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "data"
+        ],
+        "title": "ResultMsg",
+        "type": "object"
+      },
+      "ScreenState": {
+        "properties": {
+          "focus_index": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus Index"
+          },
+          "playback": {
+            "$ref": "#/$defs/Playback"
+          },
+          "rail_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rail Id"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/$defs/Tile"
+            },
+            "title": "Tiles",
+            "type": "array"
+          },
+          "view": {
+            "enum": [
+              "grid",
+              "details",
+              "player",
+              "products"
+            ],
+            "title": "View",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "playback"
+        ],
+        "title": "ScreenState",
+        "type": "object"
+      },
+      "ScreenStateMsg": {
+        "properties": {
+          "state": {
+            "$ref": "#/$defs/ScreenState"
+          },
+          "type": {
+            "const": "screen_state",
+            "default": "screen_state",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ScreenStateMsg",
+        "type": "object"
+      },
+      "Tile": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "position": {
+            "minimum": 0,
+            "title": "Position",
+            "type": "integer"
+          },
+          "title_id": {
+            "title": "Title Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title_id",
+          "name",
+          "position"
+        ],
+        "title": "Tile",
+        "type": "object"
+      },
+      "UserEventMsg": {
+        "properties": {
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "type": {
+            "const": "user_event",
+            "default": "user_event",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "title": "UserEventMsg",
+        "type": "object"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "ack": "#/$defs/AckMsg",
+        "result": "#/$defs/ResultMsg",
+        "screen_state": "#/$defs/ScreenStateMsg",
+        "user_event": "#/$defs/UserEventMsg"
+      },
+      "propertyName": "type"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/ScreenStateMsg"
+      },
+      {
+        "$ref": "#/$defs/AckMsg"
+      },
+      {
+        "$ref": "#/$defs/ResultMsg"
+      },
+      {
+        "$ref": "#/$defs/UserEventMsg"
+      }
+    ]
+  },
+  "commands": {
+    "back": {
+      "properties": {
+        "verb": {
+          "const": "back",
+          "default": "back",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Back",
+      "type": "object"
+    },
+    "close": {
+      "properties": {
+        "verb": {
+          "const": "close",
+          "default": "close",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Close",
+      "type": "object"
+    },
+    "focus": {
+      "properties": {
+        "title_id": {
+          "title": "Title Id",
+          "type": "string"
+        },
+        "verb": {
+          "const": "focus",
+          "default": "focus",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_id"
+      ],
+      "title": "Focus",
+      "type": "object"
+    },
+    "home": {
+      "properties": {
+        "verb": {
+          "const": "home",
+          "default": "home",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Home",
+      "type": "object"
+    },
+    "navigate": {
+      "properties": {
+        "count": {
+          "default": 1,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "verb": {
+          "const": "navigate",
+          "default": "navigate",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction"
+      ],
+      "title": "Navigate",
+      "type": "object"
+    },
+    "open_details": {
+      "properties": {
+        "title_id": {
+          "title": "Title Id",
+          "type": "string"
+        },
+        "verb": {
+          "const": "open_details",
+          "default": "open_details",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_id"
+      ],
+      "title": "OpenDetails",
+      "type": "object"
+    },
+    "pause": {
+      "properties": {
+        "verb": {
+          "const": "pause",
+          "default": "pause",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Pause",
+      "type": "object"
+    },
+    "play": {
+      "properties": {
+        "resume_from": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resume From"
+        },
+        "title_id": {
+          "title": "Title Id",
+          "type": "string"
+        },
+        "verb": {
+          "const": "play",
+          "default": "play",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_id"
+      ],
+      "title": "Play",
+      "type": "object"
+    },
+    "resume": {
+      "properties": {
+        "verb": {
+          "const": "resume",
+          "default": "resume",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Resume",
+      "type": "object"
+    },
+    "search_catalog": {
+      "properties": {
+        "limit": {
+          "default": 10,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "query": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "verb": {
+          "const": "search_catalog",
+          "default": "search_catalog",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "SearchCatalog",
+      "type": "object"
+    },
+    "seek": {
+      "properties": {
+        "delta_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delta Seconds"
+        },
+        "to_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Seconds"
+        },
+        "verb": {
+          "const": "seek",
+          "default": "seek",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "Seek",
+      "type": "object"
+    },
+    "show_products": {
+      "properties": {
+        "scene_at": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scene At"
+        },
+        "title_id": {
+          "title": "Title Id",
+          "type": "string"
+        },
+        "verb": {
+          "const": "show_products",
+          "default": "show_products",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_id"
+      ],
+      "title": "ShowProducts",
+      "type": "object"
+    }
+  },
+  "protocol_version": 1,
+  "server_messages": {
+    "$defs": {
+      "AgentStatusMsg": {
+        "properties": {
+          "state": {
+            "enum": [
+              "idle",
+              "listening",
+              "thinking",
+              "speaking"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "type": {
+            "const": "agent_status",
+            "default": "agent_status",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "AgentStatusMsg",
+        "type": "object"
+      },
+      "CommandMsg": {
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "command",
+            "default": "command",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          },
+          "verb": {
+            "title": "Verb",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "turn_id",
+          "verb",
+          "args"
+        ],
+        "title": "CommandMsg",
+        "type": "object"
+      },
+      "ErrorMsg": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "const": "error",
+            "default": "error",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorMsg",
+        "type": "object"
+      },
+      "TranscriptMsg": {
+        "properties": {
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "transcript",
+            "default": "transcript",
+            "title": "Type",
+            "type": "string"
+          },
+          "v": {
+            "const": 1,
+            "default": 1,
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "text",
+          "final"
+        ],
+        "title": "TranscriptMsg",
+        "type": "object"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "agent_status": "#/$defs/AgentStatusMsg",
+        "command": "#/$defs/CommandMsg",
+        "error": "#/$defs/ErrorMsg",
+        "transcript": "#/$defs/TranscriptMsg"
+      },
+      "propertyName": "type"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/CommandMsg"
+      },
+      {
+        "$ref": "#/$defs/AgentStatusMsg"
+      },
+      {
+        "$ref": "#/$defs/TranscriptMsg"
+      },
+      {
+        "$ref": "#/$defs/ErrorMsg"
+      }
+    ]
+  }
+}
