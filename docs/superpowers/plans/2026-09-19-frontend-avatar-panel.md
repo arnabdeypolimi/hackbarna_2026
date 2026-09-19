@@ -350,29 +350,39 @@ async function openMedia(
   opts: ConnectOptions,
 ): Promise<RTCPeerConnection> {
   const pc = new RTCPeerConnection();
-  mic.getTracks().forEach((t) => pc.addTrack(t, mic));
-  pc.addTransceiver('video', { direction: 'recvonly' });
+  // Owned here until it is handed back. A throw between construction and the return
+  // would otherwise strand it: the caller's cleanup reads a variable this function
+  // never got to assign, and a peer connection is not reclaimed by losing its last
+  // reference — its ICE agent and DTLS state stay alive. The backend answering a
+  // misconfigured offer with 503 is the everyday way to hit that.
+  try {
+    mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+    pc.addTransceiver('video', { direction: 'recvonly' });
 
-  const remote = new MediaStream();
-  opts.video.srcObject = remote;
-  pc.ontrack = (ev) => {
-    remote.addTrack(ev.track);
-    opts.video.play().catch(() => opts.onBlocked());
-  };
+    const remote = new MediaStream();
+    opts.video.srcObject = remote;
+    pc.ontrack = (ev) => {
+      remote.addTrack(ev.track);
+      opts.video.play().catch(() => opts.onBlocked());
+    };
 
-  await pc.setLocalDescription(await pc.createOffer());
-  await iceGathered(pc);
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceGathered(pc);
 
-  const url = `${session.offer_url}?token=${session.control_token}&avatar=true&halfduplex=false`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sdp: pc.localDescription?.sdp, type: pc.localDescription?.type }),
-  });
-  if (!res.ok) throw new Error(`WebRTC offer rejected (${res.status})`);
-  const answer = (await res.json()) as { sdp: string; type: RTCSdpType };
-  await pc.setRemoteDescription(answer);
-  return pc;
+    const url = `${session.offer_url}?token=${session.control_token}&avatar=true&halfduplex=false`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription?.sdp, type: pc.localDescription?.type }),
+    });
+    if (!res.ok) throw new Error(`WebRTC offer rejected (${res.status})`);
+    const answer = (await res.json()) as { sdp: string; type: RTCSdpType };
+    await pc.setRemoteDescription(answer);
+    return pc;
+  } catch (err) {
+    pc.close();
+    throw err;
+  }
 }
 
 // Vanilla ICE rather than trickle: one round trip, and nothing on a LAN needs more.
