@@ -20,6 +20,8 @@ class SessionState:
     created_at: float = field(default_factory=time.time)
     screen: ScreenState | None = None
     current_turn_id: str | None = None
+    #: Personalisation key (D10). Sessions come and go; the couch persists.
+    user_id: str = ""
 
     def update_screen(self, state: ScreenState) -> None:
         self.screen = state
@@ -53,11 +55,13 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
 
-    def create(self, ttl_s: int) -> SessionState:
+    def create(self, ttl_s: int, user_id: str | None = None) -> SessionState:
+        session_id = f"sess_{uuid.uuid4().hex[:12]}"
         session = SessionState(
-            session_id=f"sess_{uuid.uuid4().hex[:12]}",
+            session_id=session_id,
             control_token=secrets.token_urlsafe(32),
             expires_at=time.time() + ttl_s,
+            user_id=user_id or f"anon_{session_id}",
         )
         self._sessions[session.session_id] = session
         return session
