@@ -70,13 +70,17 @@ SLOW_FILLERS = ("One moment.", "Let me think.", "Hmm, one sec.")
 def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[str, dict]]]:
     """Spoken answer + TV actions built from tool results without an LLM call."""
     for verb, result in results:
-        if verb == "recommend_titles":
+        if verb == "search_catalog" and "titles" not in result:
+            continue  # the TV never answered (timeout/cancelled): not the same as no matches
+        if verb in ("recommend_titles", "search_catalog"):
             titles = result.get("titles") or []
             if not titles:
                 return ("I couldn't find anything matching that right now. Want to try something else?", [])
             names = [f"{t['name']} from {t['year']}" if t.get("year") else t["name"] for t in titles[:3]]
             spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f", or {names[-1]}"
-            return (f"How about {spoken}?", [("focus", {"title_id": titles[0]["title_id"]})])
+            lead = "How about" if verb == "recommend_titles" else "I found"
+            return (f"{lead} {spoken}{'?' if verb == 'recommend_titles' else '.'}",
+                    [("focus", {"title_id": titles[0]["title_id"]})])
         if verb == "recall_memory":
             memory = (result.get("memory") or "").strip()
             if memory and memory != "(none yet)":
@@ -453,6 +457,8 @@ class SGRAgentService(LLMService):
 
     @staticmethod
     def needs_second_cycle(results: list[tuple[str, dict]]) -> bool:
-        """Any internal tool call earns a second cycle — including a failed one,
-        so the agent speaks the fallback instead of stopping at the filler."""
-        return any(verb in INTERNAL_AWAIT for verb, _ in results)
+        """Any awaited action earns a second cycle — including a failed one, so the
+        agent speaks the fallback instead of stopping at the filler. That covers
+        `search_catalog` too: the TV's hits are useless unless the model gets to
+        speak them (the field bug was "Let me look." followed by silence)."""
+        return any(verb in AWAITED_VERBS for verb, _ in results)

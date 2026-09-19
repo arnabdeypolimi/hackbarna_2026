@@ -150,6 +150,45 @@ async def test_say_reaches_tts_as_sentences_before_actions_dispatch():
     assert (await bus.next_outbound()).verb == "play"
 
 
+SEARCH_1 = '{"intent":"search","say":"Let me look.","actions":[{"verb":"search_catalog","query":"space"}]}'
+SEARCH_2 = '{"intent":"search","say":"I found Gravity and Moon.","actions":[{"verb":"focus","title_id":"49047"}]}'
+TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17431", "name": "Moon"}]}
+
+
+class AnsweringBus(RecordingBus):
+    """A TV that answers search_catalog straight away, like the frontend does."""
+
+    async def dispatch(self, verb, args, turn_id):
+        if verb == "search_catalog":
+            async def answer():
+                msg = await self.next_outbound()
+                self.resolve(msg.id, TV_HITS)
+            asyncio.get_running_loop().create_task(answer())
+        return await super().dispatch(verb, args, turn_id)
+
+
+async def test_search_catalog_result_is_fed_back_for_a_second_cycle():
+    """The TV answers within the budget; its titles must reach the model and be spoken,
+    not discarded after the filler (the field bug: 'Let me look.' and silence)."""
+    bus, sink = AnsweringBus(), TimingSink()
+    client = FakeOpenAI([SEARCH_1, SEARCH_2])
+    agent = _agent(client, bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert len(client.calls) == 2
+    assert "Gravity" in client.calls[1]["messages"][-1]["content"]
+    assert _spoken(sink) == ["Let me look.", "I found Gravity and Moon."]
+    assert (await bus.next_outbound()).verb == "focus"
+
+
+def test_search_fallback_names_the_hits():
+    from tv_avatar.agent.service import render_fallback
+    text, actions = render_fallback([("search_catalog", TV_HITS)])
+    assert text == "I found Gravity, or Moon."
+    assert actions == [("focus", {"title_id": "49047"})]
+    assert "couldn't find" in render_fallback([("search_catalog", {"titles": []})])[0]
+
+
 async def test_multi_sentence_say_is_split_and_streamed_per_sentence():
     sink = TimingSink()
     agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
