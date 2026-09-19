@@ -326,6 +326,15 @@ fetch("/config").then((r) => r.json()).then((c) => {
   $("stack-stt").textContent = c.stt_model;
   $("stack-tts").textContent = `${c.tts_model} · ${c.tts_sample_rate / 1000} kHz`;
   fillPicker(el.avatarPick, c.avatars, (a) => a.id, (a) => a.name, c.default_avatar);
-  fillPicker(el.languagePick, c.languages, (l) => l.code, (l) => l.native_name, c.default_language);
+  // Only offer the languages the chosen avatar speaks; keep the current pick if still valid.
+  const syncLanguages = () => {
+    const avatar = c.avatars.find((a) => a.id === el.avatarPick.value);
+    const allowed = c.languages.filter((l) => !avatar || avatar.languages.includes(l.code));
+    const keep = allowed.some((l) => l.code === el.languagePick.value) ? el.languagePick.value : c.default_language;
+    fillPicker(el.languagePick, allowed, (l) => l.code, (l) => l.native_name, keep);
+    if (!el.languagePick.value && allowed.length) el.languagePick.value = allowed[0].code;
+  };
+  el.avatarPick.onchange = syncLanguages;
+  syncLanguages();
   if (!c.configured) wire("err", `missing in .env: ${c.missing.join(", ")}`);
 }).catch(() => {});

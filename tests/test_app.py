@@ -53,6 +53,14 @@ def test_create_session_rejects_unknown_avatar_or_language():
         assert c.post("/sessions", json={"language": "de"}).status_code == 422
 
 
+def test_create_session_rejects_a_language_the_avatar_does_not_speak():
+    with _client() as c:
+        res = c.post("/sessions", json={"avatar": "igor", "language": "fr"})
+        assert res.status_code == 422
+        assert "does not speak 'fr'" in res.json()["detail"]
+        assert c.post("/sessions", json={"avatar": "igor", "language": "en"}).status_code == 200
+
+
 def test_offer_requires_a_valid_token():
     with _client() as c:
         sid = c.post("/sessions").json()["session_id"]

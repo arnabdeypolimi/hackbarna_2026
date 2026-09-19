@@ -47,11 +47,17 @@ class AvatarProfile(BaseModel):
     anam_avatar_model: str = "cara-4"
     #: Cartesia voice id. One per avatar; sonic-3 voices are multilingual.
     voice: str = Field(min_length=1)
+    #: Session languages this avatar may be paired with. ``None`` = all.
+    languages: tuple[LanguageCode, ...] | None = Field(default=None, min_length=1)
 
-    def public(self) -> dict[str, str]:
+    def speaks(self, code: str) -> bool:
+        return self.languages is None or code in self.languages
+
+    def public(self, all_languages: tuple[LanguageCode, ...]) -> dict:
         """Non-provider view for ``/config``: no Anam or Cartesia ids."""
         return {"id": self.id, "name": self.name, "description": self.description,
-                "avatar_model": self.anam_avatar_model}
+                "avatar_model": self.anam_avatar_model,
+                "languages": list(self.languages or all_languages)}
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,13 @@ class AvatarCatalog(BaseModel):
             raise ValueError(f"default_avatar {self.default_avatar!r} is not one of {ids}")
         if self.default_language not in codes:
             raise ValueError(f"default_language {self.default_language!r} is not one of {codes}")
+        for a in self.avatars:
+            unknown = [c for c in a.languages or () if c not in codes]
+            if unknown:
+                raise ValueError(f"avatar {a.id!r} lists languages not in the catalog: {unknown}")
+        if not self.avatar(self.default_avatar).speaks(self.default_language):
+            raise ValueError(f"default_avatar {self.default_avatar!r} does not speak "
+                             f"default_language {self.default_language!r}")
         return self
 
     def avatar(self, avatar_id: str) -> AvatarProfile:
@@ -96,17 +109,24 @@ class AvatarCatalog(BaseModel):
         raise KeyError(f"unknown language {code!r}; known: {[l.code for l in self.languages]}")
 
     def resolve(self, avatar_id: str | None = None, language: str | None = None) -> SessionPersona:
-        """Pick a persona, falling back to the catalog defaults. Raises ``KeyError``."""
-        return SessionPersona(
-            avatar=self.avatar(avatar_id or self.default_avatar),
-            language=self.language(language or self.default_language),
-        )
+        """Pick a persona, falling back to the catalog defaults.
+
+        Raises ``KeyError`` for an unknown id or code, and for a pairing the
+        avatar does not allow (an English-only avatar asked to speak Catalan).
+        """
+        avatar = self.avatar(avatar_id or self.default_avatar)
+        lang = self.language(language or self.default_language)
+        if not avatar.speaks(lang.code):
+            raise KeyError(f"avatar {avatar.id!r} does not speak {lang.code!r}; "
+                           f"it speaks: {list(avatar.languages or ())}")
+        return SessionPersona(avatar=avatar, language=lang)
 
     def public(self) -> dict:
+        codes = tuple(l.code for l in self.languages)
         return {
             "default_avatar": self.default_avatar,
             "default_language": self.default_language,
-            "avatars": [a.public() for a in self.avatars],
+            "avatars": [a.public(codes) for a in self.avatars],
             "languages": [l.model_dump() for l in self.languages],
         }
 

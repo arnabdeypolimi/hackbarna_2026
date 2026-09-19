@@ -46,6 +46,17 @@ def test_shipped_catalog_loads_and_covers_the_four_languages():
     assert cat.avatar(cat.default_avatar).voice
 
 
+def test_shipped_igor_is_english_only_with_his_own_voice():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    igor = cat.avatar("igor")
+    assert igor.voice == "228fca29-3a0a-435c-8728-5cb483251068"
+    assert igor.languages == ("en",)
+    assert igor.voice != cat.avatar("cara").voice
+    assert cat.resolve("igor", "en").language.code == "en"
+    with pytest.raises(KeyError, match="does not speak 'ca'"):
+        cat.resolve("igor", "ca")
+
+
 def test_get_catalog_is_cached_and_honours_env_override(monkeypatch, tmp_path):
     assert get_catalog() is get_catalog()
     custom = tmp_path / "c.yaml"
@@ -84,6 +95,13 @@ def test_unknown_avatar_or_language_raises_key_error_with_the_options():
     ({"avatars": [{"id": "Bad Id", "name": "A", "anam_avatar_id": "x", "voice": "v"}]}, "pattern"),
     ({"avatars": [{"id": "a", "name": "A", "anam_avatar_id": "", "voice": "v"}]}, "anam_avatar_id"),
     ({"avatars": []}, "avatars"),
+    ({"avatars": [{"id": "a", "name": "A", "anam_avatar_id": "x", "voice": "v", "languages": ["de"]}]}, "literal_error"),
+    ({"avatars": [{"id": "a", "name": "A", "anam_avatar_id": "x", "voice": "v", "languages": []}]}, "languages"),
+    ({"avatars": [{"id": "a", "name": "A", "anam_avatar_id": "x", "voice": "v", "languages": ["es"]}],
+      "languages": LANGS}, "does not speak default_language"),
+    ({"languages": LANGS[:2],
+      "avatars": [{"id": "a", "name": "A", "anam_avatar_id": "x", "voice": "v", "languages": ["en", "ca"]}]},
+     "not in the catalog"),
     ({"avatars": [{"id": "a", "name": "A", "anam_avatar_id": "x", "voice": "v", "extra": 1}]}, "extra"),
 ])
 def test_invalid_catalogs_are_rejected(over, msg):
@@ -93,7 +111,9 @@ def test_invalid_catalogs_are_rejected(over, msg):
 
 def test_public_view_hides_provider_ids():
     pub = AvatarCatalog.model_validate(_raw()).public()
-    assert pub["avatars"][0] == {"id": "a", "name": "A", "description": "", "avatar_model": "cara-4"}
+    # An avatar without an explicit list is reported as speaking everything.
+    assert pub["avatars"][0] == {"id": "a", "name": "A", "description": "", "avatar_model": "cara-4",
+                                 "languages": ["en", "es", "fr", "ca"]}
     assert pub["languages"][3]["native_name"] == "Català"
 
 

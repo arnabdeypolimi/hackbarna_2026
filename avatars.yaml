@@ -23,10 +23,20 @@ languages:
     name: Catalan
     native_name: Català
 
+# `languages` restricts which session languages an avatar may be paired
+# with; omit it to allow every language listed above.
 avatars:
   - id: cara
     name: Cara
     description: Warm, quick and natural. The default host.
     anam_avatar_id: 8e6215af-290b-443f-87f8-f68f7890d9c6
     anam_avatar_model: cara-4
+    voice: f786b574-daa5-4673-aa0c-cbe3e8534c02
+  - id: igor
+    name: Igor
+    description: Male host. English only.
+    # TODO: replace with Igor's own Anam avatar id; reusing Cara's for now.
+    anam_avatar_id: 8e6215af-290b-443f-87f8-f68f7890d9c6
+    anam_avatar_model: cara-4
     voice: 228fca29-3a0a-435c-8728-5cb483251068
+    languages: [en]
