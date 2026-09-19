@@ -15,7 +15,10 @@ let ttsEnabled = false;
 
 export async function initTTS(): Promise<void> {
   const a11y = window.TitanSDK?.accessibility;
-  if (!a11y) return;
+  // The SDK also loads in desktop browsers and shims TTS onto speechSynthesis,
+  // so every focused tile would be read aloud during development. Narration is
+  // only meaningful on a device, and only devices expose SmartTvA_API.
+  if (!a11y || !window.SmartTvA_API) return;
   try {
     if (!(await a11y.isTTSSupported())) return;
     ttsEnabled = (await a11y.getTTSSettings()).enabled;
