@@ -31,8 +31,9 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
+from pydantic import BaseModel, ValidationError
 
-from tv_avatar.agent.envelope import REGISTRY, turn_plan_schema
+from tv_avatar.agent.envelope import REGISTRY, parse_action, turn_plan_schema
 from tv_avatar.agent.prompt import (
     build_system_prompt,
     greeting_brief,
@@ -282,7 +283,7 @@ class SGRAgentService(LLMService):
         # the viewer "wanted" whatever the popular channel happened to return.
         await self._speak(text)
         for verb, args in actions:
-            await self.dispatch_action(verb, args, turn_id, user_id, memory_text)
+            await self.dispatch_action(parse_action({"verb": verb, **args}), turn_id, user_id)
 
     async def _speak(self, text: str) -> None:
         """Hand one complete sentence to TTS.
@@ -358,21 +359,25 @@ class SGRAgentService(LLMService):
                                 log.debug("sentence -> TTS", step="say", cycle=cycle, text=tail.text,
                                           ms=round((time.perf_counter() - t_req) * 1000))
                                 await self._speak(tail.text)
-                        case ActionReady(action=action):
-                            verb = str(action.get("verb", ""))
-                            args = {k: v for k, v in action.items() if k != "verb" and v is not None}
+                        case ActionReady(action=raw_action):
                             marks["n_actions"] += 1
-                            spec = REGISTRY.get(verb)
-                            if spec is not None and spec.earns_cycle and cycle >= MAX_CYCLES:
+                            try:
+                                action = parse_action(raw_action)
+                            except ValidationError as err:
+                                log.warning("rejected action", verb=raw_action.get("verb"),
+                                            reason=str(err).splitlines()[0])
+                                continue
+                            verb, spec = str(action.verb), REGISTRY[str(action.verb)]
+                            if spec.earns_cycle and cycle >= MAX_CYCLES:
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
                                 continue  # no open-ended loops on a voice interface
-                            awaits = spec is not None and spec.awaits_result
-                            log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
-                                      awaited=awaits, ms=round((time.perf_counter() - t_req) * 1000))
-                            task = asyncio.create_task(
-                                self.dispatch_action(verb, args, turn_id, user_id, memory_text))
-                            if awaits:
+                            log.debug("action ready", step="action", cycle=cycle, verb=verb,
+                                      args=action.model_dump(exclude={"verb"}, exclude_none=True),
+                                      awaited=spec.awaits_result,
+                                      ms=round((time.perf_counter() - t_req) * 1000))
+                            task = asyncio.create_task(self.dispatch_action(action, turn_id, user_id))
+                            if spec.awaits_result:
                                 awaited.append((verb, task))
                             else:
                                 fire.append(task)
@@ -428,14 +433,15 @@ class SGRAgentService(LLMService):
             render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary)
         return [{"role": "system", "content": system}, *rest]
 
-    async def dispatch_action(self, verb: str, args: dict, turn_id: str, user_id: str = "",
-                              memory_text: str | None = None) -> dict:
+    async def dispatch_action(self, action: BaseModel, turn_id: str, user_id: str = "") -> dict:
+        """Route one parsed action: internal tools in-process, TV verbs over the bus."""
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         t0 = time.perf_counter()
-        spec = REGISTRY.get(verb)
-        if spec is not None and spec.kind == "internal":
+        verb = str(action.verb)
+        args = action.model_dump(exclude={"verb"}, exclude_none=True)
+        if REGISTRY[verb].kind == "internal":
             log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
-            result = await self._tools.run(verb, args, user_id, memory_text)
+            result = await self._tools.run(action, user_id)
             ms = round((time.perf_counter() - t0) * 1000)
             log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
             log.info("internal tool", verb=verb, status=result.get("status", "ok"),

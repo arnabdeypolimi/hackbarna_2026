@@ -94,9 +94,9 @@ class FakeTools(InternalTools):
         self.calls: list[tuple[str, dict]] = []
         self.first_call_at: float | None = None
 
-    async def run(self, verb, args, user_id, memory_text):
+    async def run(self, action, user_id):
         self.first_call_at = self.first_call_at or time.perf_counter()
-        self.calls.append((verb, args))
+        self.calls.append((str(action.verb), action.model_dump(exclude={"verb"}, exclude_none=True)))
         return {"titles": [{"title_id": "949", "name": "Heat"}, {"title_id": "27205", "name": "Inception"}]}
 
 
@@ -253,11 +253,21 @@ async def test_agent_is_the_only_writer_of_the_system_prompt(incoming_system):
 
 
 async def test_invalid_verb_args_are_rejected_not_raised():
-    bus = RecordingBus()
-    agent = _agent(FakeOpenAI(['{"intent":"control","say":"ok","actions":[{"verb":"seek","to_seconds":1,"delta_seconds":2}]}']), bus)
-    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("seek"))])
+    """A malformed element is dropped at parse time; the valid one next to it
+    still dispatches and the turn ends cleanly."""
+    bus, tools = RecordingBus(), FakeTools()
+    envelope = ('{"intent":"control","say":"ok","actions":['
+                '{"verb":"seek","to_seconds":1,"delta_seconds":2},'
+                '{"verb":"reject_title","title_id":"7"},'
+                '{"verb":"focus","title_id":"27205"}]}')
+    agent = _agent(FakeOpenAI([envelope]), bus, tools=tools)
+    sink = TimingSink()
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("seek"))])
+    assert (await bus.next_outbound()).verb == "focus"
     with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(bus.next_outbound(), timeout=0.05)
+        await asyncio.wait_for(bus.next_outbound(), timeout=0.05)   # no seek reached the bus
+    assert tools.calls == [("reject_title", {"title_id": "7"})]     # typed model, not a dict
+    assert any(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames)
 
 
 async def test_turn_end_ingests_user_text_and_full_reply():

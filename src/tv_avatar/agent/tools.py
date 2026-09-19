@@ -1,12 +1,21 @@
 """Internal tool dispatch — verbs that never reach the TV (recommend_titles,
 recall_memory, reject_title). Every call is bounded by the 400 ms tool budget and degrades
-to a spoken fallback instead of hanging the turn."""
+to a spoken fallback instead of hanging the turn.
+
+`run` takes the parsed action (SGR routing: the union member *is* the branch),
+never a verb string plus a dict."""
 import asyncio
 from typing import Any
 
 from loguru import logger
+from pydantic import BaseModel
 
-from tv_avatar.agent.envelope import RecallMemory, RecommendTitles, RejectTitle
+from tv_avatar.agent.envelope import (
+    InternalAction,
+    RecallMemory,
+    RecommendTitles,
+    RejectTitle,
+)
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
@@ -22,28 +31,28 @@ class InternalTools:
         self._recorder = recorder
         self._timeout = timeout_s
 
-    async def run(self, verb: str, args: dict[str, Any], user_id: str, memory_text: str | None) -> dict:
+    async def run(self, action: InternalAction | BaseModel, user_id: str) -> dict:
+        verb = str(getattr(action, "verb", type(action).__name__))
         try:
-            match verb:
-                case "recommend_titles":
-                    return await asyncio.wait_for(
-                        self._recommend(RecommendTitles.model_validate(args), user_id, memory_text),
-                        timeout=self._timeout)
-                case "recall_memory":
-                    return await asyncio.wait_for(
-                        self._recall(RecallMemory.model_validate(args), user_id), timeout=self._timeout)
-                case "reject_title":
-                    return self._reject(RejectTitle.model_validate(args), user_id)
+            match action:
+                case RecommendTitles():
+                    return await asyncio.wait_for(self._recommend(action, user_id), timeout=self._timeout)
+                case RecallMemory():
+                    return await asyncio.wait_for(self._recall(action, user_id), timeout=self._timeout)
+                case RejectTitle():
+                    return self._reject(action, user_id)
                 case _:
-                    return {"status": "unknown_tool", "verb": verb}
+                    raise TypeError(f"{verb} is not an internal action")
         except TimeoutError:
             logger.bind(user_id=user_id).warning("internal tool timed out", verb=verb)
             return {"status": "unavailable", "reason": "timeout"}
+        except TypeError:
+            raise
         except Exception as err:  # noqa: BLE001 — a tool failure is a degraded answer, not a failed turn
             logger.bind(user_id=user_id).opt(exception=err).warning("internal tool failed", verb=verb)
             return {"status": "error", "reason": type(err).__name__}
 
-    async def _recommend(self, req: RecommendTitles, user_id: str, memory_text: str | None) -> dict:
+    async def _recommend(self, req: RecommendTitles, user_id: str) -> dict:
         if self._recs is None:
             return {"status": "unavailable", "reason": "no catalog"}
         disliked = set(req.exclude_genres)
