@@ -286,7 +286,7 @@ async function hangup() {
   state.mic?.getTracks().forEach((t) => t.stop());
   await state.audioCtx?.close().catch(() => {});
   const s = state.session;
-  if (s) fetch(`/sessions/${s.session_id}`, { method: "DELETE", headers: { "X-Control-Token": s.control_token } }).catch(() => {});
+  if (s) fetch(`/sessions/${s.session_id}`, { method: "DELETE", headers: { "X-Control-Token": s.control_token }, keepalive: true }).catch(() => {});
   Object.assign(state, { session: null, pc: null, ws: null, mic: null, audioCtx: null, prevStats: null, turn: null, partialRow: null });
   el.portrait.dataset.state = "off";
   el.video.srcObject = null;

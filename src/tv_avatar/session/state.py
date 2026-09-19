@@ -84,6 +84,11 @@ class SessionStore:
     def close(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    def others_for_user(self, user_id: str, except_session_id: str) -> list[str]:
+        """Other live sessions of the same user — one couch runs one avatar."""
+        return [sid for sid, s in self._sessions.items()
+                if s.user_id == user_id and sid != except_session_id]
+
     def sweep_expired(self, now: float | None = None) -> list[str]:
         """Remove every session past its ``expires_at``; return their ids.
 

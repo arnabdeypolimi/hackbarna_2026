@@ -96,3 +96,21 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
     for expected in ("MemoryPrefetchTap", "ScreenContextInjector", "StubLLMService", "MemoryIngestTap"):
         assert expected in names, names
     assert EventKind.PLAY_STARTED  # module import sanity for the recorder wiring
+
+
+def test_new_offer_for_same_user_stops_that_users_other_pipelines(tmp_path, monkeypatch):
+    from tv_avatar import app as app_module
+    monkeypatch.setattr(app_module, "_settings_available", lambda: False)  # 503 right after the replace
+    runtime = build_runtime(_settings(tmp_path))
+    app = create_app(runtime=runtime)
+    stopped: list[str] = []
+    app.state.manager.stop_pipeline = stopped.append  # type: ignore[method-assign]
+    with TestClient(app) as c:
+        old = c.post("/sessions", json={"user_id": "couch"}).json()
+        new = c.post("/sessions", json={"user_id": "couch"}).json()
+        other = c.post("/sessions", json={"user_id": "someone_else"}).json()
+        r = c.post(f"/sessions/{new['session_id']}/offer?token={new['control_token']}",
+                   json={"sdp": "v=0", "type": "offer"})
+        assert r.status_code == 503
+    assert stopped == [old["session_id"]]
+    assert other["session_id"] not in stopped

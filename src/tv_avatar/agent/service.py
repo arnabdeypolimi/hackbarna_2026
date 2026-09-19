@@ -222,15 +222,16 @@ class SGRAgentService(LLMService):
         t_req = time.perf_counter()
         filler = (asyncio.create_task(self._slow_filler(t0, log))
                   if cycle == 1 and self._cfg.filler_after_ms > 0 else None)
+        stream = None
 
         await self.start_ttfb_metrics()
-        stream = await self._client.chat.completions.create(
-            model=self._cfg.llm_model, messages=messages, stream=True,
-            temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
-            response_format={"type": "json_schema", "json_schema": turn_plan_schema()},
-            extra_body=self._cfg.llm_extra_body or None,
-        )
         try:
+            stream = await self._client.chat.completions.create(
+                model=self._cfg.llm_model, messages=messages, stream=True,
+                temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
+                response_format={"type": "json_schema", "json_schema": turn_plan_schema()},
+                extra_body=self._cfg.llm_extra_body or None,
+            )
             async for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta.content if choice and choice.delta else None
@@ -278,6 +279,8 @@ class SGRAgentService(LLMService):
                 if streamer.finished:
                     break
         finally:
+            # Covers cancellation during create() too — an orphaned filler used
+            # to speak "One moment." after the turn had been interrupted.
             if filler is not None:
                 filler.cancel()
             close = getattr(stream, "close", None)

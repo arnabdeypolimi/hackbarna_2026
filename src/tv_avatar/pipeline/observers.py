@@ -145,7 +145,7 @@ class TurnLatencyObserver(_DedupObserver):
 
     def _emit(self, now: float) -> None:
         marks: dict = dict(self._metrics)
-        if self._t_interim and self._t_context:
+        if self._t_interim and self._t_context and self._t_context > self._t_interim:
             marks["interim_to_context_ms"] = round((self._t_context - self._t_interim) * 1000)
         if self._t_context and self._t_first_text:
             marks["ttft_ms"] = round((self._t_first_text - self._t_context) * 1000)

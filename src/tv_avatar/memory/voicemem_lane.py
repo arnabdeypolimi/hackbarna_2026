@@ -28,6 +28,10 @@ E5_THREADS = 2
 NEBIUS_EMBED_NATIVE_DIM = 4096
 
 
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u30ff" for ch in text)
+
+
 def _configure_env(settings: Settings) -> None:
     models_dir = Path(settings.voicemem_local_models_dir)
     if models_dir.is_dir():
@@ -107,7 +111,9 @@ class VoiceMemLane(BaseMemoryLane):
         vm = await self._vm_for(user_id)
         result = await asyncio.to_thread(vm.search, text)
         left = list(getattr(result, "result_leftbrain", []) or [])
-        right = list(getattr(result, "result_rightbrain", []) or [])
+        # The right brain writes its experience notes in Chinese ("有效方式：…");
+        # they are VoiceMem-internal coaching, not something to tell an English LLM.
+        right = [line for line in (getattr(result, "result_rightbrain", []) or []) if not _has_cjk(line)]
         directive = (getattr(result, "rb_directive", "") or "").strip()
         # VoiceMem appends a "Note: the memory system found no specific evidence…"
         # directive when it has nothing; that is not a memory and costs ~50 tokens.

@@ -131,6 +131,12 @@ def create_app(
     ) -> dict:
         """WebRTC offer → answer. Spawns the session's pipeline on first offer."""
         session = _authenticated(session_id, token)
+        # A reload without hang-up leaves the previous pipeline (and its Anam
+        # session) alive until ICE times out; Anam's concurrent-session limit
+        # then rejects the new one. One user, one avatar.
+        for other in app.state.store.others_for_user(session.user_id, session_id):
+            app.state.manager.stop_pipeline(other)
+            logger.bind(session_id=other, user_id=session.user_id).info("pipeline replaced by new offer")
         if not _settings_available():
             raise HTTPException(503, "media services are not configured (.env)")
         settings = get_settings()
