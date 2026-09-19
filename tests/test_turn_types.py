@@ -15,6 +15,19 @@ def test_offered_ids_are_the_candidates_named_or_pointed_at():
     assert trace.offered_ids() == ["949", "27205"]
 
 
+def test_offered_ids_put_the_pointed_at_titles_before_the_merely_named_ones():
+    """The greeting reopens with the first offered id, so the focused title must
+    lead even when it came later in the tool results."""
+    trace = TurnTrace()
+    trace.add_results((_reco(("1", "Saw X"), ("2", "Talk to Me"), ("3", "The Nun II")),))
+    trace.said += ["The Nun II, Talk to Me, or Saw X."]
+    trace.add_action("focus", {"title_id": "3"}, after_results=True)
+    assert trace.offered_ids() == ["3", "1", "2"]
+    # Two pointed-at titles keep candidate order between themselves.
+    trace.add_action("open_details", {"title_id": "2"}, after_results=True)
+    assert trace.offered_ids() == ["2", "3", "1"]
+
+
 def test_offered_ids_match_names_case_insensitively_and_from_fallback_text():
     trace = TurnTrace()
     trace.add_results((_reco(("1", "The Nun II"), ("2", "Saw X")),))
@@ -47,6 +60,13 @@ def test_mark_once_keeps_the_first_value():
     assert m.ttft_ms == 300
     m.mark_once("first_action_ms", 500)
     assert m.first_action_ms == 500
+
+
+def test_intent_is_the_first_cycles_routing_decision_not_the_answer_cycles():
+    m = TurnMetrics()
+    m.mark_once("intent", "recommend")
+    m.mark_once("intent", "answer")
+    assert m.intent == "recommend"
 
 
 def test_tool_result_knows_whether_it_earns_a_cycle():

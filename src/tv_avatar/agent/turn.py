@@ -37,10 +37,12 @@ class TurnMetrics:
     total_ms: int | None = None
     fallback: bool = False
 
-    def mark_once(self, name: str, ms: int) -> None:
-        """First-seen timing (TTFT, first action): later cycles do not overwrite it."""
+    def mark_once(self, name: str, value: int | str) -> None:
+        """First-seen value (TTFT, first action, intent): later cycles do not
+        overwrite it. Cycle 1 is the routing decision; the answer cycle after
+        tool results usually says `answer`, which is not what the turn was."""
         if getattr(self, name) is None:
-            setattr(self, name, ms)
+            setattr(self, name, value)
 
     def as_log_fields(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -86,10 +88,16 @@ class TurnTrace:
     def offered_ids(self, extra_spoken: str = "") -> list[str]:
         """Candidates the agent focused/opened/played, or named in what it said.
         Titles are spoken verbatim (persona rule), so a case-folded substring
-        match on the name is the deliberate, simple heuristic."""
+        match on the name is the deliberate, simple heuristic.
+
+        Pointed-at ids come first: `rec_shown` events of one turn share a
+        timestamp and the greeting reopens with the first one rendered, so the
+        title the agent actually focused must lead, not the tool's first hit."""
         spoken = (self.spoken() + " " + extra_spoken).casefold()
-        return [tid for tid, name in self.candidates.items()
-                if tid in self.referenced_ids or (name and name.casefold() in spoken)]
+        pointed = [tid for tid in self.candidates if tid in self.referenced_ids]
+        named = [tid for tid, name in self.candidates.items()
+                 if tid not in self.referenced_ids and name and name.casefold() in spoken]
+        return pointed + named
 
 
 @dataclass(frozen=True)

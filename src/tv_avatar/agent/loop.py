@@ -161,7 +161,7 @@ class TurnRunner:
                 for event in streamer.feed(delta):
                     match event:
                         case IntentReady(intent=intent):
-                            metrics.intent = intent
+                            metrics.mark_once("intent", intent)
                             log.debug("intent", step="intent", cycle=cycle, intent=intent, ms=ms())
                         case SayDelta(text=text):
                             said.append(text)
