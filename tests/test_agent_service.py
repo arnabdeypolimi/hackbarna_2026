@@ -276,10 +276,12 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     await history.close()
 
     system, user = client.calls[0]["messages"][0]["content"], client.calls[0]["messages"][-1]["content"]
-    assert "Recently recommended: The Dark Knight (2008) (yesterday)" in system
+    assert "Recently recommended: The Dark Knight (2008) (id=155, yesterday)" in system
     # The greeting brief repeats the context right next to the instruction.
     assert user.startswith(greeting) and "Greet them in English" in user
-    assert "Recently recommended: The Dark Knight (2008) (yesterday)" in user
+    assert "Recently recommended: The Dark Knight (2008) (id=155, yesterday)" in user
+    # The rules let the agent act on that id next turn ("yes, play it").
+    assert "Recent activity" in system.split("Only reference title_ids")[1].split("\n")[0]
     assert "loves Batman films" in user
     # History decides the title, the profile only the tone — and it says so, in that order.
     assert user.index("Recent activity (newest first)") < user.index("Viewer profile (tone only)")

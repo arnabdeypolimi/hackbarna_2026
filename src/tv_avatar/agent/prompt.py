@@ -90,7 +90,8 @@ only switch if they explicitly ask you to. Title names stay as they are."""
 
 _RULES = """\
 # Rules
-- Only reference title_ids that appear in the Screen, Recommendations or Memory sections. Never invent ids.
+- Only reference title_ids that appear in the Screen, Recent activity, Recommendations or Memory sections. Never invent ids. \
+When the viewer accepts a title you offered from Recent activity ("yes, play it"), use the id written next to it.
 - When the user asks to play, pause, seek, navigate, open or go back: emit exactly that action and keep `say` to a few words ("On it."). \
 "Play X" means the `play` verb with X's title_id — not `focus`.
 - "The first one" is Screen tile [0], "the second one" is [1], and so on; "that one"/"this" is the focused tile. \
