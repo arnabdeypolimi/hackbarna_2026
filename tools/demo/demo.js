@@ -255,9 +255,12 @@ async function connect() {
   el.connect.disabled = true;
   el.connect.textContent = "Connecting…";
   try {
-    const persona = { avatar: el.avatarPick.value || null, language: el.languagePick.value || null };
+    // The viewer id outlives the session (personalisation, memory, viewing log).
+    let userId = localStorage.getItem("tv_user_id");
+    if (!userId) { userId = "couch_" + Math.random().toString(36).slice(2, 8); localStorage.setItem("tv_user_id", userId); }
+    const body = { user_id: userId, avatar: el.avatarPick.value || null, language: el.languagePick.value || null };
     const res = await fetch("/sessions", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(persona),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`POST /sessions ${res.status}: ${(await res.json()).detail ?? res.statusText}`);
     const session = await res.json();
@@ -287,7 +290,7 @@ async function hangup() {
   state.mic?.getTracks().forEach((t) => t.stop());
   await state.audioCtx?.close().catch(() => {});
   const s = state.session;
-  if (s) fetch(`/sessions/${s.session_id}`, { method: "DELETE", headers: { "X-Control-Token": s.control_token } }).catch(() => {});
+  if (s) fetch(`/sessions/${s.session_id}`, { method: "DELETE", headers: { "X-Control-Token": s.control_token }, keepalive: true }).catch(() => {});
   Object.assign(state, { session: null, pc: null, ws: null, mic: null, audioCtx: null, prevStats: null, turn: null, partialRow: null });
   el.portrait.dataset.state = "off";
   el.video.srcObject = null;
@@ -322,7 +325,7 @@ el.connect.onclick = () => (state.session ? hangup() : connect());
 window.addEventListener("beforeunload", () => { if (state.session) hangup(); });
 
 fetch("/config").then((r) => r.json()).then((c) => {
-  $("stack-llm").textContent = c.llm_model;
+  $("stack-llm").textContent = `${c.llm_model} · agent=${c.agent_impl}${c.catalog_titles ? ` · ${c.catalog_titles} titles` : ""}`;
   $("stack-stt").textContent = c.stt_model;
   $("stack-tts").textContent = `${c.tts_model} · ${c.tts_sample_rate / 1000} kHz`;
   fillPicker(el.avatarPick, c.avatars, (a) => a.id, (a) => a.name, c.default_avatar);

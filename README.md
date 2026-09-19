@@ -21,7 +21,7 @@ Two planes, deliberately independent. They meet only at the session store and th
   ────────────────                     ───────                          ────────
   microphone  ──── WebRTC audio ──▶  transport.input
                                           │
-                                     SlngSTTService  ◀────── wss ─────▶  SLNG (Reson8 STT)
+                                     SlngSTTService  ◀────── wss ─────▶  SLNG (Deepgram Nova 3 STT)
                                           │
                                      user aggregator  (VAD + silence timer)
                                           │
@@ -166,8 +166,25 @@ src/tv_avatar/
   app.py                  FastAPI: sessions, WebRTC signalling, control WS, static mounts
   agent/
     commands.py           command schemas — the single source of truth for the vocabulary
-    prompt.py             system prompt, written for the ear rather than the screen
+    envelope.py           the SGR turn envelope: intent / say / actions, plus internal tools
+    service.py            SGRAgentService — streams `say` sentence by sentence, dispatches actions
+    stream_parse.py       incremental parser for the streamed envelope
+    tools.py              internal tools: recommend_titles, recall_memory, reject_title
+    injector.py           stamps screen / history sections into the system prompt per turn
+    prompt.py             system prompts, written for the ear rather than the screen
     llm.py                provider construction + the deterministic scripted stub
+  memory/
+    lane.py               MemoryLane protocol (prefetch / recall / ingest / finish_session)
+    summary_lane.py       one LLM-written profile per viewer, rewritten when a session ends
+  recs/
+    catalog.py            TMDB catalog: parquet rows + embedded Qdrant index
+    engine.py             retrieve -> filter -> re-rank; query / taste / popular channels
+    embedder.py           local E5 (default) or Nebius embeddings for queries
+  history/
+    store.py              per-viewer viewing log (SQLite): played, shown, rejected
+    recorder.py           screen transitions and tool results -> history events
+  e5.py                   the process-shared multilingual-e5-small
+  runtime.py              process-wide catalog / history / memory / recs, warmed at boot
   control/
     protocol.py           wire models, discriminated unions in both directions
     channel.py            WebSocket read/write loops
@@ -186,6 +203,9 @@ tools/
   demo/                   engineering console (WebRTC + control plane, live metrics)
   mock_tv_client/         fake content grid that speaks the control protocol
   export_schemas.py       Pydantic models -> JSON Schema + TypeScript
+  build_catalog.py        TMDB CSV -> data/catalog.parquet + data/qdrant_db (run once)
+  smoke_turn.py           text-mode end-to-end smoke of the agent, memory and recs
+  voice_smoke.py          voice-API smoke harness (STT/TTS round trip, no browser)
 contracts/                generated, committed, consumed by the frontend
 docs/                     design spec, implementation plans, measured findings
 frontend/                 Titan Browse — the React TV UI (own README, own toolchain)
@@ -200,7 +220,7 @@ the protocol.
 ## Tests
 
 ```bash
-uv run pytest                    # 81 tests, ~3 s, no network and no API keys needed
+uv run pytest                    # ~10 s, no network and no API keys needed
 ```
 
 Command schemas and the protocol are covered by unit and round-trip tests; the command bus
@@ -230,20 +250,41 @@ More in [`docs/findings/`](docs/findings/).
 
 ## Status
 
-Milestones M0–M2 of the design spec are done: the voice loop, the avatar with its
-interruption behaviour, and the control protocol with a mock client.
+Milestones M0–M3 of the design spec are done: the voice loop, the avatar with its
+interruption behaviour, the control protocol with a mock client, and the agent layer.
 
-Not built yet:
+### Agent layer (phase 2)
 
-- **M3 — screen-state injection and real tools.** `SessionState.render_for_prompt()` exists
-  and the command bus is wired, but the agent is still the scripted stub: no
-  `ScreenContextInjector` between the user aggregator and the LLM, and no tool definitions
-  handed to the provider. This is the seam marked `TODO(phase 2)` in `pipeline/builder.py`.
-- **M4 — latency instrumentation** beyond the console's per-turn timings.
-- **M5 — shoppable products** and persona polish.
+`AGENT_IMPL=sgr` (default) runs `SGRAgentService`: a Schema-Guided-Reasoning agent whose
+every turn is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
+decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel;
+internal tools (`recommend_titles`, `recall_memory`) earn one bounded second cycle to speak
+their results, with a templated fallback if the model is late.
 
-The session store is an in-memory dict. That is deliberate for phase 1: swapping in Redis
-touches `SessionStore` and nothing else.
+- **Recommendations** — a TMDB slice indexed in embedded Qdrant with the local
+  `multilingual-e5-small` (~15 ms per query). Build it once:
+
+  ```bash
+  uv run python tools/build_catalog.py --limit 500      # data/ is git-ignored
+  ```
+
+- **Viewing log** — `data/history.db`: what was played, what the agent offered, what the
+  viewer declined (`reject_title`). The greeting and the recommender take titles from here.
+- **Memory** — one profile per viewer in `data/memory/<user_id>/profile.md`, rewritten by
+  the LLM from the session transcript when the session ends (crash-safe: leftovers are
+  folded in at the next start). Durable preferences and tone, readable and editable by hand.
+- **Viewer identity** — `POST /sessions {"user_id": "..."}`; sessions come and go, the
+  couch persists.
+
+Text-mode smoke, no speech keys needed:
+
+```bash
+uv run python tools/smoke_turn.py --user couch_1 "something like Sicario" "no, not the first one"
+```
+
+Not built yet: **M4** latency instrumentation beyond the console and the per-turn log line;
+**M5** shoppable products and persona polish. The session store is an in-memory dict —
+swapping in Redis touches `SessionStore` and nothing else.
 
 ### The frontend
 

@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from tv_avatar.catalog import SessionPersona
+from tv_avatar.catalog import SessionPersona, get_catalog
 from tv_avatar.control.protocol import ScreenState
 
 
@@ -18,11 +18,14 @@ class SessionState:
     session_id: str
     control_token: str
     expires_at: float
-    #: Avatar and language, pinned for the session's lifetime.
-    persona: SessionPersona
+    #: Avatar and language, pinned for the session's lifetime. Defaults to the
+    #: catalog's default pairing so tests and tools can build a state directly.
+    persona: SessionPersona = field(default_factory=lambda: get_catalog().resolve())
     created_at: float = field(default_factory=time.time)
     screen: ScreenState | None = None
     current_turn_id: str | None = None
+    #: Personalisation key (D10). Sessions come and go; the couch persists.
+    user_id: str = ""
 
     def update_screen(self, state: ScreenState) -> None:
         self.screen = state
@@ -56,12 +59,14 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
 
-    def create(self, ttl_s: int, persona: SessionPersona) -> SessionState:
+    def create(self, ttl_s: int, persona: SessionPersona, user_id: str | None = None) -> SessionState:
+        session_id = f"sess_{uuid.uuid4().hex[:12]}"
         session = SessionState(
-            session_id=f"sess_{uuid.uuid4().hex[:12]}",
+            session_id=session_id,
             control_token=secrets.token_urlsafe(32),
             expires_at=time.time() + ttl_s,
             persona=persona,
+            user_id=user_id or f"anon_{session_id}",
         )
         self._sessions[session.session_id] = session
         return session
@@ -83,6 +88,11 @@ class SessionStore:
 
     def close(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
+
+    def others_for_user(self, user_id: str, except_session_id: str) -> list[str]:
+        """Other live sessions of the same user — one couch runs one avatar."""
+        return [sid for sid, s in self._sessions.items()
+                if s.user_id == user_id and sid != except_session_id]
 
     def sweep_expired(self, now: float | None = None) -> list[str]:
         """Remove every session past its ``expires_at``; return their ids.

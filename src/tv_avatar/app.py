@@ -1,4 +1,5 @@
-"""HTTP session lifecycle, WebRTC signalling, and the control WebSocket."""
+"""HTTP session lifecycle, WebRTC signalling, the control WebSocket, and the
+catalog sample used by the demo clients."""
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -19,8 +20,10 @@ from tv_avatar.catalog import LanguageCode, get_catalog
 from tv_avatar.config import Settings, get_settings
 from tv_avatar.control.channel import ControlChannel
 from tv_avatar.control.protocol import PROTOCOL_VERSION, ErrorMsg
+from tv_avatar.logging import setup_logging
 from tv_avatar.pipeline.runner import run_session
 from tv_avatar.pipeline.transport import build_transport
+from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionState, SessionStore
 
@@ -31,13 +34,15 @@ _TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
 
 class CreateSessionRequest(BaseModel):
-    """Both optional: an empty body yields the catalog defaults."""
+    """All optional: an empty body yields the catalog defaults and an anonymous viewer."""
+    user_id: str | None = None
     avatar: str | None = None
     language: LanguageCode | None = None
 
 
 def create_app(
     store: SessionStore | None = None,
+    runtime: Runtime | None = None,
     *,
     sweep_interval_s: float = SWEEP_INTERVAL_S,
 ) -> FastAPI:
@@ -45,6 +50,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        settings = None if _missing_settings() else get_settings()
+        setup_logging(settings.log_level if settings else "INFO")
+        if app.state.runtime is None and settings is not None:
+            app.state.runtime = build_runtime(settings)
+        if app.state.runtime is not None and settings is not None and settings.agent_impl == "sgr":
+            app.state.runtime.warm_in_background()
         sweeper = asyncio.create_task(_sweep_loop(app, sweep_interval_s))
         try:
             yield
@@ -54,10 +65,13 @@ def create_app(
                 await sweeper
             await app.state.manager.shutdown()
             await webrtc.close()
+            if app.state.runtime is not None:
+                await app.state.runtime.close()
 
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
     app.state.manager = SessionManager()
+    app.state.runtime = runtime
     # Fail at boot on a broken avatars.yaml, as Settings does on a bad .env,
     # rather than turning every /config and POST /sessions into a 500.
     get_catalog()
@@ -86,13 +100,16 @@ def create_app(
         """Non-secret view of the configured stack, for the console header."""
         missing = _missing_settings()
         s = Settings.model_construct() if missing else get_settings()
+        rt = app.state.runtime
         return {
             "configured": not missing,
             "missing": missing,
+            "agent_impl": s.agent_impl,
             "llm_model": s.llm_model,
             "stt_model": s.slng_stt_model,
             "tts_model": s.slng_tts_model,
             "tts_sample_rate": s.slng_tts_sample_rate,
+            "catalog_titles": len(rt.catalog) if rt is not None and rt.catalog is not None else 0,
             **get_catalog().public(),
         }
 
@@ -100,16 +117,17 @@ def create_app(
     async def create_session(
         req: CreateSessionRequest = Body(default_factory=CreateSessionRequest),
     ) -> dict:
-        """Mint a session pinned to one avatar and one language (spec §6)."""
+        """Mint a session pinned to one avatar, one language and one viewer (spec §6, D10)."""
         try:
             persona = get_catalog().resolve(req.avatar, req.language)
         except KeyError as err:
             raise HTTPException(422, str(err.args[0])) from None
         ttl = get_settings().control_token_ttl_s if _settings_available() else 3600
-        session = app.state.store.create(ttl, persona)
+        session = app.state.store.create(ttl, persona, user_id=req.user_id)
         app.state.manager.bus_for(session.session_id)
         return {
             "session_id": session.session_id,
+            "user_id": session.user_id,
             "avatar": persona.avatar.id,
             "language": persona.language.code,
             "control_token": session.control_token,
@@ -128,6 +146,12 @@ def create_app(
     ) -> dict:
         """WebRTC offer → answer. Spawns the session's pipeline on first offer."""
         session = _authenticated(session_id, token)
+        # A reload without hang-up leaves the previous pipeline (and its Anam
+        # session) alive until ICE times out; Anam's concurrent-session limit
+        # then rejects the new one. One user, one avatar.
+        for other in app.state.store.others_for_user(session.user_id, session_id):
+            app.state.manager.stop_pipeline(other)
+            logger.bind(session_id=other, user_id=session.user_id).info("pipeline replaced by new offer")
         if not _settings_available():
             raise HTTPException(503, "media services are not configured (.env)")
         settings = get_settings()
@@ -138,7 +162,7 @@ def create_app(
             app.state.manager.start_pipeline(
                 session_id,
                 run_session(session, bus, transport, with_avatar=avatar,
-                            half_duplex=halfduplex),
+                            half_duplex=halfduplex, runtime=app.state.runtime),
             )
 
         answer = await webrtc.handle_web_request(request, on_connection)
@@ -184,10 +208,22 @@ def create_app(
             await websocket.close(code=4401)
             return
         bus = app.state.manager.bus_for(session_id)
+        recorder = app.state.runtime.recorder if app.state.runtime is not None else None
         # The bus deliberately survives this call returning: a dropped control
         # socket is the Degraded state (spec §6) — commands queue until the TV
         # app reconnects with the same session id. Expiry or DELETE reaps it.
-        await ControlChannel(websocket, session, bus).run()
+        await ControlChannel(websocket, session, bus, recorder=recorder).run()
+
+    @app.get("/catalog/sample")
+    async def catalog_sample(limit: int = Query(default=8, ge=1, le=50)) -> dict:
+        rt = app.state.runtime
+        if rt is None or rt.catalog is None:
+            return {"titles": []}
+        return {"titles": [
+            {"title_id": i.title_id, "name": i.name, "year": i.year, "genres": i.genres,
+             "poster_path": i.poster_path}
+            for i in rt.catalog.sample(limit)
+        ]}
 
     for mount, directory in (("/mock", _TOOLS / "mock_tv_client"), ("/demo", _TOOLS / "demo")):
         if directory.is_dir():
