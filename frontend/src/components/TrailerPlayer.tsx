@@ -115,9 +115,11 @@ export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function Tra
     if (!p?.getCurrentTime) return;
     seekTo(p.getCurrentTime() + by);
   };
+  // Block bodies on purpose: YouTube's command methods return the player for chaining,
+  // and a handle method's return value is read as a failure reason by the ack path.
   useImperativeHandle(ref, () => ({
-    pause: () => api.current?.pauseVideo?.(),
-    resume: () => api.current?.playVideo?.(),
+    pause: () => { api.current?.pauseVideo?.(); },
+    resume: () => { api.current?.playVideo?.(); },
     seekTo,
     seekBy: seek,
   }));

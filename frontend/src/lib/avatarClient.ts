@@ -197,7 +197,9 @@ function openControl(session: SessionInfo, opts: ConnectOptions, parts: Parts): 
         opts.onCommand(msg);
         break;
       case 'error':
-        opts.onError(new Error(`${msg.code}: ${msg.message}`));
+        // The backend sends this when a message *we* sent was malformed. The session
+        // itself is fine — tearing it down would turn one bad ack into a dead avatar.
+        console.warn('[avatar] protocol error', msg.code, msg.message);
         break;
     }
   };

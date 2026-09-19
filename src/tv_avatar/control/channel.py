@@ -48,6 +48,9 @@ class ControlChannel:
             try:
                 msg = parse_client_message(raw)
             except ProtocolError as err:
+                # Loud on purpose: a TV that sends a malformed ack (a field bug this
+                # caught: an object where a string belonged) is otherwise invisible.
+                self._log.warning("bad client message ({}): {} | {}", err.code, err.message, raw[:200])
                 await self._ws.send_text(
                     ErrorMsg(code=err.code, message=err.message).model_dump_json()
                 )

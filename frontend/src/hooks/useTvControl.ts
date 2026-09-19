@@ -33,13 +33,16 @@ export function dispatchCommand(cmd: CommandMsg, handler: CommandHandler, send: 
     console.debug('[avatar] command', cmd.verb, cmd.args, `${titles.length} titles`);
     return;
   }
-  let error: string | void;
+  let error: string | null = null;
   try {
-    error = (handler[cmd.verb] as (a: unknown) => string | void)(cmd.args);
+    // Only a string is a reason. A handler that hands back some library's return value
+    // (YouTube's chainable player, say) must not turn into an ack the backend rejects.
+    const out: unknown = (handler[cmd.verb] as (a: unknown) => unknown)(cmd.args);
+    if (typeof out === 'string') error = out;
   } catch (e) {
     error = (e as Error).message;
   }
-  send({ type: 'ack', command_id: cmd.id, ok: !error, error: error ?? null });
+  send({ type: 'ack', command_id: cmd.id, ok: !error, error });
   console.debug('[avatar] command', cmd.verb, cmd.args, error ?? 'ok');
 }
 
