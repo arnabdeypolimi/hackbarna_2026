@@ -10,7 +10,6 @@ flowing so TTS and the avatar stop together.
 """
 import asyncio
 import contextlib
-import json
 import time
 from typing import Any
 
@@ -48,6 +47,7 @@ from tv_avatar.agent.stream_parse import (
     SayDone,
 )
 from tv_avatar.agent.tools import InternalTools
+from tv_avatar.agent.turn import CycleOutcome, ToolResult, TurnContext, TurnMetrics
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
 from tv_avatar.history.store import HistoryStore
@@ -64,9 +64,9 @@ TEMPERATURE = 0.2
 MAX_HISTORY_MESSAGES = 10
 
 
-def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[str, dict]]]:
+def render_fallback(results: tuple[ToolResult, ...]) -> tuple[str, list[tuple[str, dict]]]:
     """Spoken answer + TV actions built from tool results without an LLM call."""
-    for verb, result in results:
+    for verb, result in ((r.verb, r.payload) for r in results):
         if verb == "recommend_titles":
             titles = result.get("titles") or []
             if not titles:
@@ -181,9 +181,9 @@ class SGRAgentService(LLMService):
 
     async def _turn(self, context: LLMContext, turn_id: str) -> None:
         user_id = self._session.user_id or self._session.session_id
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
-        t0 = time.perf_counter()
-        marks: dict[str, Any] = {"cycles": 0, "n_actions": 0, "intent": None}
+        ctx = TurnContext(turn_id, user_id, time.perf_counter(),
+                          logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id))
+        log, metrics = ctx.log, TurnMetrics()
 
         await self.start_processing_metrics()
         messages = list(context.get_messages())
@@ -195,9 +195,9 @@ class SGRAgentService(LLMService):
         memory = await self._lane.recall(user_id, user_text)
         history_text = (await self._history.render_for_prompt(user_id, self._catalog)
                         if self._history is not None else "Recently watched: (none yet)")
-        marks["recall_ms"] = round((time.perf_counter() - t0) * 1000)
+        metrics.recall_ms = ctx.elapsed_ms()
         log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
-                  memory_tokens=memory.token_est, ms=marks["recall_ms"])
+                  memory_tokens=memory.token_est, ms=metrics.recall_ms)
         log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
 
         messages = self.build_messages(messages, memory, history_text)
@@ -209,76 +209,68 @@ class SGRAgentService(LLMService):
         log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
 
         await self.push_frame(LLMFullResponseStartFrame())
-        memory_text = None if memory.empty else memory.render_for_prompt()
-        for cycle in (1,):
-            marks["cycles"] = cycle
-            log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages))
-            raw, results = await self._cycle(messages, turn_id, user_id, memory_text, cycle, marks, t0)
-            log.debug("cycle envelope", step="cycle", cycle=cycle, raw=raw)
-            if not self.needs_second_cycle(results):
-                log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False,
-                          awaited=[v for v, _ in results])
-                break
-            feedback = json.dumps({verb: result for verb, result in results}, ensure_ascii=False)
-            log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=True,
-                      awaited=[v for v, _ in results], feedback_chars=len(feedback))
+        log.debug("cycle start", step="cycle", cycle=1, n_messages=len(messages))
+        outcome = await self._cycle(messages, ctx, 1, metrics)
+        log.debug("cycle envelope", step="cycle", cycle=1, raw=outcome.raw)
+        if not outcome.needs_another_cycle:
+            log.debug("cycle end", step="cycle", cycle=1, second_cycle=False,
+                      awaited=[r.verb for r in outcome.results])
+        else:
+            feedback = outcome.feedback()
+            log.debug("cycle end", step="cycle", cycle=1, second_cycle=True,
+                      awaited=[r.verb for r in outcome.results], feedback_chars=len(feedback))
             log.debug("tool results fed back", step="feedback", results=feedback)
             messages = messages + [
-                {"role": "assistant", "content": raw},
+                {"role": "assistant", "content": outcome.raw},
                 {"role": "user", "content": "[tool results]\n" + feedback
                     + "\nNow answer the user using these results. Do not call internal tools again."},
             ]
             # Cycle 2 must start speaking within its budget or the tool results
             # are spoken from a template — the loop never outlives the budget.
-            if not await self._cycle_with_budget(messages, turn_id, user_id, memory_text, marks, t0, log):
-                marks["cycles"] = 2
-                marks["fallback"] = True
-                await self._speak_fallback(results, turn_id, user_id, memory_text, log)
-            break
+            if await self._cycle_with_budget(messages, ctx, 2, metrics) is None:
+                metrics.fallback = True
+                await self._speak_fallback(outcome.results, ctx)
         await self.push_frame(LLMFullResponseEndFrame())
         await self.stop_processing_metrics()
-        marks["total_ms"] = round((time.perf_counter() - t0) * 1000)
-        log.debug("turn close", step="end", **marks)
-        log.info("turn", **marks)
+        metrics.total_ms = ctx.elapsed_ms()
+        log.debug("turn close", step="end", **metrics.as_log_fields())
+        log.info("turn", **metrics.as_log_fields())
         self._schedule_ingest(interrupted=False)
 
-    async def _cycle_with_budget(self, messages: list[dict], turn_id: str, user_id: str,
-                                 memory_text: str | None, marks: dict, t0: float, log) -> bool:
-        """Run cycle 2; True if it produced speech within `cycle2_first_byte_s`."""
+    async def _cycle_with_budget(self, messages: list[dict], ctx: TurnContext, cycle: int,
+                                 metrics: TurnMetrics) -> CycleOutcome | None:
+        """Run a follow-up cycle; None if it produced no speech within `cycle2_first_byte_s`."""
+        budget_s = self._cfg.cycle2_first_byte_s
         first_say = asyncio.Event()
-        log.debug("cycle start", step="cycle", cycle=2, n_messages=len(messages),
-                  budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
-        task = asyncio.create_task(
-            self._cycle(messages, turn_id, user_id, memory_text, 2, marks, t0, first_say=first_say))
+        ctx.log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages),
+                      budget_ms=round(budget_s * 1000))
+        task = asyncio.create_task(self._cycle(messages, ctx, cycle, metrics, first_say=first_say))
         waiter = asyncio.create_task(first_say.wait())
         try:
-            done, _ = await asyncio.wait({task, waiter}, timeout=self._cfg.cycle2_first_byte_s,
-                                         return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({task, waiter}, timeout=budget_s, return_when=asyncio.FIRST_COMPLETED)
         finally:
             waiter.cancel()
         if not done:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-            log.warning("cycle 2 over budget; speaking templated answer", step="cycle",
-                        budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
-            return False
-        raw, _results = await task
-        marks["cycles"] = 2
-        log.debug("cycle envelope", step="cycle", cycle=2, raw=raw)
-        log.debug("cycle end", step="cycle", cycle=2, second_cycle=False)
-        return True
+            ctx.log.warning("cycle over budget; speaking templated answer", step="cycle", cycle=cycle,
+                            budget_ms=round(budget_s * 1000))
+            return None
+        outcome = await task
+        ctx.log.debug("cycle envelope", step="cycle", cycle=cycle, raw=outcome.raw)
+        ctx.log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False)
+        return outcome
 
-    async def _speak_fallback(self, results: list[tuple[str, dict]], turn_id: str, user_id: str,
-                              memory_text: str | None, log) -> None:
+    async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext) -> None:
         text, actions = render_fallback(results)
-        log.debug("fallback", step="say", text=text, actions=actions)
+        ctx.log.debug("fallback", step="say", text=text, actions=actions)
         # Deliberately not added to _turn_said: a template built from substitute
         # results is not the agent's reply, and the memory profile must not learn
         # the viewer "wanted" whatever the popular channel happened to return.
         await self._speak(text)
         for verb, args in actions:
-            await self.dispatch_action(parse_action({"verb": verb, **args}), turn_id, user_id)
+            await self.dispatch_action(parse_action({"verb": verb, **args}), ctx)
 
     async def _speak(self, text: str) -> None:
         """Hand one complete sentence to TTS.
@@ -294,10 +286,10 @@ class SGRAgentService(LLMService):
         if text:
             await self.push_frame(AggregatedTextFrame(text, AggregationType.SENTENCE))
 
-    async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
-                     cycle: int, marks: dict, t0: float,
-                     first_say: asyncio.Event | None = None) -> tuple[str, list[tuple[str, dict]]]:
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
+    async def _cycle(self, messages: list[dict], ctx: TurnContext, cycle: int, metrics: TurnMetrics,
+                     first_say: asyncio.Event | None = None) -> CycleOutcome:
+        log = ctx.log
+        metrics.cycles = max(metrics.cycles, cycle)  # attempted, even if cancelled over budget
         streamer = EnvelopeStreamer()
         sentences = SimpleTextAggregator()  # same splitter the TTS would use, but we own the flush
         raw: list[str] = []
@@ -307,6 +299,9 @@ class SGRAgentService(LLMService):
         first_say_pending = True
         t_req = time.perf_counter()
         stream = None
+
+        def ms() -> int:
+            return round((time.perf_counter() - t_req) * 1000)
 
         await self.start_ttfb_metrics()
         try:
@@ -325,9 +320,8 @@ class SGRAgentService(LLMService):
                 for event in streamer.feed(delta):
                     match event:
                         case IntentReady(intent=intent):
-                            marks["intent"] = intent
-                            log.debug("intent", step="intent", cycle=cycle, intent=intent,
-                                      ms=round((time.perf_counter() - t_req) * 1000))
+                            metrics.intent = intent
+                            log.debug("intent", step="intent", cycle=cycle, intent=intent, ms=ms())
                         case SayDelta(text=text):
                             said.append(text)
                             self._turn_said.append(text)
@@ -336,22 +330,19 @@ class SGRAgentService(LLMService):
                                 if first_say is not None:
                                     first_say.set()
                                 await self.stop_ttfb_metrics()
-                                marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
-                                log.debug("first say byte", step="say", cycle=cycle,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
+                                metrics.mark_once("ttft_ms", ctx.elapsed_ms())
+                                log.debug("first say byte", step="say", cycle=cycle, ms=ms())
                             async for sentence in sentences.aggregate(text):
-                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=sentence.text,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
+                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=sentence.text, ms=ms())
                                 await self._speak(sentence.text)
                         case SayDone():
                             # The say string closed: speak the tail now rather
                             # than after the actions array (or the next cycle).
                             if (tail := await sentences.flush()) is not None:
-                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=tail.text,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
+                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=tail.text, ms=ms())
                                 await self._speak(tail.text)
                         case ActionReady(action=raw_action):
-                            marks["n_actions"] += 1
+                            metrics.n_actions += 1
                             try:
                                 action = parse_action(raw_action)
                             except ValidationError as err:
@@ -365,14 +356,13 @@ class SGRAgentService(LLMService):
                                 continue  # no open-ended loops on a voice interface
                             log.debug("action ready", step="action", cycle=cycle, verb=verb,
                                       args=action.model_dump(exclude={"verb"}, exclude_none=True),
-                                      awaited=spec.awaits_result,
-                                      ms=round((time.perf_counter() - t_req) * 1000))
-                            task = asyncio.create_task(self.dispatch_action(action, turn_id, user_id))
+                                      awaited=spec.awaits_result, ms=ms())
+                            task = asyncio.create_task(self.dispatch_action(action, ctx))
                             if spec.awaits_result:
                                 awaited.append((verb, task))
                             else:
                                 fire.append(task)
-                            marks.setdefault("first_action_ms", round((time.perf_counter() - t0) * 1000))
+                            metrics.mark_once("first_action_ms", ctx.elapsed_ms())
                         case Done():
                             break
                 if streamer.finished:
@@ -386,20 +376,19 @@ class SGRAgentService(LLMService):
         if first_say_pending:
             await self.stop_ttfb_metrics()
         log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
-                  awaited=len(awaited), fire_and_forget=len(fire),
-                  ms=round((time.perf_counter() - t_req) * 1000))
+                  awaited=len(awaited), fire_and_forget=len(fire), ms=ms())
 
-        results: list[tuple[str, dict]] = []
+        results: list[ToolResult] = []
         for verb, task in awaited:
             try:
-                results.append((verb, await task))
+                results.append(ToolResult(verb, await task))
             except Exception as err:  # noqa: BLE001
                 log.opt(exception=err).debug("awaited action raised", step="action", verb=verb)
-                results.append((verb, {"status": "error", "reason": type(err).__name__}))
+                results.append(ToolResult(verb, {"status": "error", "reason": type(err).__name__}))
         for task in fire:
             with contextlib.suppress(Exception):  # failures are logged in dispatch_action
                 await task
-        return "".join(raw), results
+        return CycleOutcome("".join(raw), tuple(results))
 
     # --- pieces the tests call directly -------------------------------------
 
@@ -411,9 +400,9 @@ class SGRAgentService(LLMService):
             render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary)
         return [{"role": "system", "content": system}, *rest]
 
-    async def dispatch_action(self, action: BaseModel, turn_id: str, user_id: str = "") -> dict:
+    async def dispatch_action(self, action: BaseModel, ctx: TurnContext) -> dict:
         """Route one parsed action: internal tools in-process, TV verbs over the bus."""
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
+        log, turn_id, user_id = ctx.log, ctx.turn_id, ctx.user_id
         t0 = time.perf_counter()
         verb = str(action.verb)
         args = action.model_dump(exclude={"verb"}, exclude_none=True)
@@ -434,9 +423,3 @@ class SGRAgentService(LLMService):
         log.info("tv command", verb=verb, status=result.get("status"),
                  ms=round((time.perf_counter() - t0) * 1000))
         return result
-
-    @staticmethod
-    def needs_second_cycle(results: list[tuple[str, dict]]) -> bool:
-        """Any internal tool call earns a second cycle — including a failed one,
-        so the agent speaks the fallback instead of stopping at the filler."""
-        return any(verb in REGISTRY and REGISTRY[verb].earns_cycle for verb, _ in results)

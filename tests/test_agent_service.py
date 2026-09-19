@@ -367,14 +367,32 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
 
 def test_render_fallback_shapes():
     from tv_avatar.agent.service import render_fallback
-    text, actions = render_fallback([("recommend_titles", {"titles": [
+    from tv_avatar.agent.turn import ToolResult
+    text, actions = render_fallback((ToolResult("recommend_titles", {"titles": [
         {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
-        {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]})])
+        {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]}),))
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
     assert actions == [("focus", {"title_id": "1"})]
-    assert render_fallback([("recommend_titles", {"titles": []})])[1] == []
-    assert "don't have that" in render_fallback([("recall_memory", {"memory": "(none yet)"})])[0]
-    assert "took too long" in render_fallback([("search_catalog", {"status": "unavailable"})])[0]
+    assert render_fallback((ToolResult("recommend_titles", {"titles": []}),))[1] == []
+    assert "don't have that" in render_fallback((ToolResult("recall_memory", {"memory": "(none yet)"}),))[0]
+    assert "took too long" in render_fallback((ToolResult("search_catalog", {"status": "unavailable"}),))[0]
+
+
+async def test_turn_log_line_reports_typed_metrics():
+    """The one INFO line per turn keeps its field set — dashboards grep it."""
+    from loguru import logger
+    records = []
+    handle = logger.add(lambda m: records.append(m.record), level="INFO",
+                        filter=lambda r: r["message"] == "turn")
+    try:
+        client = FakeOpenAI([RECO_1, RECO_2])
+        await _run(_agent(client, RecordingBus()), TimingSink(), [LLMContextFrame(context=_ctx("recommend"))])
+    finally:
+        logger.remove(handle)
+    extra = records[-1]["extra"]
+    assert extra["cycles"] == 2 and extra["n_actions"] == 2 and extra["intent"] == "recommend"
+    assert {"recall_ms", "ttft_ms", "first_action_ms", "total_ms"} <= set(extra)
+    assert "fallback" not in extra and extra["turn_id"].startswith("turn_")
 
 
 async def test_history_is_trimmed_to_recent_messages():
