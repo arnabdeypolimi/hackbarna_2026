@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pydantic import BaseModel, ValidationError
@@ -168,6 +169,10 @@ def create_app(
     mock = Path(__file__).resolve().parents[2] / "tools" / "mock_tv_client"
     if mock.is_dir():
         app.mount("/mock", StaticFiles(directory=mock, html=True), name="mock")
+
+        @app.get("/", include_in_schema=False)
+        async def root() -> RedirectResponse:
+            return RedirectResponse(url="/mock/")
 
     return app
 

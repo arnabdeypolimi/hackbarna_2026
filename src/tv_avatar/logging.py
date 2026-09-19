@@ -50,5 +50,7 @@ def setup_logging(level: str = "INFO") -> None:
     if not any(isinstance(h, InterceptHandler) for h in root.handlers):
         root.handlers = [InterceptHandler()]
     root.setLevel(logging.DEBUG if level.upper() == "DEBUG" else logging.INFO)
-    for noisy in ("httpx", "httpx2", "httpcore", "openai._base_client"):
+    # Third-party DEBUG chatter that would bury the agent trace.
+    for noisy in ("httpx", "httpx2", "httpcore", "openai._base_client", "urllib3", "huggingface_hub",
+                  "filelock", "sentence_transformers", "aiortc", "aioice", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
