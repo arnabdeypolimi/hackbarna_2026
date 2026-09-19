@@ -14,12 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from loguru import logger  # noqa: E402
-from openai import OpenAI  # noqa: E402
-from pydantic_settings import BaseSettings, SettingsConfigDict  # noqa: E402
+from loguru import logger
+from openai import OpenAI
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from tv_avatar.logging import setup_logging  # noqa: E402
-from tv_avatar.recs.catalog import build_catalog  # noqa: E402
+from tv_avatar.logging import setup_logging
+from tv_avatar.recs.catalog import build_catalog
 
 
 class BuildSettings(BaseSettings):
