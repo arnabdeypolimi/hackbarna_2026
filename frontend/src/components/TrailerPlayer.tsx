@@ -95,9 +95,10 @@ export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function Tra
   // it only at turn start, and the report re-sends the whole screen state.
   const report = useRef(onPlayback);
   report.current = onPlayback;
+  const second = Math.floor(time);
   useEffect(() => {
-    report.current?.({ state: playing ? 'playing' : 'paused', position_s: Math.floor(time) });
-  }, [playing, Math.floor(time)]);
+    report.current?.({ state: playing ? 'playing' : 'paused', position_s: second });
+  }, [playing, second]);
 
   // The player object exists before onReady but its methods are attached only then.
   const toggle = () => {

@@ -396,8 +396,10 @@ export default function App() {
     if (player) closePlayer();
     const at = row.indexOf(t);
     if (at >= 0) return selectPoster(at);
+    // The search rail keeps catalogue order, so a title whose name is a prefix of others
+    // ("Moon" → Moonfall) need not land at 0: focus where the new row will actually put it.
     setQuery(t.title);
-    selectPoster(0);
+    selectPoster(Math.max(0, buildRow(catalog, tab, t.title, myList).indexOf(t)));
   };
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.

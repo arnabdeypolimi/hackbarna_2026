@@ -32,7 +32,7 @@ from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
-from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, INTERNAL_MODELS, turn_plan_schema
+from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_MODELS, turn_plan_schema
 from tv_avatar.agent.prompt import (
     build_system_prompt,
     greeting_brief,
