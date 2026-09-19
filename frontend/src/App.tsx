@@ -17,13 +17,14 @@ import { Stage } from './components/Stage';
 import { SearchBar } from './components/SearchBar';
 import { PosterRow } from './components/PosterRow';
 import { Detail } from './components/Detail';
-import { AvatarPanel, type AvatarView } from './components/AvatarPanel';
+import { AvatarPanel } from './components/AvatarPanel';
 import { TabBar } from './components/TabBar';
 import { ExitDialog } from './components/ExitDialog';
 import { Profiles } from './components/Profiles';
 import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
 import { Toast, useToast } from './components/Toast';
+import { useAvatar } from './hooks/useAvatar';
 import { TrailerPlayer } from './components/TrailerPlayer';
 import { UploadIcon } from './components/Icons';
 
@@ -68,6 +69,7 @@ export default function App() {
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
   const avatarVideo = useRef<HTMLVideoElement>(null);
+  const avatar = useAvatar(avatarVideo);
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -395,25 +397,6 @@ export default function App() {
       window.removeEventListener('drop', drop);
     };
   }, []);
-
-  // TEMPORARY (Task 3 only): a hand-held view so the panel can be laid out before
-  // useAvatar exists. Edit `phase` to eyeball each state. Task 4 replaces it.
-  const avatar: AvatarView = {
-    phase: 'connecting',
-    message: 'Connecting to Cara…',
-    avatar: { id: 'cara', name: 'Cara', description: '', avatar_model: 'cara-4', languages: ['en', 'es', 'fr', 'ca'] },
-    status: 'listening',
-    lastLine: 'Show me something with dragons in it.',
-    languages: [
-      { code: 'en', name: 'English', native_name: 'English' },
-      { code: 'es', name: 'Spanish', native_name: 'Español' },
-      { code: 'fr', name: 'French', native_name: 'Français' },
-      { code: 'ca', name: 'Catalan', native_name: 'Català' },
-    ],
-    language: 'en',
-    setLanguage: () => {},
-    retry: () => {},
-  };
 
   // ---------- render ----------
   const heading = status.kind !== 'ready' ? 'Recommended' : query ? `Results for "${query}"` : TAB_TITLES[tab];
