@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Response, WebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -13,8 +13,9 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from tv_avatar.catalog import LanguageCode, get_catalog
 from tv_avatar.config import Settings, get_settings
 from tv_avatar.control.channel import ControlChannel
 from tv_avatar.control.protocol import PROTOCOL_VERSION, ErrorMsg
@@ -27,6 +28,12 @@ from tv_avatar.session.state import SessionState, SessionStore
 SWEEP_INTERVAL_S = 60.0
 
 _TOOLS = Path(__file__).resolve().parents[2] / "tools"
+
+
+class CreateSessionRequest(BaseModel):
+    """Both optional: an empty body yields the catalog defaults."""
+    avatar: str | None = None
+    language: LanguageCode | None = None
 
 
 def create_app(
@@ -51,6 +58,9 @@ def create_app(
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
     app.state.manager = SessionManager()
+    # Fail at boot on a broken avatars.yaml, as Settings does on a bad .env,
+    # rather than turning every /config and POST /sessions into a 500.
+    get_catalog()
 
     def sweep(now: float | None = None) -> list[str]:
         """Reap expired sessions together with their buses. Returns the ids."""
@@ -82,18 +92,26 @@ def create_app(
             "llm_model": s.llm_model,
             "stt_model": s.slng_stt_model,
             "tts_model": s.slng_tts_model,
-            "tts_voice": s.slng_tts_voice,
             "tts_sample_rate": s.slng_tts_sample_rate,
-            "avatar_model": s.anam_avatar_model,
+            **get_catalog().public(),
         }
 
     @app.post("/sessions")
-    async def create_session() -> dict:
+    async def create_session(
+        req: CreateSessionRequest = Body(default_factory=CreateSessionRequest),
+    ) -> dict:
+        """Mint a session pinned to one avatar and one language (spec §6)."""
+        try:
+            persona = get_catalog().resolve(req.avatar, req.language)
+        except KeyError as err:
+            raise HTTPException(422, str(err.args[0])) from None
         ttl = get_settings().control_token_ttl_s if _settings_available() else 3600
-        session = app.state.store.create(ttl)
+        session = app.state.store.create(ttl, persona)
         app.state.manager.bus_for(session.session_id)
         return {
             "session_id": session.session_id,
+            "avatar": persona.avatar.id,
+            "language": persona.language.code,
             "control_token": session.control_token,
             "control_url": f"/sessions/{session.session_id}/control",
             "offer_url": f"/sessions/{session.session_id}/offer",

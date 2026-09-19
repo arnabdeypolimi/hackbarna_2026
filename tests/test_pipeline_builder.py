@@ -1,9 +1,14 @@
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.transcriptions.language import Language
 
+from conftest import PERSONA
 from tv_avatar.agent.llm import build_llm
+from tv_avatar.catalog import AvatarProfile
 from tv_avatar.config import Settings
 from tv_avatar.pipeline.services import build_anam, build_stt, build_tts
 from tv_avatar.pipeline.turns import RESON8_TTFS_P99_S
+
+VOICE = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 
 
 def _settings(**over):
@@ -11,7 +16,6 @@ def _settings(**over):
         "nebius_api_key": "nb-test",
         "slng_api_key": "sk-test",
         "anam_api_key": "anam-test",
-        "anam_avatar_id": "avatar-1",
         "_env_file": None,
     }
     base.update(over)
@@ -32,21 +36,32 @@ def test_stt_uses_configured_model_and_region():
     assert stt._settings.enable_vad is True
     assert stt._settings.enable_partials is True
     assert stt._ttfs_p99_latency == RESON8_TTFS_P99_S
+    assert stt._settings.language == Language.EN
+
+
+def test_stt_language_is_forwarded_verbatim():
+    # SLNG sends str(Language) in the connection config; "ca" must not be
+    # remapped or dropped on the way to Reson8.
+    stt = build_stt(_settings(), Language.CA)
+    assert stt._settings.language == Language.CA
+    assert str(stt._settings.language) == "ca"
 
 
 def test_tts_uses_configured_voice_encoding_and_region():
-    tts = build_tts(_settings())
+    tts = build_tts(_settings(), VOICE)
     url, headers, init = tts._connection_options()
     # Cartesia sonic-3 contract: linear16 @ 24 kHz, voice in the init message.
     assert url == "wss://api.slng.ai/v1/bridges/unmute/tts/cartesia/sonic:3"
     assert headers["X-World-Part-Override"] == "eu"
-    assert '"voice": "f786b574-daa5-4673-aa0c-cbe3e8534c02"' in init
+    assert f'"voice": "{VOICE}"' in init
     assert '"encoding": "linear16"' in init
+    assert '"language": "en"' in init
     assert tts._encoding == "linear16"
 
-    custom = build_tts(_settings(slng_tts_model="slng/x/tts:1", slng_tts_voice="voice-z"))
+    custom = build_tts(_settings(slng_tts_model="slng/x/tts:1"), "voice-z", Language.ES)
     assert custom._settings.model == "slng/x/tts:1"
     assert custom._settings.voice == "voice-z"
+    assert '"language": "es"' in custom._connection_options()[2]
 
 
 def test_llm_targets_nebius_token_factory():
@@ -59,7 +74,7 @@ def test_llm_targets_nebius_token_factory():
 def test_anam_enables_audio_passthrough_and_disables_replay():
     # Passthrough means our TTS drives the avatar rather than Anam's own
     # voice; replay off keeps Anam from recording the session (spec §4).
-    anam = build_anam(_settings(video_width=640, video_height=960))
+    anam = build_anam(_settings(video_width=640, video_height=960), PERSONA.avatar)
     assert anam._persona_config.avatar_id == "avatar-1"
     assert anam._persona_config.avatar_model == "cara-4"
     assert anam._persona_config.enable_audio_passthrough is True
@@ -67,3 +82,11 @@ def test_anam_enables_audio_passthrough_and_disables_replay():
     assert (anam._video_width, anam._video_height) == (640, 960)
     # Regression: leaving this None produced https://api.anam.ai/None/engine/session.
     assert anam._api_version == "v1"
+
+
+def test_anam_persona_comes_from_the_avatar_profile_not_settings():
+    other = AvatarProfile(id="b", name="B", anam_avatar_id="avatar-2",
+                          anam_avatar_model="cara-5", voice="v")
+    anam = build_anam(_settings(), other)
+    assert anam._persona_config.avatar_id == "avatar-2"
+    assert anam._persona_config.avatar_model == "cara-5"

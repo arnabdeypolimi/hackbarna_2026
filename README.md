@@ -79,10 +79,29 @@ media cannot be produced without the providers.
 | `NEBIUS_API_KEY` | <https://tokenfactory.nebius.com/> — LLM, OpenAI-compatible API |
 | `SLNG_API_KEY` | SLNG gateway — one key covers both STT and TTS |
 | `ANAM_API_KEY` | Anam Cloud — avatar session authentication |
-| `ANAM_AVATAR_ID` | Anam persona selection |
 
 Every other setting has a working default in `config.py`. Nothing is hardcoded and no key
 appears in source; `.env` is git-ignored and `.env.example` is committed with blank values.
+
+### Avatars and languages
+
+Avatar ids, their Anam model and their Cartesia voice are not env vars: they live in
+`avatars.yaml` at the repo root (override the path with `AVATARS_FILE`). The file also lists
+the supported session languages — English, Spanish, French, Catalan — and, per avatar, which
+of them it may speak. A session pins one avatar and one language when it is created:
+
+```json
+POST /sessions  {"avatar": "lucia", "language": "es"}
+```
+
+Both fields are optional; an empty body yields the catalog defaults, and omitting the language
+for a single-language avatar picks its own. `GET /config` lists the options (without provider
+ids) so a client can build pickers. Adding an avatar is a YAML edit — no code changes.
+
+Cartesia Sonic has no Catalan, so the `ca` entry carries `tts_language: es`: speech
+recognition and the prompt run in Catalan, the synthesiser voices the Catalan text with its
+Spanish model. The `.yaml` is validated at boot; a broken file stops the server the same way a
+missing key does.
 
 ---
 
@@ -91,7 +110,7 @@ appears in source; `.env` is git-ignored and `.env.example` is committed with bl
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/config` | Non-secret view of the configured stack; lists missing env vars |
-| `POST` | `/sessions` | Mint a session id + control token, returns the control and offer URLs |
+| `POST` | `/sessions` | Mint a session pinned to an avatar + language; returns token, control and offer URLs |
 | `POST` | `/sessions/{id}/offer?token=` | WebRTC offer → answer. Spawns the session's pipeline |
 | `PATCH` | `/sessions/{id}/offer?token=` | Trickle ICE candidate |
 | `DELETE` | `/sessions/{id}` | Explicit hang-up; token in the `X-Control-Token` header |

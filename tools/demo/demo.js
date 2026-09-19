@@ -9,6 +9,7 @@ const el = {
   video: $("video"), portrait: $("portrait"), fps: $("fps"), res: $("res"),
   status: $("status"), statusLabel: $("status-label"),
   mic: $("mic-level"), connect: $("connect"), avatar: $("avatar"), halfduplex: $("halfduplex"),
+  avatarPick: $("avatar-pick"), languagePick: $("language-pick"),
   transcript: $("transcript"), turns: $("turns"), wire: $("wire"),
   idSession: $("id-session"), idPc: $("id-pc"), idIce: $("id-ice"), idWs: $("id-ws"),
   rtt: $("rtc-rtt"), jitter: $("rtc-jitter"), lost: $("rtc-lost"), vbr: $("rtc-vbr"), abr: $("rtc-abr"),
@@ -254,16 +255,21 @@ async function connect() {
   el.connect.disabled = true;
   el.connect.textContent = "Connecting…";
   try {
-    const session = await (await fetch("/sessions", { method: "POST" })).json();
+    const persona = { avatar: el.avatarPick.value || null, language: el.languagePick.value || null };
+    const res = await fetch("/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(persona),
+    });
+    if (!res.ok) throw new Error(`POST /sessions ${res.status}: ${(await res.json()).detail ?? res.statusText}`);
+    const session = await res.json();
     state.session = session;
     el.idSession.textContent = session.session_id;
-    wire("sys", `session ${session.session_id} · protocol v${session.protocol_version}`);
+    wire("sys", `session ${session.session_id} · protocol v${session.protocol_version} · ${session.avatar} / ${session.language}`);
     state.ws = openControl(session);
     await openMedia(session, el.avatar.checked, el.halfduplex.checked);
     state.timers.push(setInterval(pollStats, 1000));
     el.connect.textContent = "Hang up";
     el.connect.dataset.live = "true";
-    el.avatar.disabled = el.halfduplex.disabled = true;
+    setPersonaLocked(true);
     setStatus("idle");
   } catch (err) {
     wire("err", err.message);
@@ -290,9 +296,24 @@ async function hangup() {
   el.idPc.textContent = "—"; tone(el.idIce, "new", ""); tone(el.idWs, "closed", "");
   el.connect.textContent = "Connect";
   delete el.connect.dataset.live;
-  el.avatar.disabled = el.halfduplex.disabled = false;
+  setPersonaLocked(false);
   el.status.dataset.state = "off";
   el.statusLabel.textContent = "disconnected";
+}
+
+// Avatar, language and the media toggles are pinned for the session's life:
+// changing them would need a new SLNG connection and Anam persona.
+function setPersonaLocked(locked) {
+  el.avatar.disabled = el.halfduplex.disabled = locked;
+  el.avatarPick.disabled = el.languagePick.disabled = locked;
+}
+
+function fillPicker(select, items, value, label, selected) {
+  select.replaceChildren(...items.map((it) => {
+    const o = document.createElement("option");
+    o.value = value(it); o.textContent = label(it); o.selected = value(it) === selected;
+    return o;
+  }));
 }
 
 function tone(node, text, t) { node.textContent = text; node.dataset.tone = t; }
@@ -304,5 +325,16 @@ fetch("/config").then((r) => r.json()).then((c) => {
   $("stack-llm").textContent = c.llm_model;
   $("stack-stt").textContent = c.stt_model;
   $("stack-tts").textContent = `${c.tts_model} · ${c.tts_sample_rate / 1000} kHz`;
+  fillPicker(el.avatarPick, c.avatars, (a) => a.id, (a) => a.name, c.default_avatar);
+  // Only offer the languages the chosen avatar speaks; keep the current pick if still valid.
+  const syncLanguages = () => {
+    const avatar = c.avatars.find((a) => a.id === el.avatarPick.value);
+    const allowed = c.languages.filter((l) => !avatar || avatar.languages.includes(l.code));
+    const codes = allowed.map((l) => l.code);
+    const keep = [el.languagePick.value, c.default_language, codes[0]].find((v) => codes.includes(v));
+    fillPicker(el.languagePick, allowed, (l) => l.code, (l) => l.native_name, keep);
+  };
+  el.avatarPick.onchange = syncLanguages;
+  syncLanguages();
   if (!c.configured) wire("err", `missing in .env: ${c.missing.join(", ")}`);
 }).catch(() => {});

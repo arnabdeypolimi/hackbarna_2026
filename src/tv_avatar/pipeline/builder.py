@@ -38,7 +38,8 @@ def build_pipeline(
     mic while the avatar speaks (diagnostic; disables barge-in).
     """
     settings = get_settings()
-    context = LLMContext(messages=initial_messages())
+    avatar, language = session.persona.avatar, session.persona.language
+    context = LLMContext(messages=initial_messages(language))
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
         user_params=user_aggregator_params(
@@ -50,13 +51,13 @@ def build_pipeline(
     # so session.render_for_prompt() is injected fresh on every run (spec §4).
     stages = [
         transport.input(),
-        build_stt(settings),
+        build_stt(settings, language.pipecat),
         user_agg,
         llm or build_llm(settings),
-        build_tts(settings),
+        build_tts(settings, avatar.voice, language.pipecat_tts),
     ]
     if with_avatar:
-        stages.append(build_anam(settings))
+        stages.append(build_anam(settings, avatar))
     stages += [transport.output(), assistant_agg]
 
     task = PipelineTask(

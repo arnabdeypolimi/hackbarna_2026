@@ -27,14 +27,11 @@ class Settings(BaseSettings):
     slng_world_part: str | None = "eu"
     slng_stt_model: str = "reson8/reson8stt:v1"
     slng_tts_model: str = "cartesia/sonic:3"
-    slng_tts_voice: str = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     slng_tts_encoding: str = "linear16"
     slng_tts_sample_rate: int = 24000
 
-    # Anam
+    # Anam. Avatar ids, models and voices live in avatars.yaml (tv_avatar.catalog).
     anam_api_key: Secret
-    anam_avatar_id: Secret
-    anam_avatar_model: str = "cara-4"
 
     # Media — cara-4 portrait; width and height must be supplied together
     video_width: int = 768

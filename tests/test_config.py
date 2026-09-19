@@ -7,7 +7,6 @@ REQUIRED = {
     "NEBIUS_API_KEY": "nb-test",
     "SLNG_API_KEY": "sk-test",
     "ANAM_API_KEY": "anam-test",
-    "ANAM_AVATAR_ID": "avatar-1",
 }
 
 

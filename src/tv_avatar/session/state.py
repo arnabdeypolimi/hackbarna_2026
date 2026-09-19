@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from tv_avatar.catalog import SessionPersona
 from tv_avatar.control.protocol import ScreenState
 
 
@@ -17,6 +18,8 @@ class SessionState:
     session_id: str
     control_token: str
     expires_at: float
+    #: Avatar and language, pinned for the session's lifetime.
+    persona: SessionPersona
     created_at: float = field(default_factory=time.time)
     screen: ScreenState | None = None
     current_turn_id: str | None = None
@@ -53,11 +56,12 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, SessionState] = {}
 
-    def create(self, ttl_s: int) -> SessionState:
+    def create(self, ttl_s: int, persona: SessionPersona) -> SessionState:
         session = SessionState(
             session_id=f"sess_{uuid.uuid4().hex[:12]}",
             control_token=secrets.token_urlsafe(32),
             expires_at=time.time() + ttl_s,
+            persona=persona,
         )
         self._sessions[session.session_id] = session
         return session

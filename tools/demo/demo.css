@@ -158,6 +158,15 @@ h2 .dim { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(
   transition: transform 60ms linear;
 }
 
+.persona { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+.pick { display: flex; flex-direction: column; gap: 2px; font-size: 0.72rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.pick select {
+  font: inherit; font-size: 0.85rem; text-transform: none; letter-spacing: 0; color: var(--ink);
+  background: transparent; border: 1px solid var(--rule); padding: var(--s1) var(--s2);
+}
+.pick select:disabled { color: var(--ink-3); }
+.pick select:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
 .controls { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
 button {
   font: inherit; cursor: pointer;
