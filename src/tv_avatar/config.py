@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     # Alternative turn brain: nvidia/Nemotron-3_5-Lightning (286 ms TTFT) with
     # LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}.
     llm_model: str = "Qwen/Qwen3-30B-A3B-Instruct-2507"
-    llm_extra_body: dict[str, Any] = {}
+    # Thinking is always off: instruct models ignore the flag, reasoning models
+    # (Nemotron, DeepSeek, Qwen-thinking) would otherwise spend seconds before
+    # the first `say` byte and break the JSON envelope.
+    llm_extra_body: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": False}}
 
     # SLNG — one key covers STT and TTS
     slng_api_key: Secret
@@ -84,6 +87,9 @@ class Settings(BaseSettings):
     # Turn behaviour
     mem_prefetch_min_chars: int = 6
     tool_timeout_s: float = 0.4
+    #: The second SGR cycle (speaking tool results) must produce its first byte
+    #: within this budget or the results are spoken from a template instead.
+    cycle2_first_byte_s: float = 1.2
     #: Optional: speak a canned filler if the LLM has said nothing this long after
     #: the turn opened. Off by default — the SGR envelope's own `say` ("Let me
     #: look.") is the filler, and a canned one on top was judged annoying.

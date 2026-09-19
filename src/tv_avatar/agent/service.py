@@ -53,11 +53,32 @@ from tv_avatar.recs.engine import RecsEngine
 from tv_avatar.session.state import SessionState
 
 MAX_CYCLES = 2
-MAX_TOKENS = 400
+MAX_TOKENS = 220           # say is 1–2 spoken sentences; actions are small
 TEMPERATURE = 0.2
+#: Conversation history kept in the prompt (non-system messages). TTFT grows
+#: with context on the shared endpoint: 20 messages measured 2.3 s vs ~0.4 s.
+MAX_HISTORY_MESSAGES = 10
 #: Spoken via TTSSpeakFrame when the LLM has produced no `say` byte after
 #: `filler_after_ms` — masks a slow first token without talking over the reply.
 SLOW_FILLERS = ("One moment.", "Let me think.", "Hmm, one sec.")
+
+
+def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[str, dict]]]:
+    """Spoken answer + TV actions built from tool results without an LLM call."""
+    for verb, result in results:
+        if verb == "recommend_titles":
+            titles = result.get("titles") or []
+            if not titles:
+                return ("I couldn't find anything matching that right now. Want to try something else?", [])
+            names = [f"{t['name']} from {t['year']}" if t.get("year") else t["name"] for t in titles[:3]]
+            spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f", or {names[-1]}"
+            return (f"How about {spoken}?", [("focus", {"title_id": titles[0]["title_id"]})])
+        if verb == "recall_memory":
+            memory = (result.get("memory") or "").strip()
+            if memory and memory != "(none yet)":
+                return (f"Here's what I remember: {memory.splitlines()[-1].lstrip('- ')}", [])
+            return ("I don't have that in my memory yet.", [])
+    return ("Sorry, that took too long. Could you say it again?", [])
 
 
 def _last_user_text(messages: list[dict]) -> str:
@@ -185,12 +206,12 @@ class SGRAgentService(LLMService):
 
         await self.push_frame(LLMFullResponseStartFrame())
         memory_text = None if memory.empty else memory.render_for_prompt()
-        for cycle in range(1, MAX_CYCLES + 1):
+        for cycle in (1,):
             marks["cycles"] = cycle
             log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages))
             raw, results = await self._cycle(messages, turn_id, user_id, memory_text, cycle, marks, t0)
             log.debug("cycle envelope", step="cycle", cycle=cycle, raw=raw)
-            if not self.needs_second_cycle(results) or cycle == MAX_CYCLES:
+            if not self.needs_second_cycle(results):
                 log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False,
                           awaited=[v for v, _ in results])
                 break
@@ -203,6 +224,13 @@ class SGRAgentService(LLMService):
                 {"role": "user", "content": "[tool results]\n" + feedback
                     + "\nNow answer the user using these results. Do not call internal tools again."},
             ]
+            # Cycle 2 must start speaking within its budget or the tool results
+            # are spoken from a template — the loop never outlives the budget.
+            if not await self._cycle_with_budget(messages, turn_id, user_id, memory_text, marks, t0, log):
+                marks["cycles"] = 2
+                marks["fallback"] = True
+                await self._speak_fallback(results, turn_id, user_id, memory_text, log)
+            break
         await self.push_frame(LLMFullResponseEndFrame())
         await self.stop_processing_metrics()
         marks["total_ms"] = round((time.perf_counter() - t0) * 1000)
@@ -210,15 +238,51 @@ class SGRAgentService(LLMService):
         log.info("turn", **marks)
         self._schedule_ingest(interrupted=False)
 
+    async def _cycle_with_budget(self, messages: list[dict], turn_id: str, user_id: str,
+                                 memory_text: str | None, marks: dict, t0: float, log) -> bool:
+        """Run cycle 2; True if it produced speech within `cycle2_first_byte_s`."""
+        first_say = asyncio.Event()
+        log.debug("cycle start", step="cycle", cycle=2, n_messages=len(messages),
+                  budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
+        task = asyncio.create_task(
+            self._cycle(messages, turn_id, user_id, memory_text, 2, marks, t0, first_say=first_say))
+        waiter = asyncio.create_task(first_say.wait())
+        try:
+            done, _ = await asyncio.wait({task, waiter}, timeout=self._cfg.cycle2_first_byte_s,
+                                         return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            waiter.cancel()
+        if not done:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            log.warning("cycle 2 over budget; speaking templated answer", step="cycle",
+                        budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
+            return False
+        raw, _results = await task
+        log.debug("cycle envelope", step="cycle", cycle=2, raw=raw)
+        log.debug("cycle end", step="cycle", cycle=2, second_cycle=False)
+        return True
+
+    async def _speak_fallback(self, results: list[tuple[str, dict]], turn_id: str, user_id: str,
+                              memory_text: str | None, log) -> None:
+        text, actions = render_fallback(results)
+        log.debug("fallback", step="say", text=text, actions=actions)
+        self._turn_said.append(text)
+        await self.push_frame(LLMTextFrame(text))
+        for verb, args in actions:
+            await self.dispatch_action(verb, args, turn_id, user_id, memory_text)
+
     async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
-                     cycle: int, marks: dict, t0: float) -> tuple[str, list[tuple[str, dict]]]:
+                     cycle: int, marks: dict, t0: float,
+                     first_say: asyncio.Event | None = None) -> tuple[str, list[tuple[str, dict]]]:
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         streamer = EnvelopeStreamer()
         raw: list[str] = []
         said: list[str] = []
         awaited: list[tuple[str, asyncio.Task]] = []
         fire: list[asyncio.Task] = []
-        first_say = True
+        first_say_pending = True
         t_req = time.perf_counter()
         filler = (asyncio.create_task(self._slow_filler(t0, log))
                   if cycle == 1 and self._cfg.filler_after_ms > 0 else None)
@@ -247,8 +311,10 @@ class SGRAgentService(LLMService):
                         case SayDelta(text=text):
                             said.append(text)
                             self._turn_said.append(text)
-                            if first_say:
-                                first_say = False
+                            if first_say_pending:
+                                first_say_pending = False
+                                if first_say is not None:
+                                    first_say.set()
                                 if filler is not None:
                                     filler.cancel()
                                 await self.stop_ttfb_metrics()
@@ -286,7 +352,7 @@ class SGRAgentService(LLMService):
             close = getattr(stream, "close", None)
             if close is not None:
                 await close()
-        if first_say:
+        if first_say_pending:
             await self.stop_ttfb_metrics()
         log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
                   awaited=len(awaited), fire_and_forget=len(fire),
@@ -316,7 +382,7 @@ class SGRAgentService(LLMService):
     # --- pieces the tests call directly -------------------------------------
 
     def build_messages(self, messages: list[dict], memory: MemoryBlock, history_summary: str) -> list[dict]:
-        rest = [m for m in messages if m.get("role") != "system"]
+        rest = [m for m in messages if m.get("role") != "system"][-MAX_HISTORY_MESSAGES:]
         existing = next((m for m in messages if m.get("role") == "system"), None)
         if existing is not None and isinstance(existing.get("content"), str) and "# Screen" in existing["content"]:
             static = existing["content"]

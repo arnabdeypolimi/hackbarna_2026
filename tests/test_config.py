@@ -63,7 +63,7 @@ def test_phase2_defaults(monkeypatch):
     assert s.tool_timeout_s == 0.4
     assert s.qdrant_path.endswith("qdrant_db")
     assert s.embedding_model == "Qwen/Qwen3-Embedding-8B"
-    assert s.llm_extra_body == {}
+    assert s.llm_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def test_openai_env_names_are_accepted_as_aliases(monkeypatch):

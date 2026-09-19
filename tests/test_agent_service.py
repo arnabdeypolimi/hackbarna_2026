@@ -181,7 +181,7 @@ async def test_system_prompt_carries_screen_memory_and_history():
     assert "# Capabilities" in system["content"] and "# Screen" in system["content"]
     assert "hates horror" in system["content"] and "Recently watched" in system["content"]
     assert client.calls[0]["response_format"]["type"] == "json_schema"
-    assert client.calls[0]["extra_body"] is None  # LLM_EXTRA_BODY={} → nothing sent
+    assert client.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 async def test_invalid_verb_args_are_rejected_not_raised():
@@ -245,3 +245,51 @@ async def test_fast_llm_gets_no_filler():
                             client=FakeOpenAI([PLAY]), tools=FakeTools())
     await _run(agent, sink, [LLMContextFrame(context=_ctx("play"))])
     assert not any(type(f).__name__ == "TTSSpeakFrame" for f in sink.frames)
+
+
+async def test_slow_second_cycle_falls_back_to_templated_answer():
+    """Cycle 1 is fast; cycle 2 never yields a say byte in time → template + focus, no 3rd call."""
+    class TwoSpeeds(FakeOpenAI):
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            text = self.scripts.pop(0)
+            return FakeStream(text, delay_s=0.0 if len(self.calls) == 1 else 0.3)
+
+    settings = _settings().model_copy(update={"cycle2_first_byte_s": 0.15})
+    session = SessionState("sess_t", "tok", 0, user_id="u1")
+    bus, sink, tools = RecordingBus(), TimingSink(), FakeTools()
+    client = TwoSpeeds([RECO_1, RECO_2])
+    agent = SGRAgentService(settings, bus, FakeMemoryLane(), None, None, session, client=client, tools=tools)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
+
+    said = "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame))
+    assert said.startswith("Let me look.")
+    assert "How about Heat, or Inception?" in said            # from FakeTools' two titles
+    assert (await bus.next_outbound()).verb == "focus"        # first title focused
+    assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled
+    assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
+
+
+def test_render_fallback_shapes():
+    from tv_avatar.agent.service import render_fallback
+    text, actions = render_fallback([("recommend_titles", {"titles": [
+        {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
+        {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]})])
+    assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
+    assert actions == [("focus", {"title_id": "1"})]
+    assert render_fallback([("recommend_titles", {"titles": []})])[1] == []
+    assert "don't have that" in render_fallback([("recall_memory", {"memory": "(none yet)"})])[0]
+    assert "took too long" in render_fallback([("search_catalog", {"status": "unavailable"})])[0]
+
+
+async def test_history_is_trimmed_to_recent_messages():
+    client = FakeOpenAI([PLAY])
+    agent = _agent(client, RecordingBus())
+    ctx = LLMContext()
+    for i in range(30):
+        ctx.add_message({"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"})
+    ctx.add_message({"role": "user", "content": "play the first one"})
+    await _run(agent, TimingSink(), [LLMContextFrame(context=ctx)])
+    sent = client.calls[0]["messages"]
+    assert sent[0]["role"] == "system" and len(sent) == 11   # system + last 10
+    assert sent[-1]["content"] == "play the first one"
