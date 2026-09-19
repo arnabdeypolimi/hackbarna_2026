@@ -46,7 +46,7 @@ Out of scope, deliberately:
 | Where the avatar lives | Replaces the resume panel outright | A half-height avatar on a 548px panel is a thumbnail, not a face. The viewer is ten feet away. |
 | Scope | Presence only | The backend emits no commands yet. |
 | Language ↔ avatar | One picker; language selects the avatar | Every non-English avatar speaks exactly one language, so a second picker would offer only dead combinations. |
-| Picker location | Inside the avatar panel | It is a property of the thing above it, and it must be disabled while a session is live. |
+| Picker location | Inside the avatar panel | It is a property of the thing above it. |
 | Session start | Auto-connect on mount, with a gesture fallback | Chosen for the ambient feel; the fallback exists because browsers may refuse. |
 | Dev topology | Vite proxy to `:8000` | Keeps one origin for HTTP, WebSocket and WebRTC signalling, and keeps the backend free of CORS. |
 
@@ -149,7 +149,8 @@ Exposes `{ phase, avatar, status, lastLine, language, setLanguage, retry }`.
 
 The panel renders the phase. The picker renders chips carrying the `.f` class so
 the existing spatial navigation in `lib/spatialNav.ts` finds them with no change
-to the navigation code; chips are `disabled` while `phase === 'connecting'`.
+to the navigation code. Chips are never disabled; a press during a connection
+supersedes it.
 
 ## Wiring
 
@@ -223,8 +224,13 @@ indistinguishable from a broken build:
 
 The backend pins avatar and language at `POST /sessions` and cannot re-pin them:
 a different language means a different Cartesia voice and a different Anam
-persona. So `setLanguage` hangs up and connects again. The chips are disabled
-across the swap and the pill reads "Switching…". The choice persists to
+persona. So `setLanguage` hangs up and connects again. The chips stay live across
+the swap — the app connects on load, so a picker that greys out while connecting
+is inert for the first seconds of every session and stranded entirely if the
+backend hangs, and spatial navigation skips disabled controls, which would take
+the whole panel out of reach. The frame says who it is connecting to instead, and
+`useAvatar`'s generation counter makes a second press during a connection
+supersede the first. The choice persists to
 `localStorage` under one global key — it is a property of the television, not of
 a profile.
 
