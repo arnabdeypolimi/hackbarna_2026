@@ -60,7 +60,7 @@ The client reads all four server message types but can send none of the four cli
 - Consumes: `ClientMessage` from `@contracts/protocol`.
 - Produces: `AvatarSession.send(msg: Omit<ClientMessage, 'v'>): void`; `ConnectOptions.userId?: string`.
 
-- [ ] **Step 1: Add `send` to `AvatarSession`**
+- [x] **Step 1: Add `send` to `AvatarSession`**
 
 In `avatarClient.ts`, extend the interface and implement it in `connect()` next to `close`:
 
@@ -84,15 +84,15 @@ const send = (msg: Omit<ClientMessage, 'v'>) => {
 
 `v: 1` is stamped here and nowhere else.
 
-- [ ] **Step 2: Send the viewer's id**
+- [x] **Step 2: Send the viewer's id**
 
 Add `userId?: string` to `ConnectOptions`; `createSession(avatar, language, userId)` posts `{ avatar, language, user_id: userId }`. The backend keys history and memory by it (`SessionStore.create`, D10); without it every session is `anon_<session_id>` and nothing persists.
 
-- [ ] **Step 3: Thread through `useAvatar`**
+- [x] **Step 3: Thread through `useAvatar`**
 
 `useAvatar(video, { userId })`. Pass `userId` to `connect()`. Store the live session so a later hook can call `session.current?.send(...)`; expose `send` on `AvatarView` as a stable callback that forwards to the current session (or no-ops).
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `npm run build` passes. Start a session; in the backend log the `POST /sessions` line is followed by a turn whose log binding reads `user_id=<profile id>` rather than `anon_…`.
 
@@ -111,7 +111,7 @@ Everything that knows both `Title` and the wire protocol lives here, and it is p
 - Consumes: `Title`, `Tab` from `types/title`; `ScreenState`, `Tile`, `Playback` from `@contracts/protocol`.
 - Produces: `toWireId`, `fromWireId`, `deriveScreenState`, `searchCatalog`, `PlaybackReport`.
 
-- [ ] **Step 1: Id translation**
+- [x] **Step 1: Id translation**
 
 ```ts
 // The backend's title_id is str(tmdb_id) end to end (D11) and its catalog enriches
@@ -124,7 +124,7 @@ export function fromWireId(id: string, catalog: Title[]): Title | undefined {
 }
 ```
 
-- [ ] **Step 2: Screen state derivation**
+- [x] **Step 2: Screen state derivation**
 
 ```ts
 export interface PlaybackReport { state: Playback['state']; position_s: number }
@@ -155,7 +155,7 @@ export function deriveScreenState(args: {
 
 `position` is the absolute row index so `focus_index` and the prompt's `[n]` labels agree. The `Detail` side panel is part of `grid` — it shows whatever is focused, so it is not a separate view.
 
-- [ ] **Step 3: Local search**
+- [x] **Step 3: Local search**
 
 ```ts
 // The same matching the search bar uses (rows.ts), so a spoken and a typed search
@@ -171,7 +171,7 @@ export function searchCatalog(catalog: Title[], query: string, limit: number): T
 
 If `rows.ts` exports its matcher, reuse it instead of duplicating the predicate.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `npm run build` passes (unused exports are fine for now — `noUnusedLocals` does not fire on exports).
 
@@ -210,7 +210,7 @@ export interface CommandHandler {
 }
 ```
 
-- [ ] **Step 1: The dispatcher**
+- [x] **Step 1: The dispatcher**
 
 In `useTvControl.ts`, export `dispatchCommand(cmd: CommandMsg, handler: CommandHandler, send: AvatarView['send'])`:
 
@@ -232,7 +232,7 @@ send({ type: 'ack', command_id: cmd.id, ok: !error, error: error ?? null });
 console.debug('[avatar] command', cmd.verb, cmd.args, error ?? 'ok');
 ```
 
-- [ ] **Step 2: Wire it into `useAvatar`**
+- [x] **Step 2: Wire it into `useAvatar`**
 
 `useAvatar(video, { userId, onCommand: RefObject<CommandHandler> })`. In `connect()`'s `onCommand`, replace the `TODO(M3)` block with:
 
@@ -246,7 +246,7 @@ onCommand: (m) => {
 
 (`live` is assigned once `connect()` resolves; a command cannot arrive before the socket is open, and the socket is opened inside `connect()`, so by the time one does `live` is set. If the ordering in the file makes that awkward, keep the session in `session.current` and send through it.)
 
-- [ ] **Step 3: The handler in `App`**
+- [x] **Step 3: The handler in `App`**
 
 ```ts
 const tv = useRef<CommandHandler | null>(null);
@@ -284,7 +284,7 @@ where `reveal(title_id)` finds the title in `catalog`, and if it is not in the c
 
 `navigate` calling `move()` `count` times is correct because `move` is synchronous DOM focus; the `sel` state update is batched but the focused element advances each iteration.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `npm run build`. With the backend running and the catalog loaded, say **"search for space"**: backend log shows `tv command | verb=search_catalog status=ok`, the agent speaks two or three real titles from your CSV. Say **"play the first one"**: the trailer opens; log shows `verb=play`. Say **"go right twice"**: focus moves two posters. Say **"show me products"**: log shows the `ack` failure reason.
 
@@ -311,19 +311,19 @@ export interface TrailerPlayerHandle {
 onPlayback?(report: PlaybackReport): void;
 ```
 
-- [ ] **Step 1: Expose the handle**
+- [x] **Step 1: Expose the handle**
 
 Wrap the component in `forwardRef<TrailerPlayerHandle, Props>` and `useImperativeHandle(ref, () => ({ ... }), [ready])` over the existing `p.pauseVideo()`, `p.playVideo()`, `p.seekTo()` calls (lines ~81-87 already implement toggle and seek-by; factor them so the keyboard path and the handle share one function each).
 
-- [ ] **Step 2: Report playback**
+- [x] **Step 2: Report playback**
 
 In the existing 1 s ticker (line ~70) and in the play/pause toggle, call `onPlayback?.({ state: playing ? 'playing' : 'paused', position_s: time })`. No new timer.
 
-- [ ] **Step 3: Hold it in `App`**
+- [x] **Step 3: Hold it in `App`**
 
 `const playerRef = useRef<TrailerPlayerHandle>(null)` and `const [playback, setPlayback] = useState<PlaybackReport>({ state: 'stopped', position_s: 0 })`. Pass both to `<TrailerPlayer ref={playerRef} onPlayback={setPlayback} … />`. Reset `playback` to stopped in `closePlayer`.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Open a trailer, say **"pause"** → it pauses, **"skip ahead thirty seconds"** → it seeks, **"resume"** → it plays. Each shows a `verb=…` line in the log.
 
@@ -339,7 +339,7 @@ The half that makes "the second one" work. The agent reads `# Screen` at the sta
 - Modify: `frontend/src/hooks/useTvControl.ts`
 - Modify: `frontend/src/App.tsx`
 
-- [ ] **Step 1: The push hook**
+- [x] **Step 1: The push hook**
 
 ```ts
 export function useScreenStatePush(state: ScreenState, send: AvatarView['send'], live: boolean) {
@@ -355,7 +355,7 @@ export function useScreenStatePush(state: ScreenState, send: AvatarView['send'],
 
 `state` must be memoised by the caller so the effect does not fire every render.
 
-- [ ] **Step 2: Derive and push in `App`**
+- [x] **Step 2: Derive and push in `App`**
 
 ```ts
 const screen = useMemo(
@@ -365,11 +365,11 @@ const screen = useMemo(
 useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
 ```
 
-- [ ] **Step 3: Send once on connect**
+- [x] **Step 3: Send once on connect**
 
 In `useAvatar`, when `phase` becomes `live`, the effect above already fires because `live` flips — no extra code, but verify it: the first turn after connect must not read "Screen state: unknown".
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Set the backend logger to `TRACE` for `tv_avatar.agent.service` (or add a temporary `log.debug` of `render_screen`) and confirm the `# Screen` block lists `[n] Name (id=<tmdb>) <- focused` with the *bare* TMDB id — that is what makes the backend enrich it with year and genres. Say **"play that one"** without naming it: the focused title plays. Say **"what's the third one about?"**: the agent describes the title at `[2]`.
 
@@ -385,19 +385,19 @@ Cheap and useful: the backend's history recorder already handles `user_event`, s
 - Modify: `frontend/src/App.tsx`
 - Modify: `frontend/README.md`
 
-- [ ] **Step 1: Emit events**
+- [x] **Step 1: Emit events**
 
 In `watch`, `toggleSave`, `switchProfile`: `avatar.send({ type: 'user_event', event: 'watch' | 'save' | 'unsave' | 'profile_switch', detail: { title_id: toWireId(item) } })` (profile switch carries `{ user_id }`). Keep it to those three; the recorder stores `detail.title_id` and ignores the rest.
 
-- [ ] **Step 2: Profile switch restarts the session**
+- [x] **Step 2: Profile switch restarts the session**
 
 A different `userId` means a different backend identity. In `useAvatar`, treat a `userId` change like a language change: `start(config, lang.current)` again. The backend tears down the previous pipeline itself (`others_for_user`), so nothing more is needed.
 
-- [ ] **Step 3: README**
+- [x] **Step 3: README**
 
 Under the avatar section: what the agent can do (the verb table), that `title_id` on the wire is the bare TMDB id, that `search_catalog` runs locally against the loaded CSV, and that the backend and frontend must be loaded with the same TMDB dataset for recommendations to be showable.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `npm run build`. Switch profile: the log shows a new `POST /sessions` with the new `user_id`, and the old pipeline logs `pipeline replaced by new offer`. Save a title with the red key: the log shows `user event save`.
 
@@ -417,9 +417,9 @@ Today the agent can only *speak* a recommendation and `focus` one title. A rail 
 - Add: `tests/test_commands.py::test_show_titles_bounds`
 - Modify: `frontend/src/App.tsx`, `frontend/src/lib/rows.ts` — a transient `Tab`-like rail `agent:<label>` built from `title_ids` via `fromWireId`, cleared by `home`/`back`.
 
-- [ ] **Step 1:** Add the model and doc string; `uv run pytest` still green; regenerate contracts and confirm `contracts/protocol.d.ts` gains `ShowTitlesArgs`.
-- [ ] **Step 2:** Frontend: `show_titles` handler sets `agentRail = { label, items }`; `buildRow` returns it when set; the `TabBar` shows the label as a temporary chip. `deriveScreenState` reports `rail_id: 'agent:<label>'`.
-- [ ] **Step 3:** Verify: "what should I watch tonight?" → a labelled rail of the agent's picks appears, the first is focused, and "play the second one" plays it.
+- [x] **Step 1:** Add the model and doc string; `uv run pytest` still green; regenerate contracts and confirm `contracts/protocol.d.ts` gains `ShowTitlesArgs`.
+- [x] **Step 2:** Frontend: `show_titles` handler sets `agentRail = { label, items }`; `buildRow` returns it when set; the `TabBar` shows the label as a temporary chip. `deriveScreenState` reports `rail_id: 'agent:<label>'`.
+- [x] **Step 3:** Verify: "what should I watch tonight?" → a labelled rail of the agent's picks appears, the first is focused, and "play the second one" plays it.
 
 **Commit:** `feat: show_titles verb — the agent can put a rail of picks on screen` (backend and frontend may be two commits; the contracts regeneration goes with the backend one).
 
