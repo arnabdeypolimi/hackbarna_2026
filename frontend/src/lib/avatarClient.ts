@@ -1,9 +1,17 @@
 // One conversation with the avatar backend: a WebRTC peer connection carrying the
 // microphone up and the avatar's audio and video down, and a WebSocket carrying
-// status, transcript and (eventually) commands. Deliberately framework-free.
-import type { AgentStatusMsg, CommandMsg, ServerMessage, TranscriptMsg } from '@contracts/protocol';
+// status, transcript and commands down, and screen state, acks and results up.
+// Deliberately framework-free.
+import type {
+  AgentStatusMsg, ClientMessage, CommandMsg, ServerMessage, TranscriptMsg,
+} from '@contracts/protocol';
 
 export type AgentState = AgentStatusMsg['state'];
+/**
+ * A client message before the version is stamped; `send()` adds `v`. Distributive on
+ * purpose: a plain `Omit` over the union would keep only the keys every member shares.
+ */
+export type Outbound = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, 'v'> : never) : never;
 
 // Hand-written because tools/export_schemas.py emits the wire protocol only:
 // /config and POST /sessions are ad-hoc dicts in app.py rather than Pydantic
@@ -52,6 +60,8 @@ export interface AvatarSession {
   language: string;
   /** The avatar's audio and video. Attaching it is the caller's job — see ConnectOptions. */
   stream: MediaStream;
+  /** Client→server half of the protocol. A no-op on a socket that is not open. */
+  send(msg: Outbound): void;
   close(): void;
 }
 
@@ -63,6 +73,8 @@ export interface AvatarSession {
 export interface ConnectOptions {
   avatar: string;
   language: string;
+  /** The viewer's profile id. History and memory are keyed by it on the backend (D10). */
+  userId?: string;
   onStatus(state: AgentState): void;
   onTranscript(msg: TranscriptMsg): void;
   onCommand(msg: CommandMsg): void;
@@ -111,11 +123,20 @@ export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
     }).catch(() => {});
   };
 
+  // The protocol version is stamped here and nowhere else. Dropping on a closed socket is
+  // correct: screen state is latest-wins and re-sent on change, and a result for a command
+  // the backend has already timed out is of no use to it.
+  const send = (msg: Outbound) => {
+    const ws = parts.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ v: 1, ...msg }));
+  };
+
   try {
     // The microphone first. A refusal here is the common failure and it must not
     // leave a half-built session sitting on the backend.
     parts.mic = await navigator.mediaDevices.getUserMedia({ audio: MIC });
-    parts.session = await createSession(opts.avatar, opts.language);
+    parts.session = await createSession(opts.avatar, opts.language, opts.userId);
     parts.ws = openControl(parts.session, opts, parts);
     const media = await openMedia(parts.session, parts.mic, opts, parts);
     parts.pc = media.pc;
@@ -124,6 +145,7 @@ export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
       avatar: parts.session.avatar,
       language: parts.session.language,
       stream: media.stream,
+      send,
       close,
     };
   } catch (err) {
@@ -132,11 +154,11 @@ export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
   }
 }
 
-async function createSession(avatar: string, language: string): Promise<SessionInfo> {
+async function createSession(avatar: string, language: string, userId?: string): Promise<SessionInfo> {
   const res = await fetch('/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ avatar, language }),
+    body: JSON.stringify({ avatar, language, user_id: userId }),
   });
   if (!res.ok) throw new Error(`POST /sessions failed (${res.status})`);
   const info = (await res.json()) as SessionInfo;

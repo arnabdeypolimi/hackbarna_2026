@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import type { AgentState, AvatarInfo, LanguageInfo } from '../lib/avatarClient';
+import type { AgentState, AvatarInfo, LanguageInfo, Outbound } from '../lib/avatarClient';
 import { LanguagePicker } from './LanguagePicker';
 
 export type Phase = 'off' | 'connecting' | 'live' | 'blocked' | 'error';
@@ -16,6 +16,8 @@ export interface AvatarView {
   language: string;
   setLanguage: (code: string) => void;
   retry: () => void;
+  /** Client→server messages (screen state, user events). A no-op while not live. */
+  send: (msg: Outbound) => void;
 }
 
 interface Props {

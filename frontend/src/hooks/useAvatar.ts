@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { avatarForLanguage, languageOptions } from '../lib/avatarCatalog';
-import { connect, fetchConfig, type AgentState, type AvatarSession, type BackendConfig } from '../lib/avatarClient';
+import {
+  connect, fetchConfig, type AgentState, type AvatarSession, type BackendConfig, type Outbound,
+} from '../lib/avatarClient';
 import { readJSON, writeJSON } from '../lib/storage';
 import type { AvatarView, Phase } from '../components/AvatarPanel';
+import { dispatchCommand, type CommandHandler } from './useTvControl';
 
 // A property of the television, not of a profile: whoever sits down next hears the
 // language the set was left speaking.
 const LANG_KEY = 'tv.avatar.language';
 
-export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
+export interface AvatarOptions {
+  /** The viewer's profile id; a change restarts the session under the new identity. */
+  userId: string;
+  /**
+   * What the TV does with each command. A ref, not a value: App reassigns it every render
+   * so the socket callback always sees the latest closures without reconnecting.
+   */
+  commands: RefObject<CommandHandler | null>;
+}
+
+export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOptions): AvatarView {
   const [config, setConfig] = useState<BackendConfig | null>(null);
   const [phase, setPhase] = useState<Phase>('off');
   const [message, setMessage] = useState('Starting…');
@@ -24,6 +37,9 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
   // The chosen language, readable from callbacks that must not be rebuilt every
   // time it changes.
   const lang = useRef(language);
+  const user = useRef(opts.userId);
+  user.current = opts.userId;
+  const commands = opts.commands;
 
   const choose = (code: string) => {
     lang.current = code;
@@ -57,15 +73,15 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
       const live = await connect({
         avatar: who.id,
         language: code,
+        userId: user.current,
         onStatus: (s) => { if (mineStill()) setStatus(s); },
         onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
         onCommand: (m) => {
-          if (!mineStill()) return;
-          // TODO(M3): dispatch verbs into App state. The agent emits no commands until
-          // tool calls are wired — see "Current state" in CLAUDE.md and the verb list
-          // in contracts/protocol.d.ts. The guard above is for that day: a superseded
-          // session's late command must not reach the current screen.
-          console.debug('[avatar] command', m.verb, m.args);
+          // A superseded session's late command must not reach the current screen. The
+          // socket is opened inside connect(), so by the time a command can arrive
+          // session.current is this session.
+          if (!mineStill() || !commands.current || !session.current) return;
+          dispatchCommand(m, commands.current, session.current.send);
         },
         onError: (e) => {
           if (!mineStill()) return;
@@ -158,6 +174,18 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     // Mount only: re-running this would open a second session.
   }, []);
 
+  // A different viewer is a different backend identity (history, memory), so the session
+  // restarts like it does for a language change. Skipped on mount — boot() covers that —
+  // and while there is nothing live to replace.
+  const firstUser = useRef(true);
+  useEffect(() => {
+    if (firstUser.current) { firstUser.current = false; return; }
+    if (config && config.configured && session.current) void start(config, lang.current);
+  }, [opts.userId]);
+
+  // Stable across renders so effects keyed on it (the screen-state push) do not refire.
+  const send = useCallback((msg: Outbound) => { session.current?.send(msg); }, []);
+
   useEffect(() => {
     // A closed tab must not leave a session (and its provider minutes) running.
     const bye = () => session.current?.close();
@@ -199,5 +227,6 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     language,
     setLanguage,
     retry,
+    send,
   };
 }

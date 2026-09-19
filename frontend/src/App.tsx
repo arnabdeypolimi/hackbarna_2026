@@ -25,7 +25,9 @@ import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
 import { Toast, useToast } from './components/Toast';
 import { useAvatar } from './hooks/useAvatar';
-import { TrailerPlayer } from './components/TrailerPlayer';
+import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
+import { deriveScreenState, fromWireId, searchCatalog, STOPPED, toWireId, type PlaybackReport } from './lib/tvBridge';
+import { TrailerPlayer, type TrailerPlayerHandle } from './components/TrailerPlayer';
 import { UploadIcon } from './components/Icons';
 
 /** What is on screen: the title, the box it grew out of, and whether it owns the whole stage. */
@@ -56,6 +58,7 @@ export default function App() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [tunes, setTunes] = useState<Tunes>(loadTunes);
   const [player, setPlayer] = useState<Playing | null>(null);
+  const [playback, setPlayback] = useState<PlaybackReport>(STOPPED);
   const [dragging, setDragging] = useState(false);
   const toast = useToast();
 
@@ -65,11 +68,14 @@ export default function App() {
   const profilesBack = useRef<() => boolean>(() => false);
   const themesRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<HTMLDivElement>(null);
+  const trailer = useRef<TrailerPlayerHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
   const avatarVideo = useRef<HTMLVideoElement>(null);
-  const avatar = useAvatar(avatarVideo);
+  // Assigned below, once the actions it calls exist; useAvatar only reads it on a command.
+  const tv = useRef<CommandHandler | null>(null);
+  const avatar = useAvatar(avatarVideo, { userId: activeId, commands: tv });
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -180,6 +186,7 @@ export default function App() {
    */
   const watch = (item: Title) => {
     setHistory((h) => { const next = { ...h, [item.id]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
+    avatar.send({ type: 'user_event', event: 'watch', detail: { title_id: toWireId(item) } });
     if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
     prevFocus.current = document.activeElement as HTMLElement;
     // It grows out of the browse panel, so the film opens from where the viewer was looking.
@@ -202,6 +209,7 @@ export default function App() {
     const next = had ? myList.filter((k) => k !== item.id) : [...myList, item.id];
     setMyList(next);
     writeJSON(listKey(activeId), next);
+    avatar.send({ type: 'user_event', event: had ? 'unsave' : 'save', detail: { title_id: toWireId(item) } });
     toast.show(had ? `Removed ${item.title} from My List` : `Saved ${item.title} to My List`);
     if (had && tab === 'list' && !query) focusRow();
   };
@@ -282,6 +290,7 @@ export default function App() {
   };
   const closePlayer = () => {
     setPlayer(null);
+    setPlayback(STOPPED);
     const prev = prevFocus.current;
     requestAnimationFrame(() => (prev && document.contains(prev) ? prev.focus() : focusRow()));
   };
@@ -365,6 +374,61 @@ export default function App() {
     else if (THEME_KEYS.includes(e.keyCode) && !inText) openThemes();
     else if ((e.keyCode === KEY.PLAY || e.keyCode === KEY.PLAY_PAUSE) && current) watch(current);
   };
+
+  // ---------- the agent ----------
+  // Bring a title on screen and focus it. Resolved against the whole catalogue, not the
+  // visible row: a recommendation the agent just made may not be on the rail the viewer
+  // is on, and the search rail is the app's only way to show an arbitrary title.
+  const reveal = (title_id: string): string | void => {
+    const t = fromWireId(title_id, catalog);
+    if (!t) return `unknown title ${title_id}`;
+    if (player) closePlayer();
+    const at = row.indexOf(t);
+    if (at >= 0) return selectPoster(at);
+    setQuery(t.title);
+    selectPoster(0);
+  };
+  // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
+  // nothing to go back from should not.
+  const goBack = (): string | void => {
+    if (!profilesOpen && !player && !dialogOpen && !query && tab === 'popular') return 'already at home';
+    back(false);
+  };
+
+  tv.current = {
+    play: ({ title_id }) => {
+      const t = fromWireId(title_id, catalog);
+      if (!t) return `unknown title ${title_id}`;
+      if (!t.trailerKey) return `no trailer for ${t.title}`;
+      if (player) closePlayer();
+      watch(t);
+    },
+    pause: () => (player ? trailer.current?.pause() : 'nothing is playing'),
+    resume: () => (player ? trailer.current?.resume() : 'nothing is playing'),
+    seek: ({ to_seconds, delta_seconds }) => {
+      if (!player) return 'nothing is playing';
+      if (to_seconds != null) trailer.current?.seekTo(to_seconds);
+      else if (delta_seconds != null) trailer.current?.seekBy(delta_seconds);
+    },
+    navigate: ({ direction, count }) => {
+      // move() is synchronous DOM focus, so repeating it advances one step each time.
+      for (let i = 0; i < (count ?? 1); i++) move(direction, document.activeElement as HTMLElement | null);
+    },
+    focus: ({ title_id }) => reveal(title_id),
+    open_details: ({ title_id }) => reveal(title_id),
+    close: goBack,
+    back: goBack,
+    home: () => { if (player) closePlayer(); selectTab('popular'); focusRow(); },
+    show_products: () => 'not supported on this TV',
+    search_catalog: ({ query: q, limit }) =>
+      searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
+  };
+
+  const screen = useMemo(
+    () => deriveScreenState({ tab, query, row, selIdx, playing: player?.item ?? null, playback }),
+    [tab, query, row, selIdx, player, playback],
+  );
+  useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
 
   // One listener for the app's lifetime that always calls the latest handler.
   const keyHandler = useRef(onKey);
@@ -458,7 +522,10 @@ export default function App() {
             </div>
           )}
           {player && !player.full && (
-            <TrailerPlayer item={player.item} from={player.from} scopeRef={playerRef} onClose={closePlayer} />
+            <TrailerPlayer
+              ref={trailer} item={player.item} from={player.from} scopeRef={playerRef}
+              onClose={closePlayer} onPlayback={setPlayback}
+            />
           )}
         </section>
 
@@ -467,7 +534,10 @@ export default function App() {
         <TabBar tab={tab} highlight={!query} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
 
         {player && player.full && (
-          <TrailerPlayer item={player.item} from={player.from} full scopeRef={playerRef} onClose={closePlayer} />
+          <TrailerPlayer
+            ref={trailer} item={player.item} from={player.from} full scopeRef={playerRef}
+            onClose={closePlayer} onPlayback={setPlayback}
+          />
         )}
 
         <Toast message={toast.message} kind={toast.kind} visible={toast.visible} />

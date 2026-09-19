@@ -8,13 +8,14 @@ export const TAB_TITLES: Record<Tab, string> = {
   list: 'My List',
 };
 
+/** The search bar's matcher. The agent's `search_catalog` uses it too, so a spoken and a typed search agree. */
+export function matches(x: Title, query: string): boolean {
+  const q = query.toLowerCase();
+  return x.title.toLowerCase().includes(q) || x.genres.some((g) => g.toLowerCase().includes(q));
+}
+
 export function buildRow(items: Title[], tab: Tab, query: string, myList: string[]): Title[] {
-  if (query) {
-    const q = query.toLowerCase();
-    return items
-      .filter((x) => x.title.toLowerCase().includes(q) || x.genres.some((g) => g.toLowerCase().includes(q)))
-      .slice(0, ROW_MAX);
-  }
+  if (query) return items.filter((x) => matches(x, query)).slice(0, ROW_MAX);
   switch (tab) {
     case 'popular':
       return (items.some((x) => x.pop) ? [...items].sort((a, b) => b.pop - a.pop) : items).slice(0, ROW_MAX);

@@ -46,10 +46,36 @@ avatar per language, taken from the backend's `avatars.yaml`. Changing language
 opens a new session, because a session pins its voice and persona at creation. The
 choice is remembered in `localStorage` for the whole television, not per profile.
 
+### What the agent can do
+
+The agent drives the TV over the control socket. `App.tsx` supplies a `CommandHandler`
+(one method per verb) and `hooks/useTvControl.ts` dispatches into it, answering every
+command with an `ack` — `ok: false` carries a reason the agent can speak, such as
+"no trailer for Dune" — and `search_catalog` with a `result`.
+
+| Say | Verb | The TV |
+| --- | --- | --- |
+| "go right", "down twice" | `navigate` | moves focus like the remote |
+| "play the second one", "play Dune" | `play` | opens the trailer (the only footage there is) |
+| "pause", "resume", "skip ahead 30 seconds" | `pause`, `resume`, `seek` | drives the trailer player |
+| "show me Sicario", "the third one" | `focus`, `open_details` | focuses the tile; searches for it if it is on another rail |
+| "back", "close", "home" | `back`, `close`, `home` | as the remote, except "back" at home does not ask to exit |
+| "search for space movies" | `search_catalog` | filters the loaded CSV with the search bar's matcher and returns the hits |
+| "show me the products" | `show_products` | acked `ok: false`: not supported on this TV |
+
+In return the app reports what is on screen (`screen_state`) whenever it changes —
+the rail, a window of tiles around the focus, and playback — so the agent can resolve
+"that one" and "the next one". Manual Watch and Save presses go up as `user_event`s.
+The viewer's profile id is the session's `user_id`, which is what the backend keys
+history and memory by; switching profile therefore starts a new session.
+
+`title_id` on the wire is the **bare TMDB id**: the app strips its `id:` prefix on the
+way out and accepts either form on the way in (`lib/tvBridge.ts`). Recommendations come
+from the backend's own catalogue, so the two sides must be loaded from the same TMDB
+dataset for a recommended title to be showable.
+
 Wire types come from `contracts/protocol.d.ts`, which is **generated** from
-`src/tv_avatar/agent/commands.py` — import them, never hand-write them. The agent
-does not emit commands yet (phase 2 / M3); `useAvatar` logs them and there is a
-`TODO(M3)` marking where they will be dispatched. The HTTP types are the exception:
+`src/tv_avatar/agent/commands.py` — import them, never hand-write them. The HTTP types are the exception:
 `BackendConfig` and `SessionInfo` in `src/lib/avatarClient.ts` *are* hand-written,
 because `/config` and `POST /sessions` answer with ad-hoc dicts that the generator
 never sees — so a change to either endpoint in `app.py` has to be mirrored there by
