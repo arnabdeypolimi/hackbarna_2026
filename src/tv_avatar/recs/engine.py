@@ -149,7 +149,9 @@ class RecsEngine:
 
         recs = self._merge(channels)[: ctx.limit]
         logger.bind(user_id=ctx.user_id).debug(
-            "recommend", n=len(recs), channels=[c[2] for c in channels],
+            "recommend", step="recs", n=len(recs), excluded_watched=len(watched),
+            channels={tag: len(hits) for hits, _, tag in channels},
+            query_vec=qv is not None, taste_vec=taste is not None, memory_vec=mv is not None,
             ms=round((time.perf_counter() - t0) * 1000, 1),
         )
         return recs

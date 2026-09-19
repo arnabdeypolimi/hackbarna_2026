@@ -68,10 +68,16 @@ class InternalTools:
         )
         ctx = RecsContext(user_id=user_id, query_text=req.query, constraints=constraints,
                           memory_text=memory_text, limit=req.limit)
+        log = logger.bind(user_id=user_id)
+        log.debug("recommend_titles", step="tool", query=req.query, genre_raw=req.genre,
+                  genres=sorted(constraints.genres_any), year_min=req.year_min, year_max=req.year_max,
+                  similar_to=req.similar_to, limit=req.limit, has_memory=memory_text is not None)
         if req.similar_to:
             recs = await self._recs.similar(req.similar_to, ctx)
         else:
             recs = await self._recs.recommend(ctx)
+        log.debug("recommend_titles result", step="tool",
+                  titles=[(r.title_id, r.name, round(r.score, 3), r.reasons) for r in recs])
         titles = []
         for r in recs:
             item = self._catalog.lookup(r.title_id) if self._catalog else None
@@ -87,4 +93,6 @@ class InternalTools:
 
     async def _recall(self, req: RecallMemory, user_id: str) -> dict:
         block = await self._lane.recall(user_id, req.query)
+        logger.bind(user_id=user_id).debug("recall_memory", step="tool", query=req.query,
+                                           empty=block.empty, tokens=block.token_est)
         return {"memory": block.render_for_prompt()}

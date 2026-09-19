@@ -98,7 +98,11 @@ async def main(user_id: str, turns: list[str]) -> int:
     for text in turns:
         sink = Sink()
         context.add_message({"role": "user", "content": text})
-        await runtime.lane.prefetch(user_id, text[:12])  # what the STT-partials tap would do
+        # What MemoryPrefetchTap does on the first STT partial: warm memory + the query vector.
+        partial = text[:12]
+        if runtime.recs is not None:
+            runtime.recs.prefetch_query(user_id, text)
+        await runtime.lane.prefetch(user_id, partial)
         t0 = time.perf_counter()
         await run_test(Pipeline([injector, agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
                        expected_down_frames=None, start_timeout=5)

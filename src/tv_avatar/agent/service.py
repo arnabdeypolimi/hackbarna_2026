@@ -135,37 +135,58 @@ class SGRAgentService(LLMService):
         await self.start_processing_metrics()
         messages = list(context.get_messages())
         user_text = _last_user_text(messages)
+        log.debug("turn open", step="start", user_text=user_text, history_msgs=len(messages),
+                  screen=self._session.screen is not None)
+
         memory = await self._lane.recall(user_id, user_text)
         history_text = (await self._history.render_for_prompt(user_id, self._catalog)
                         if self._history is not None else "Recently watched: (none yet)")
-        messages = self.build_messages(messages, memory, history_text)
         marks["recall_ms"] = round((time.perf_counter() - t0) * 1000)
+        log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
+                  memory_tokens=memory.token_est, ms=marks["recall_ms"])
+        log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
+
+        messages = self.build_messages(messages, memory, history_text)
+        log.debug("turn prompt", step="prompt", n_messages=len(messages),
+                  system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
+        log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
 
         await self.push_frame(LLMFullResponseStartFrame())
         memory_text = None if memory.empty else memory.render_for_prompt()
         for cycle in range(1, MAX_CYCLES + 1):
             marks["cycles"] = cycle
+            log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages))
             raw, results = await self._cycle(messages, turn_id, user_id, memory_text, cycle, marks, t0)
+            log.debug("cycle envelope", step="cycle", cycle=cycle, raw=raw)
             if not self.needs_second_cycle(results) or cycle == MAX_CYCLES:
+                log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False,
+                          awaited=[v for v, _ in results])
                 break
+            feedback = json.dumps({verb: result for verb, result in results}, ensure_ascii=False)
+            log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=True,
+                      awaited=[v for v, _ in results], feedback_chars=len(feedback))
+            log.debug("tool results fed back", step="feedback", results=feedback)
             messages = messages + [
                 {"role": "assistant", "content": raw},
-                {"role": "user", "content": "[tool results]\n" + json.dumps(
-                    {verb: result for verb, result in results}, ensure_ascii=False)
+                {"role": "user", "content": "[tool results]\n" + feedback
                     + "\nNow answer the user using these results. Do not call internal tools again."},
             ]
         await self.push_frame(LLMFullResponseEndFrame())
         await self.stop_processing_metrics()
         marks["total_ms"] = round((time.perf_counter() - t0) * 1000)
+        log.debug("turn close", step="end", **marks)
         log.info("turn", **marks)
 
     async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
                      cycle: int, marks: dict, t0: float) -> tuple[str, list[tuple[str, dict]]]:
+        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         streamer = EnvelopeStreamer()
         raw: list[str] = []
+        said: list[str] = []
         awaited: list[tuple[str, asyncio.Task]] = []
         fire: list[asyncio.Task] = []
         first_say = True
+        t_req = time.perf_counter()
 
         await self.start_ttfb_metrics()
         stream = await self._client.chat.completions.create(
@@ -185,18 +206,28 @@ class SGRAgentService(LLMService):
                     match event:
                         case IntentReady(intent=intent):
                             marks["intent"] = intent
+                            log.debug("intent", step="intent", cycle=cycle, intent=intent,
+                                      ms=round((time.perf_counter() - t_req) * 1000))
                         case SayDelta(text=text):
+                            said.append(text)
                             if first_say:
                                 first_say = False
                                 await self.stop_ttfb_metrics()
                                 marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
+                                log.debug("first say byte -> TTS", step="say", cycle=cycle,
+                                          ms=round((time.perf_counter() - t_req) * 1000))
                             await self.push_frame(LLMTextFrame(text))
                         case ActionReady(action=action):
                             verb = str(action.get("verb", ""))
                             args = {k: v for k, v in action.items() if k != "verb" and v is not None}
                             marks["n_actions"] += 1
                             if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
+                                log.debug("action skipped", step="action", cycle=cycle, verb=verb,
+                                          reason="cycle cap")
                                 continue  # no open-ended loops on a voice interface
+                            log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
+                                      awaited=verb in AWAITED_VERBS,
+                                      ms=round((time.perf_counter() - t_req) * 1000))
                             task = asyncio.create_task(
                                 self.dispatch_action(verb, args, turn_id, user_id, memory_text))
                             if verb in AWAITED_VERBS:
@@ -214,12 +245,16 @@ class SGRAgentService(LLMService):
                 await close()
         if first_say:
             await self.stop_ttfb_metrics()
+        log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
+                  awaited=len(awaited), fire_and_forget=len(fire),
+                  ms=round((time.perf_counter() - t_req) * 1000))
 
         results: list[tuple[str, dict]] = []
         for verb, task in awaited:
             try:
                 results.append((verb, await task))
             except Exception as err:  # noqa: BLE001
+                log.opt(exception=err).debug("awaited action raised", step="action", verb=verb)
                 results.append((verb, {"status": "error", "reason": type(err).__name__}))
         for task in fire:
             with contextlib.suppress(Exception):  # failures are logged in dispatch_action
@@ -242,17 +277,23 @@ class SGRAgentService(LLMService):
     async def dispatch_action(self, verb: str, args: dict, turn_id: str, user_id: str = "",
                               memory_text: str | None = None) -> dict:
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
+        t0 = time.perf_counter()
         if verb in INTERNAL_AWAIT:
+            log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
             result = await self._tools.run(verb, args, user_id, memory_text)
+            ms = round((time.perf_counter() - t0) * 1000)
+            log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
             log.info("internal tool", verb=verb, status=result.get("status", "ok"),
-                     n=len(result.get("titles", [])))
+                     n=len(result.get("titles", [])), ms=ms)
             return result
+        log.debug("dispatch tv", step="dispatch", verb=verb, args=args)
         try:
             result = await self._bus.dispatch(verb, args, turn_id=turn_id)
         except ValueError as err:
             log.warning("rejected action", verb=verb, reason=str(err))
             return {"status": "invalid", "reason": str(err)}
-        log.info("tv command", verb=verb, status=result.get("status"))
+        log.info("tv command", verb=verb, status=result.get("status"),
+                 ms=round((time.perf_counter() - t0) * 1000))
         return result
 
     @staticmethod
