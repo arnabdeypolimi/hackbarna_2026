@@ -13,9 +13,10 @@ from loguru import logger
 
 _FORMAT = (
     "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
-    "{extra[ctx]}<cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>"
+    "{extra[ctx]}<cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>{extra[kv]}"
 )
 _CTX_KEYS = ("session_id", "user_id", "turn_id")
+_INTERNAL_KEYS = frozenset(("ctx", "kv"))
 
 
 class InterceptHandler(logging.Handler):
@@ -36,6 +37,8 @@ def _add_ctx(record: dict) -> None:
     extra = record["extra"]
     parts = [f"{k}={extra[k]}" for k in _CTX_KEYS if k in extra]
     extra["ctx"] = f"[{' '.join(parts)}] " if parts else ""
+    kv = [f"{k}={v}" for k, v in extra.items() if k not in _CTX_KEYS and k not in _INTERNAL_KEYS]
+    extra["kv"] = f" | {' '.join(kv)}" if kv else ""
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -47,5 +50,5 @@ def setup_logging(level: str = "INFO") -> None:
     if not any(isinstance(h, InterceptHandler) for h in root.handlers):
         root.handlers = [InterceptHandler()]
     root.setLevel(logging.DEBUG if level.upper() == "DEBUG" else logging.INFO)
-    for noisy in ("httpx", "httpcore", "openai._base_client"):
+    for noisy in ("httpx", "httpx2", "httpcore", "openai._base_client"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
