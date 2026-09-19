@@ -954,7 +954,7 @@ In `frontend/src/App.tsx`, delete the entire temporary `const avatar: AvatarView
 import { AvatarPanel } from './components/AvatarPanel';
 ```
 
-(the `type AvatarView` import goes with the block that used it). Add beside the other hooks, after `const toast = useToast();`:
+(the `type AvatarView` import goes with the block that used it). Add the hook call immediately **after** `const avatarVideo = useRef<HTMLVideoElement>(null);` — it reads that ref, and `const` bindings are in the temporal dead zone until their declaration, so placing it earlier in the same scope is a compile error, not a style preference:
 
 ```ts
   const avatar = useAvatar(avatarVideo);
