@@ -14,12 +14,17 @@ export const THEME_KEYS: number[] = [KEY.GREEN, 71];
 let ttsEnabled = false;
 
 export async function initTTS(): Promise<void> {
-  const a11y = window.TitanSDK?.accessibility;
-  // The SDK also loads in desktop browsers and shims TTS onto speechSynthesis,
-  // so every focused tile would be read aloud during development. Narration is
-  // only meaningful on a device, and only devices expose SmartTvA_API.
-  if (!a11y || !window.SmartTvA_API) return;
+  const sdk = window.TitanSDK;
+  const a11y = sdk?.accessibility;
+  if (!a11y) return;
   try {
+    // The SDK also loads in desktop browsers, where it fakes a device: it attaches a
+    // SmartTvA_API of its own, answers isTTSSupported() with "speechSynthesis in window"
+    // and reports TTS enabled by default — so every focused tile would be read aloud
+    // during development. The one thing it does not fake is the device identity: off a
+    // TV, getDeviceInfo() reports the "browser" brand.
+    const info = await sdk.deviceInfo.getDeviceInfo();
+    if (info.Channel.brand === 'browser') return;
     if (!(await a11y.isTTSSupported())) return;
     ttsEnabled = (await a11y.getTTSSettings()).enabled;
     a11y.onTTSSettingsChange((s) => { ttsEnabled = s.enabled; });
