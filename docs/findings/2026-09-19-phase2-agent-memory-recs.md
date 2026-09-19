@@ -175,3 +175,31 @@ earlier in the system prompt. Live text-mode, new session per run:
 History renders names only (no ids), so the greeting stays action-free; `focus` on the offered
 title would need ids in `Recent activity` and a rule exception. The greeting turn is still never
 ingested into VoiceMem (`startswith(GREETING_INSTRUCTION)`).
+
+## Agent cleanup (plan: `docs/superpowers/plans/2026-09-19-agent-sgr-cleanup.md`)
+
+Ten commits, `d13428f..7aa8f13`; suite 214 → 239 passed. What changed for the viewer:
+
+- **`Recent activity` carries ids** (`The Dark Knight (2008) (id=155, yesterday)`), and the
+  rules allow acting on them — so "want to carry on with X?" → "yes, play it" works without X
+  being on screen. Supersedes the note above ("History renders names only").
+- **`rec_shown` is written at turn end for what was actually offered**: the candidates the agent
+  focused/opened/played or named in `say` (or in the templated fallback), not the ≤ 8 titles the
+  tool returned before the model spoke. An interrupted turn records nothing.
+- **The system prompt is written once, by the agent.** The injector had stamped
+  `# Recent activity` and `build_messages` appended it again (two fetches, two copies per turn).
+  `ScreenContextInjector` is now wired only for `AGENT_IMPL=stub`; the SGR agent rebuilds the
+  system message from live `SessionState` every turn without inspecting what arrived.
+
+Internals: `envelope.REGISTRY` (one `ActionSpec` per verb; `tests/fixtures/turn_plan_schema.json`
+pins the constrained-decoding schema byte-for-byte), `parse_action()` + `InternalTools.run(action)`
+route on the typed union, `turn.py` (`TurnContext`/`TurnMetrics`/`ToolResult`/`CycleOutcome`/
+`TurnTrace`), `loop.TurnRunner` runs the bounded cycle loop behind a `TurnHost` protocol,
+`AGENT_MAX_CYCLES` (default 2, 1–4) with `CYCLE_FIRST_BYTE_S` budgeting every follow-up cycle
+(`CYCLE2_FIRST_BYTE_S` still accepted). Removed: the canned TTFT filler (`FILLER_AFTER_MS`),
+`HistoryRecorder.on_command` / `REC_ACCEPTED` / `SEARCH_ISSUED` (never called). `service.py`
+454 → 251 lines.
+
+Left as decisions (§4b of the plan): `recall_memory` returns the profile that is already in the
+prompt (a wasted second cycle — delete or make it search the session archive); facts from the
+current session are invisible after 5 exchanges until `finish_session` rewrites the profile.
