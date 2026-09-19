@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     # not part of it — history.db is the viewing log. Empty model = llm_model.
     memory_model: str = ""
     memory_profile_max_words: int = 200
+    #: Also fold the pending transcript into the profile every N ingested turns
+    #: (off the turn), so what the viewer said this session reaches the prompt
+    #: before the session ends — the conversation window is only ~5 exchanges.
+    #: 0 = only at session end.
+    memory_refresh_every_turns: int = Field(default=6, ge=0)
 
     # Phase-2 local data — everything under data/ is git-ignored
     catalog_path: str = "data/catalog.parquet"

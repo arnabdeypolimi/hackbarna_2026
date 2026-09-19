@@ -2,9 +2,10 @@
 
 Per turn nothing is inferred: the exchange is appended to the user's pending
 transcript. When the session ends (`finish_session`, fired from the pipeline
-runner) one LLM call rewrites `profile.md` from the previous profile plus the
-transcript; the next session reads that file once. A transcript left behind by
-a crash is folded in at the next `warmup()`.
+runner) — and, off the turn, every `memory_refresh_every_turns` ingests — one
+LLM call rewrites `profile.md` from the previous profile plus the transcript;
+the next turn's recall reads the new file. A transcript left behind by a crash
+is folded in at the next `warmup()`.
 
 The profile is about the viewer — genres, moods, pacing, how they like to be
 talked to, and titles when they carry a signal (enjoyed, declined and why).
@@ -79,6 +80,8 @@ class SummaryMemoryLane(BaseMemoryLane):
         self._max_words = settings.memory_profile_max_words
         self._extra_body = settings.llm_extra_body or None
         self._client = client or AsyncOpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
+        self._refresh_every = settings.memory_refresh_every_turns
+        self._since_refresh: dict[str, int] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._profiles: dict[str, tuple[float, MemoryBlock]] = {}  # user -> (mtime, block)
 
@@ -94,17 +97,22 @@ class SummaryMemoryLane(BaseMemoryLane):
         path = self._dir(user_id) / PROFILE_FILE
         return path.read_text().strip() if path.exists() else ""
 
-    def pending_turns(self, user_id: str) -> list[dict[str, Any]]:
+    def _pending_lines(self, user_id: str) -> list[str]:
         path = self._dir(user_id) / PENDING_FILE
-        if not path.exists():
-            return []
+        return path.read_text().splitlines() if path.exists() else []
+
+    @staticmethod
+    def _parse_turns(lines: list[str]) -> list[dict[str, Any]]:
         turns = []
-        for line in path.read_text().splitlines():
+        for line in lines:
             try:
                 turns.append(json.loads(line))
             except json.JSONDecodeError:
                 continue  # a torn write from a crash loses one turn, not the session
         return turns
+
+    def pending_turns(self, user_id: str) -> list[dict[str, Any]]:
+        return self._parse_turns(self._pending_lines(user_id))
 
     # --- BaseMemoryLane ----------------------------------------------------
 
@@ -129,12 +137,18 @@ class SummaryMemoryLane(BaseMemoryLane):
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         await asyncio.to_thread(append)
+        self._since_refresh[user_id] = self._since_refresh.get(user_id, 0) + 1
+        if self._refresh_every and self._since_refresh[user_id] >= self._refresh_every:
+            self._since_refresh[user_id] = 0
+            task = asyncio.create_task(self.finish_session(user_id))
+            task.add_done_callback(_log_failure)
         return {"facts": [], "memory_ids": [], "pending": True}
 
     async def finish_session(self, user_id: str) -> None:
         """Fold the pending transcript into the profile. Safe to call with nothing pending."""
         async with self._lock(user_id):
-            turns = self.pending_turns(user_id)
+            lines = self._pending_lines(user_id)
+            turns = self._parse_turns(lines)
             if not turns:
                 return
             log = logger.bind(user_id=user_id)
@@ -146,7 +160,7 @@ class SummaryMemoryLane(BaseMemoryLane):
                 log.opt(exception=err).warning("memory summary failed; transcript kept for retry",
                                                turns=len(turns))
                 return
-            await asyncio.to_thread(self._commit, user_id, profile)
+            await asyncio.to_thread(self._commit, user_id, profile, consumed=len(lines))
             log.info("memory profile updated", turns=len(turns), chars=len(profile),
                      ms=round((time.perf_counter() - t0) * 1000))
 
@@ -179,10 +193,23 @@ class SummaryMemoryLane(BaseMemoryLane):
             raise ValueError("empty summary")
         return text
 
-    def _commit(self, user_id: str, profile: str) -> None:
+    def _commit(self, user_id: str, profile: str, *, consumed: int) -> None:
+        """Write the profile and archive the `consumed` turns the summariser saw.
+        Turns appended while it ran stay pending for the next fold."""
         d = self._dir(user_id)
         (d / PROFILE_FILE).write_text(profile + "\n")
         archive = d / SESSIONS_DIR
         archive.mkdir(exist_ok=True)
-        (d / PENDING_FILE).rename(archive / f"{time.strftime('%Y%m%dT%H%M%S')}.jsonl")
+        lines = (d / PENDING_FILE).read_text().splitlines(keepends=True)
+        stamp = f"{time.strftime('%Y%m%dT%H%M%S')}_{int(time.time() * 1000) % 1000:03d}"
+        (archive / f"{stamp}.jsonl").write_text("".join(lines[:consumed]))
+        if lines[consumed:]:
+            (d / PENDING_FILE).write_text("".join(lines[consumed:]))
+        else:
+            (d / PENDING_FILE).unlink()
         self._profiles.pop(user_id, None)
+
+
+def _log_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.opt(exception=task.exception()).warning("mid-session memory refresh failed")

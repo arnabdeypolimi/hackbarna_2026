@@ -92,3 +92,67 @@ def test_summary_prompt_allows_signal_titles_but_not_assistant_sourced_facts():
     assert "Titles are welcome when they carry a signal" in prompt
     assert "never write down a title the assistant merely suggested" in prompt
     assert "Nothing the assistant suggested is a fact" in prompt
+
+
+async def test_profile_refreshes_mid_session_every_n_turns(tmp_path):
+    """Facts from this session reach the prompt before the session ends: after
+    MEMORY_REFRESH_EVERY_TURNS ingests the pending transcript is folded into the
+    profile off the turn, and the next recall sees it."""
+    import asyncio
+
+    llm = FakeLLM(reply="## Preferences\n- said once they want something funny tonight")
+    settings = Settings(nebius_api_key="x", slng_api_key="-", anam_api_key="-", anam_avatar_id="-",
+                        _env_file=None, memory_root=str(tmp_path / "mem"), memory_refresh_every_turns=3)
+    lane = SummaryMemoryLane(settings, client=llm)
+    for i in range(2):
+        await lane.ingest_turn("u1", f"turn {i}", "ok")
+    assert llm.calls == []
+    await lane.ingest_turn("u1", "something funny tonight", "Let me look.")
+    await asyncio.sleep(0.05)   # the refresh is fire-and-forget
+    assert len(llm.calls) == 1
+    assert "something funny tonight" in llm.calls[0]["messages"][1]["content"]
+    assert "funny tonight" in (await lane.recall("u1", "x")).render_for_prompt()
+    assert not (tmp_path / "mem" / "u1" / PENDING_FILE).exists()
+    # The counter restarts: two more turns do not trigger another summary.
+    for i in range(2):
+        await lane.ingest_turn("u1", f"later {i}", "ok")
+    await asyncio.sleep(0.05)
+    assert len(llm.calls) == 1
+
+
+async def test_refresh_is_off_by_default_and_when_zero(tmp_path):
+    import asyncio
+
+    lane, llm = _lane(tmp_path)
+    assert lane._refresh_every == 6
+    settings = Settings(nebius_api_key="x", slng_api_key="-", anam_api_key="-", anam_avatar_id="-",
+                        _env_file=None, memory_root=str(tmp_path / "mem2"), memory_refresh_every_turns=0)
+    off = SummaryMemoryLane(settings, client=llm)
+    for i in range(10):
+        await off.ingest_turn("u1", f"turn {i}", "ok")
+    await asyncio.sleep(0.05)
+    assert llm.calls == []
+
+
+async def test_turns_ingested_while_summarising_are_not_lost(tmp_path):
+    """finish_session reads N pending turns, then the LLM takes a while; a turn
+    appended meanwhile must stay pending for the next fold, not vanish into the archive."""
+    import asyncio
+
+    class SlowLLM(FakeLLM):
+        async def _create(self, **kwargs):
+            await asyncio.sleep(0.1)
+            return await super()._create(**kwargs)
+
+    lane, llm = _lane(tmp_path, SlowLLM())
+    await lane.ingest_turn("u1", "first", "ok")
+    folding = asyncio.create_task(lane.finish_session("u1"))
+    await asyncio.sleep(0.02)                      # summariser in flight
+    await lane.ingest_turn("u1", "second", "ok")   # appended mid-summary
+    await folding
+    assert "Viewer: first" in llm.calls[0]["messages"][1]["content"]
+    assert "second" not in llm.calls[0]["messages"][1]["content"]
+    pending = (tmp_path / "mem" / "u1" / PENDING_FILE).read_text().splitlines()
+    assert [json.loads(p)["user"] for p in pending] == ["second"]
+    archived = list((tmp_path / "mem" / "u1" / SESSIONS_DIR).iterdir())
+    assert len(archived) == 1 and "second" not in archived[0].read_text()
