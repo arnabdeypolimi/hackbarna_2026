@@ -70,7 +70,13 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
   }, [drift]);
 
   return (
-    <div className="rowwrap" ref={wrapRef} onWheel={onWheel} onMouseMove={onMove} onMouseLeave={() => setDrift(0)}>
+    <div
+      className={`rowwrap${items.length === 0 ? ' bare' : ''}`}
+      ref={wrapRef}
+      onWheel={onWheel}
+      onMouseMove={onMove}
+      onMouseLeave={() => setDrift(0)}
+    >
       <div
         className="track"
         ref={trackRef}

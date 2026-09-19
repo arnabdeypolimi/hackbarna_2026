@@ -12,10 +12,10 @@ export function Art({ item, wide = false }: { item: Title; wide?: boolean }) {
 
   return (
     <div className={`art${load === 'ok' ? ' has-img' : ''}`} style={{ background: artBackground(item.title) }}>
+      {!wide && <span className="t" style={{ fontSize: posterFontSize(item.title) }}>{item.title}</span>}
       {src && load !== 'failed' && (
         <img src={src} alt="" loading="lazy" onLoad={() => setLoad('ok')} onError={() => setLoad('failed')} />
       )}
-      {!wide && <span className="t" style={{ fontSize: posterFontSize(item.title) }}>{item.title}</span>}
     </div>
   );
 }
