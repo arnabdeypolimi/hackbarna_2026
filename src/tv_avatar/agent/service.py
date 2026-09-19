@@ -34,6 +34,7 @@ from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, turn_plan_sc
 from tv_avatar.agent.prompt import (
     GREETING_INSTRUCTION,
     build_system_prompt,
+    greeting_brief,
     volatile_sections,
 )
 from tv_avatar.agent.stream_parse import (
@@ -151,7 +152,7 @@ class SGRAgentService(LLMService):
         """Off the turn: never awaited by the pipeline."""
         user_text, said = self._turn_user_text, "".join(self._turn_said)
         self._turn_user_text, self._turn_said = "", []
-        if not user_text.strip() or user_text == GREETING_INSTRUCTION:
+        if not user_text.strip() or user_text.startswith(GREETING_INSTRUCTION):
             return
         user_id = self._session.user_id or self._session.session_id
         logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=self._turn_id).debug(
@@ -200,6 +201,8 @@ class SGRAgentService(LLMService):
         log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
 
         messages = self.build_messages(messages, memory, history_text)
+        if user_text == GREETING_INSTRUCTION:
+            messages[-1] = {"role": "user", "content": greeting_brief(history_text, memory.render_for_prompt())}
         log.debug("turn prompt", step="prompt", n_messages=len(messages),
                   system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
         log.trace("turn system prompt", step="prompt", system=messages[0]["content"])

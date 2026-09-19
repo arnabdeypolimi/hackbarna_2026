@@ -155,3 +155,23 @@ Post-merge text-mode run on Qwen3-30B: "something like Sicario but newer" → 3 
 [1]); "what do I hate?" → "You hate horror films." For the SGR envelope Nemotron-3_5-Lightning
 measured ~130 ms faster TTFT and ~2× faster totals (Task 1 Step 6); switch with
 `LLM_MODEL=nvidia/Nemotron-3_5-Lightning LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}`.
+
+## Returning-viewer greeting
+
+The opening turn used to be a fixed "say hello and ask what to watch", so a viewer whose
+`tv_user_id` (localStorage → `POST /sessions`) had history was greeted like a stranger even
+though `Recent activity` and `Memory` were already in that turn's system prompt. Qwen3-30B
+ignored a soft "if Recent activity shows … welcome them back" rule (3/3 runs: "Hey there — what
+would you like to watch?"). What works: `greeting_brief()` repeats the rendered history and
+memory inline in the greeting user message — next to the instruction rather than ~5 k chars
+earlier in the system prompt. Live text-mode, new session per run:
+
+| user | history | greeting |
+|---|---|---|
+| `couch_u5smhn` | 6 rec_shown, some on screen | "Welcome back — want to carry on with Gran Turismo?" (total 1.0–1.4 s) |
+| `couch_live` | play_started Fast X + recs | "Welcome back — want to carry on with Fast X?" — prefers the watched title over recommendations |
+| fresh id | none | "Hi! What would you like to watch?" |
+
+History renders names only (no ids), so the greeting stays action-free; `focus` on the offered
+title would need ids in `Recent activity` and a rule exception. The greeting turn is still never
+ingested into VoiceMem (`startswith(GREETING_INSTRUCTION)`).

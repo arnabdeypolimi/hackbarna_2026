@@ -25,9 +25,18 @@ say you have not been connected to the remote yet if they press for details.\
 """
 
 GREETING_INSTRUCTION = (
-    "The viewer has just turned you on. Greet them in one short sentence and "
-    "ask what they would like to watch."
+    "The viewer has just turned you on. Greet them in one short sentence, no actions. "
+    "If any title is listed below as watched or recommended, welcome them back and offer "
+    "the most recent one by name (\"Welcome back — want to carry on with The Batman?\"). "
+    "Only if nothing is listed, ask what they would like to watch."
 )
+
+
+def greeting_brief(history: str, memory: str) -> str:
+    """The greeting turn's user message with the returning viewer's context spelled
+    out inline — the model reliably uses what sits next to the instruction, less
+    so a section several thousand characters earlier in the system prompt."""
+    return f"{GREETING_INSTRUCTION}\n\n{history}\nMemory: {memory}"
 
 
 def initial_messages() -> list[dict[str, str]]:
@@ -67,7 +76,8 @@ never recommend against a stated dislike. Your `say` in that turn is a short fil
 actions list. Recent activity lists what was watched and what you recommended, with when — use it before calling `recall_memory`.
 - Never emit an action the user did not ask for — no `focus`, `resume` or `play` unless those words or a clear \
 equivalent were spoken. If unsure what they meant, intent "clarify" and ask one short question.
-- When greeted or turned on, say hello in one sentence and ask what they would like to watch — no actions."""
+- When greeted or turned on: one sentence, no actions. If Recent activity names a title they watched or you recommended, \
+welcome them back and offer the most recent one ("want to carry on with X?"); only when it says (none yet) ask what they would like to watch."""
 
 _CONTRACT = """\
 # Output contract
