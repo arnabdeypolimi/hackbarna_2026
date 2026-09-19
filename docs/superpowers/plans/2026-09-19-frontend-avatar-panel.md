@@ -1088,7 +1088,9 @@ Vite proxies `/config` and `/sessions` (including the control WebSocket) to
 `localhost:8000`, which keeps the app same-origin — see `vite.config.ts`. Without
 the backend the panel reads "Backend not running" and the rest of the app browses
 normally. Without provider keys in the backend's `.env` it reads "Avatar
-unavailable" and names what is missing.
+unavailable" and names what is missing. Both are fixed outside the browser, so the
+panel's button re-checks rather than reloads: start the backend, press OK, and the
+panel catches up in place.
 
 Two things worth knowing:
 
