@@ -31,6 +31,28 @@ def test_catalog_sample_is_empty_without_a_built_catalog():
         assert c.get("/catalog/sample").json() == {"titles": []}
 
 
+def test_runtime_picks_the_embedder_and_refuses_a_mismatched_index(tmp_path):
+    """EMBEDDING_PROVIDER decides the query embedder; an index built with another
+    width disables recs up front instead of raising inside a live turn."""
+    from pathlib import Path
+
+    from tv_avatar.recs.catalog import build_catalog
+    from tv_avatar.recs.embedder import LocalE5Embedder, OpenAIEmbedder
+    from tv_avatar.runtime import build_embedder
+
+    assert isinstance(build_embedder(_settings(tmp_path)), LocalE5Embedder)
+    assert isinstance(build_embedder(_settings(tmp_path).model_copy(update={"embedding_provider": "nebius"})),
+                      OpenAIEmbedder)
+
+    fixture = Path(__file__).parent / "fixtures" / "catalog_sample.csv"
+    parquet, qdrant = tmp_path / "c.parquet", tmp_path / "q"
+    build_catalog(fixture, parquet, qdrant, limit=10, embed_fn=lambda ts: [[1.0] * 8 for _ in ts], dims=8)
+    settings = _settings(tmp_path).model_copy(update={"catalog_path": str(parquet), "qdrant_path": str(qdrant)})
+    runtime = build_runtime(settings)
+    assert runtime.catalog is not None and runtime.recs is None  # 8-dim index vs 384-dim local E5
+    asyncio.run(runtime.close())
+
+
 def test_screen_transition_over_the_socket_records_history(tmp_path):
     runtime = build_runtime(_settings(tmp_path))
     app = create_app(runtime=runtime)

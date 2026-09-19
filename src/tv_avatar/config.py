@@ -73,9 +73,18 @@ class Settings(BaseSettings):
     # test double.
     agent_impl: Literal["stub", "chat", "sgr"] = "sgr"
 
-    # Embeddings (catalog index + query) — the only embedding model on Nebius
+    # Embeddings (catalog index + query). `local` = the process-shared
+    # multilingual-e5-small VoiceMem already loads (~15 ms/query, 384 dims);
+    # `nebius` = the cloud model below (200–500 ms — blew the tool budget in
+    # the field). The index must be built with the same provider.
+    embedding_provider: Literal["local", "nebius"] = "local"
     embedding_model: str = "Qwen/Qwen3-Embedding-8B"
     embedding_dimensions: int = 1024
+
+    @property
+    def effective_embedding_dimensions(self) -> int:
+        from tv_avatar.e5 import E5_DIM
+        return E5_DIM if self.embedding_provider == "local" else self.embedding_dimensions
 
     # Phase-2 local data — everything under data/ is git-ignored
     voicemem_local_models_dir: str = "data/voicemem_models"

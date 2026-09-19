@@ -7,9 +7,25 @@ from typing import Protocol
 
 from openai import AsyncOpenAI
 
+from tv_avatar import e5
+
 
 class Embedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class LocalE5Embedder:
+    """Query vectors from the process-shared multilingual-e5-small (~15 ms).
+
+    Asymmetric: this side embeds *queries*; the catalog build embeds the rows
+    as *passages* (`e5.encode(kind="passage")`). Inference runs in a worker
+    thread so the audio loop never waits on torch.
+    """
+
+    dims = e5.E5_DIM
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return await asyncio.to_thread(e5.encode, texts, kind="query")
 
 
 class OpenAIEmbedder:

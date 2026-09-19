@@ -129,6 +129,10 @@ class CatalogStore:
     def client(self) -> QdrantClient:
         return self._client
 
+    def vector_size(self) -> int | None:
+        """Width of the indexed vectors; None when the collection does not exist yet."""
+        return collection_vector_size(self._client)
+
     def lookup(self, title_id: str) -> CatalogItem | None:
         return self._items.get(str(title_id))
 
@@ -190,9 +194,25 @@ def load_source(csv_path: str | Path, limit: int | None) -> pl.DataFrame:
     return _normalise(lf).collect()
 
 
+def collection_vector_size(client: QdrantClient) -> int | None:
+    if not client.collection_exists(COLLECTION):
+        return None
+    params = client.get_collection(COLLECTION).config.params.vectors
+    return int(params.size) if isinstance(params, models.VectorParams) else None
+
+
 def ensure_collection(client: QdrantClient, dims: int) -> None:
-    if client.collection_exists(COLLECTION):
+    """Create the collection, or recreate it when it was built with another width.
+
+    A 1024-dim index cannot serve 384-dim queries, and the resumable build
+    would otherwise skip every already-indexed title and leave it that way.
+    """
+    existing = collection_vector_size(client)
+    if existing == dims:
         return
+    if existing is not None:
+        logger.warning("catalog index has {}-dim vectors, rebuilding for {}", existing, dims)
+        client.delete_collection(COLLECTION)
     # Payload indexes are a no-op in embedded (local) Qdrant; filters still work.
     client.create_collection(
         COLLECTION, vectors_config=models.VectorParams(size=dims, distance=models.Distance.COSINE)
@@ -222,6 +242,8 @@ def build_catalog(csv_path: str | Path, out_parquet: str | Path, qdrant_path: st
     items = [_row_to_item(r) for r in frame.to_dicts()]
     logger.info("catalog parquet written", rows=len(items), path=str(out_parquet))
 
+    if dims is not None:
+        ensure_collection(client, dims)  # before the resume check: a wrong-width index is rebuilt, not resumed
     existing = _existing_ids(client, [int(i.title_id) for i in items])
     todo = [i for i in items if int(i.title_id) not in existing]
     embedded = 0

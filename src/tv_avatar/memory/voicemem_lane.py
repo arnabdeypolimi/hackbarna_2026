@@ -1,7 +1,8 @@
 """VoiceMem in text mode (D6): one VoiceMem per user_id, lazily built.
 
-Read path is local (E5-small embedding + slot classifier, CPU pinned to two
-threads — measured faster than all-threads on the dev Mac). Ingest is a cloud
+Read path is local (E5-small embedding + slot classifier; the model, thread
+pin and inference lock live in `tv_avatar.e5`, shared with the recommendation
+engine's query embedder). Ingest is a cloud
 LLM call on VOICEMEM_CHAT_MODEL and runs on its own single-worker executor so
 a slow write can never starve `to_thread`'s shared pool during a prefetch.
 
@@ -14,19 +15,16 @@ use when no `VOICEMEM_MODELS_DIR/embedding` dir exists.
 """
 import asyncio
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from tv_avatar import e5
 from tv_avatar.config import Settings
+from tv_avatar.e5 import E5_DIM
 from tv_avatar.memory.lane import BaseMemoryLane, MemoryBlock
-
-E5_THREADS = 2
-#: multilingual-e5-small output width — used for VoiceMem's anchor/graph vectors too.
-E5_DIM = 384
 #: Appended to VoiceMem's two Chinese extraction prompts so notes come out in English.
 _ENGLISH_ONLY = (
     "\n\nLANGUAGE: write every label, note and free-text value in ENGLISH, 3-12 words, "
@@ -91,25 +89,25 @@ def _patch_voicemem() -> None:
     global _patched
     if _patched:
         return
-    import numpy as np
     from voicemem.leftbrain import merged_extraction
-    from voicemem.leftbrain.local_e5_embedder import shared_e5
     from voicemem.orchestrator import Orchestrator
     from voicemem.rightbrain.brain import RightBrain
 
-    model = shared_e5()
+    # VoiceMem calls the model directly from its own worker threads; wrapping
+    # its `encode` in the shared lock keeps those passes from overlapping ours.
+    model = e5.model()
     if not getattr(model, "_tv_avatar_locked", False):
         raw_encode = model.encode
 
         def locked_encode(*args, **kwargs):
-            with _e5_lock:
+            with e5.lock():
                 return raw_encode(*args, **kwargs)
 
         model.encode = locked_encode
         model._tv_avatar_locked = True
 
     def _embed_local(self, texts: list[str]) -> list[list[float]]:
-        return np.asarray(model.encode([f"passage: {t}" for t in texts], normalize_embeddings=True)).tolist()
+        return e5.encode(texts, kind="passage")
 
     Orchestrator._embed_uncached = _embed_local
     if _ENGLISH_ONLY not in merged_extraction.PROMPT_ADDENDUM:
@@ -119,25 +117,6 @@ def _patch_voicemem() -> None:
         RightBrain._ATTRIBUTION_PROMPT = _ENGLISH_ONLY.strip() + "\n\n" + RightBrain._ATTRIBUTION_PROMPT + _ENGLISH_ONLY
     _patched = True
     logger.info("voicemem patched: local E5 anchors ({} dims), English-only notes", E5_DIM)
-
-
-_torch_pinned = False
-#: E5 forward passes from VoiceMem's worker threads and our own must not overlap:
-#: concurrent torch inference plus a thread-count change crashed the process.
-_e5_lock = threading.Lock()
-
-
-def _pin_torch_threads() -> None:
-    """Once per process, before any inference — changing it mid-inference is fatal."""
-    global _torch_pinned
-    if _torch_pinned:
-        return
-    try:
-        import torch
-        torch.set_num_threads(E5_THREADS)
-        _torch_pinned = True
-    except Exception as err:  # noqa: BLE001 — torch is a voicemem dependency; log, don't fail
-        logger.warning("could not pin torch threads: {}", type(err).__name__)
 
 
 def _memory_root(root: Path) -> Path:
@@ -166,7 +145,6 @@ class VoiceMemLane(BaseMemoryLane):
 
     def _make_vm(self, user_id: str):
         from voicemem import VoiceMem
-        _pin_torch_threads()
         _patch_voicemem()
         root = _memory_root(Path(self._settings.memory_root) / user_id)
         return VoiceMem.from_config({
@@ -200,8 +178,7 @@ class VoiceMemLane(BaseMemoryLane):
     async def warmup(self) -> None:
         """Load E5 once per process. Called from create_task at app start."""
         def load() -> None:
-            _pin_torch_threads()
-            _patch_voicemem()  # loads and wraps the shared E5
+            _patch_voicemem()  # loads (and pins torch threads for) the shared E5
         await asyncio.to_thread(load)
         logger.info("voicemem E5 warm")
 

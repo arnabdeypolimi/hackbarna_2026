@@ -86,3 +86,20 @@ def test_build_is_resumable(tmp_path):
     second = build_catalog(FIXTURE, parquet, client=client, limit=20, embed_fn=counting)
     assert first.embedded == 20 and second.embedded == 0
     assert sum(calls) == 20
+
+
+def test_index_built_with_another_width_is_rebuilt_not_resumed(tmp_path):
+    """Switching embedding provider (1024-dim Nebius -> 384-dim local E5) must
+    not leave a resumable-but-unusable index behind."""
+    client = QdrantClient(":memory:")
+    parquet = tmp_path / "c.parquet"
+    build_catalog(FIXTURE, parquet, client=client, limit=20, embed_fn=fake_embed, dims=DIMS)
+    store = CatalogStore(parquet, client=client)
+    assert store.vector_size() == DIMS
+
+    def wider(texts):
+        return [v + [0.0] * DIMS for v in fake_embed(texts)]
+
+    report = build_catalog(FIXTURE, parquet, client=client, limit=20, embed_fn=wider, dims=2 * DIMS)
+    assert report.embedded == 20 and report.skipped == 0
+    assert CatalogStore(parquet, client=client).vector_size() == 2 * DIMS

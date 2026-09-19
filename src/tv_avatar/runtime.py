@@ -10,14 +10,22 @@ from pathlib import Path
 
 from loguru import logger
 
+from tv_avatar import e5
 from tv_avatar.config import Settings
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.memory.fake import FakeMemoryLane
 from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogStore
-from tv_avatar.recs.embedder import OpenAIEmbedder
+from tv_avatar.recs.embedder import Embedder, LocalE5Embedder, OpenAIEmbedder
 from tv_avatar.recs.engine import RecsEngine
+
+
+def build_embedder(settings: Settings) -> Embedder:
+    if settings.embedding_provider == "local":
+        return LocalE5Embedder()
+    return OpenAIEmbedder(settings.nebius_base_url, settings.nebius_api_key,
+                          settings.embedding_model, settings.embedding_dimensions)
 
 
 @dataclass
@@ -30,13 +38,27 @@ class Runtime:
     recs: RecsEngine | None = None
 
     def warm_in_background(self) -> asyncio.Task:
-        """Pre-load VoiceMem's local E5 so the first search does not pay ~5 s."""
+        """Pre-load the local E5 so no first search or query embed pays the ~6 s load.
+
+        The recs engine's query embed has a 240 ms budget; a cold model would
+        time every query out into the "popular" fallback until loaded — so the
+        load is triggered here even when the memory lane is not VoiceMem.
+        """
         async def warm() -> None:
+            if self.recs is not None and self.settings.embedding_provider == "local":
+                try:
+                    await asyncio.to_thread(e5.model)
+                    logger.info("recs E5 warm")
+                except Exception:  # noqa: BLE001 — degraded recs (popular only), not fatal
+                    logger.opt(exception=True).warning("recs E5 warmup failed")
             try:
                 await self.lane.warmup()
             except Exception:  # noqa: BLE001 — a cold memory lane is degraded, not fatal
                 logger.opt(exception=True).warning("memory lane warmup failed")
         return asyncio.create_task(warm())
+
+    async def warm(self) -> None:
+        await self.warm_in_background()
 
     async def close(self) -> None:
         await self.history.close()
@@ -48,9 +70,14 @@ def build_runtime(settings: Settings, *, lane: MemoryLane | None = None) -> Runt
     recs: RecsEngine | None = None
     if Path(settings.catalog_path).exists() and Path(settings.qdrant_path).exists():
         catalog = CatalogStore(settings.catalog_path, settings.qdrant_path)
-        embedder = OpenAIEmbedder(settings.nebius_base_url, settings.nebius_api_key,
-                                  settings.embedding_model, settings.embedding_dimensions)
-        recs = RecsEngine(catalog, history, embedder, tool_timeout_s=settings.tool_timeout_s)
+        indexed, wanted = catalog.vector_size(), settings.effective_embedding_dimensions
+        if indexed is not None and indexed != wanted:
+            # A mismatched query would raise inside the first turn that recommends.
+            logger.error("catalog index is {}-dim but EMBEDDING_PROVIDER={} embeds {}-dim; "
+                         "recommendations disabled — rebuild with tools/build_catalog.py",
+                         indexed, settings.embedding_provider, wanted)
+        else:
+            recs = RecsEngine(catalog, history, build_embedder(settings), tool_timeout_s=settings.tool_timeout_s)
     else:
         logger.warning("catalog not built; recommendations disabled (run tools/build_catalog.py)",
                        catalog_path=settings.catalog_path)
