@@ -20,6 +20,39 @@ def test_create_session_returns_token_and_urls():
         assert body["protocol_version"] == PROTOCOL_VERSION
 
 
+def test_create_session_defaults_to_catalog_avatar_and_language():
+    from tv_avatar.catalog import get_catalog
+    cat = get_catalog()
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        assert body["avatar"] == cat.default_avatar
+        assert body["language"] == cat.default_language
+        persona = app.state.store.get(body["session_id"]).persona
+        assert persona.avatar.id == cat.default_avatar
+
+
+def test_create_session_pins_requested_avatar_and_language():
+    from tv_avatar.catalog import get_catalog
+    avatar = get_catalog().avatars[0].id
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions", json={"avatar": avatar, "language": "ca"}).json()
+        assert (body["avatar"], body["language"]) == (avatar, "ca")
+        persona = app.state.store.get(body["session_id"]).persona
+        assert persona.language.code == "ca"
+        assert persona.avatar.voice == get_catalog().avatar(avatar).voice
+
+
+def test_create_session_rejects_unknown_avatar_or_language():
+    with _client() as c:
+        res = c.post("/sessions", json={"avatar": "nobody"})
+        assert res.status_code == 422
+        assert "nobody" in res.json()["detail"]
+        # Not in the LanguageCode literal: pydantic rejects before we look it up.
+        assert c.post("/sessions", json={"language": "de"}).status_code == 422
+
+
 def test_offer_requires_a_valid_token():
     with _client() as c:
         sid = c.post("/sessions").json()["session_id"]
@@ -51,6 +84,11 @@ def test_config_reports_stack_without_secrets(monkeypatch):
         assert body["llm_model"] == "Qwen/Qwen3-30B-A3B-Instruct-2507"
         assert body["tts_model"] == "cartesia/sonic:3"
         assert not any("key" in k for k in body)
+        # Catalog is listed even without provider keys, minus provider ids.
+        assert [l["code"] for l in body["languages"]] == ["en", "es", "fr", "ca"]
+        assert body["default_avatar"] in {a["id"] for a in body["avatars"]}
+        for a in body["avatars"]:
+            assert "anam_avatar_id" not in a and "voice" not in a
 
 
 def test_demo_console_is_served():

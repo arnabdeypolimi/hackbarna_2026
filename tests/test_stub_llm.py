@@ -49,6 +49,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.tests.utils import run_test
 
+from conftest import PERSONA
 from tv_avatar.session.state import SessionStore
 
 
@@ -77,7 +78,7 @@ async def test_context_frame_produces_start_text_end_and_dispatches_commands():
 
 async def test_turn_id_comes_from_the_session_when_one_is_attached():
     bus = CommandBus()
-    session = SessionStore().create(ttl_s=60)
+    session = SessionStore().create(60, PERSONA)
     svc = StubLLMService(
         bus=bus, session=session, script=[ScriptedTurn("ok", [("pause", {})])]
     )

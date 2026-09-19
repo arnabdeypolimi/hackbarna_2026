@@ -1,0 +1,32 @@
+# Avatar and language catalog. Loaded once at startup (tv_avatar.catalog).
+#
+# A session pins one avatar and one language at creation (POST /sessions).
+# Each avatar carries exactly one Cartesia voice: sonic-3 voices are
+# multilingual, so the same voice speaks every language listed below.
+#
+# Override the file location with AVATARS_FILE=/path/to/avatars.yaml.
+
+default_avatar: cara
+default_language: en
+
+languages:
+  - code: en
+    name: English
+    native_name: English
+  - code: es
+    name: Spanish
+    native_name: Español
+  - code: fr
+    name: French
+    native_name: Français
+  - code: ca
+    name: Catalan
+    native_name: Català
+
+avatars:
+  - id: cara
+    name: Cara
+    description: Warm, quick and natural. The default host.
+    anam_avatar_id: 8e6215af-290b-443f-87f8-f68f7890d9c6
+    anam_avatar_model: cara-4
+    voice: 228fca29-3a0a-435c-8728-5cb483251068
