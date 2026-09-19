@@ -12,7 +12,7 @@ from typing import Literal
 
 import yaml
 from pipecat.transcriptions.language import Language
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: The languages the product supports. Adding one here is deliberate: the
 #: system prompt, STT model and TTS voice all have to be checked against it.
@@ -30,11 +30,30 @@ class LanguageProfile(BaseModel):
     name: str = Field(min_length=1)
     #: Name in the language itself, shown to the viewer in pickers.
     native_name: str = Field(min_length=1)
+    #: Language code handed to TTS when the synthesiser lacks this language.
+    #: Cartesia Sonic has no Catalan, so ``ca`` is voiced as ``es``: the
+    #: text is still Catalan, the pronunciation model is Spanish.
+    tts_language: str | None = None
+
+    @field_validator("tts_language")
+    @classmethod
+    def _known_to_pipecat(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                Language(v)
+            except ValueError as err:
+                raise ValueError(f"tts_language {v!r} is not a Pipecat language code") from err
+        return v
 
     @property
     def pipecat(self) -> Language:
-        """The Pipecat enum SLNG forwards verbatim to Reson8 and Cartesia."""
+        """The Pipecat enum SLNG forwards verbatim to Reson8 (STT)."""
         return Language(self.code)
+
+    @property
+    def pipecat_tts(self) -> Language:
+        """What Cartesia is told to speak; differs from ``pipecat`` only via ``tts_language``."""
+        return Language(self.tts_language or self.code)
 
 
 class AvatarProfile(BaseModel):
@@ -133,7 +152,7 @@ class AvatarCatalog(BaseModel):
             "default_avatar": self.default_avatar,
             "default_language": self.default_language,
             "avatars": [a.public(codes) for a in self.avatars],
-            "languages": [l.model_dump() for l in self.languages],
+            "languages": [l.model_dump(exclude={"tts_language"}) for l in self.languages],
         }
 
 

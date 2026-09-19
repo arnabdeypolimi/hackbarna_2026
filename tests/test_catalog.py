@@ -79,6 +79,29 @@ def test_shipped_chloe_is_french_only():
     # placeholder video (tracked by the TODO in avatars.yaml).
     assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
     assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars) - 1
+    # Between them the shipped avatars cover every catalog language.
+    spoken = {c for a in cat.avatars for c in (a.languages or ())}
+    assert spoken == {l.code for l in cat.languages}
+
+
+def test_shipped_pau_speaks_catalan_but_is_voiced_in_spanish():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    pau = cat.avatar("pau")
+    assert pau.languages == ("ca",)
+    ca = cat.resolve("pau").language
+    assert ca.pipecat == Language.CA          # STT and prompt stay Catalan
+    assert ca.pipecat_tts == Language.ES      # Cartesia has no `ca`
+    for other in ("en", "es", "fr"):
+        assert cat.language(other).pipecat_tts == cat.language(other).pipecat
+
+
+def test_tts_language_must_be_a_pipecat_code_and_is_not_public():
+    langs = LANGS[:1] + [{"code": "ca", "name": "Catalan", "native_name": "Català", "tts_language": "xx"}]
+    with pytest.raises(ValidationError, match="not a Pipecat language code"):
+        AvatarCatalog.model_validate(_raw(languages=langs))
+    langs[1]["tts_language"] = "es"
+    pub = AvatarCatalog.model_validate(_raw(languages=langs)).public()
+    assert "tts_language" not in pub["languages"][1]
 
 
 def test_get_catalog_is_cached_and_honours_env_override(monkeypatch, tmp_path):

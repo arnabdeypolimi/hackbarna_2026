@@ -22,6 +22,9 @@ languages:
   - code: ca
     name: Catalan
     native_name: Català
+    # Cartesia Sonic (3.x) has no Catalan; STT and the prompt stay Catalan,
+    # the synthesiser voices the Catalan text with its Spanish model.
+    tts_language: es
 
 # `languages` restricts which session languages an avatar may be paired
 # with; omit it to allow every language listed above.
@@ -56,3 +59,12 @@ avatars:
     # Cartesia "French Conversational Lady": native French, conversational.
     voice: a249eaff-1e96-4d2c-b23b-12efa4f66f41
     languages: [fr]
+  - id: pau
+    name: Pau
+    description: Male host. Catalan only.
+    anam_avatar_id: ecfb2ddb-80ec-4526-88a7-299a4738957c
+    anam_avatar_model: cara-4
+    # Cartesia "Spanish-speaking Man": the closest voice available, since
+    # Cartesia ships no Catalan voices (see tts_language on ca above).
+    voice: 34dbb662-8e98-413c-a1ef-1a3407675fe7
+    languages: [ca]

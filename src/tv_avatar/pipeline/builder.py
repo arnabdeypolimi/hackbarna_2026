@@ -54,7 +54,7 @@ def build_pipeline(
         build_stt(settings, language.pipecat),
         user_agg,
         llm or build_llm(settings),
-        build_tts(settings, avatar.voice, language.pipecat),
+        build_tts(settings, avatar.voice, language.pipecat_tts),
     ]
     if with_avatar:
         stages.append(build_anam(settings, avatar))
