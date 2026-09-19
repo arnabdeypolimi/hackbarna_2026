@@ -20,6 +20,15 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
   // One connection at a time. A language switch supersedes whatever the previous
   // attempt was doing, and that attempt's late callbacks must not write over it.
   const gen = useRef(0);
+  const mounted = useRef(true);
+  // The chosen language, readable from callbacks that must not be rebuilt every
+  // time it changes.
+  const lang = useRef(language);
+
+  const choose = (code: string) => {
+    lang.current = code;
+    setLanguageState(code);
+  };
 
   const start = useCallback(async (cfg: BackendConfig, code: string) => {
     const mine = ++gen.current;
@@ -43,7 +52,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     setPhase('connecting');
     setMessage(`Connecting to ${who.name}…`);
 
-    const mineStill = () => gen.current === mine;
+    const mineStill = () => gen.current === mine && mounted.current;
     try {
       const live = await connect({
         avatar: who.id,
@@ -52,9 +61,11 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
         onStatus: (s) => { if (mineStill()) setStatus(s); },
         onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
         onCommand: (m) => {
+          if (!mineStill()) return;
           // TODO(M3): dispatch verbs into App state. The agent emits no commands until
           // tool calls are wired — see "Current state" in CLAUDE.md and the verb list
-          // in contracts/protocol.d.ts.
+          // in contracts/protocol.d.ts. The guard above is for that day: a superseded
+          // session's late command must not reach the current screen.
           console.debug('[avatar] command', m.verb, m.args);
         },
         onError: (e) => { if (mineStill()) { setPhase('error'); setMessage(e.message); } },
@@ -75,29 +86,51 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     }
   }, [video]);
 
+  /**
+   * Fetch the catalogue, then connect. This is both the mount path and what the
+   * panel's button re-runs, which is why it re-reads `/config` every time: the two
+   * states it can report — a backend that is down, and one running without provider
+   * keys — are both fixed outside the browser, and a viewer pressing OK is asking
+   * whether that has happened yet.
+   */
+  const boot = useCallback(async () => {
+    const mine = ++gen.current;
+    session.current?.close();
+    session.current = null;
+    setPhase('connecting');
+    setMessage('Starting…');
+
+    let cfg: BackendConfig;
+    try {
+      cfg = await fetchConfig();
+    } catch {
+      if (gen.current !== mine || !mounted.current) return;
+      setPhase('error');
+      setMessage('Backend not running');
+      return;
+    }
+    if (gen.current !== mine || !mounted.current) return;
+    setConfig(cfg);
+
+    // Settle the language before any early return can skip it. Everything downstream
+    // reads it — the button most of all — and leaving it '' is what turns the useful
+    // "missing keys" message into "No avatar speaks " on the first press.
+    const codes = languageOptions(cfg).map((l) => l.code);
+    choose(codes.indexOf(lang.current) >= 0 ? lang.current : cfg.default_language);
+
+    if (!cfg.configured) {
+      setPhase('error');
+      setMessage(`Avatar unavailable — missing ${cfg.missing.join(', ')}`);
+      return;
+    }
+    await start(cfg, lang.current);
+  }, [start]);
+
   useEffect(() => {
-    let cancelled = false;
-    fetchConfig()
-      .then((cfg) => {
-        if (cancelled) return;
-        setConfig(cfg);
-        if (!cfg.configured) {
-          setPhase('error');
-          setMessage(`Avatar unavailable — missing ${cfg.missing.join(', ')}`);
-          return;
-        }
-        const codes = languageOptions(cfg).map((l) => l.code);
-        const code = codes.indexOf(language) >= 0 ? language : cfg.default_language;
-        setLanguageState(code);
-        void start(cfg, code);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setPhase('error');
-        setMessage('Backend not running');
-      });
+    mounted.current = true;
+    void boot();
     return () => {
-      cancelled = true;
+      mounted.current = false;
       gen.current++;
       session.current?.close();
       session.current = null;
@@ -113,13 +146,15 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
   }, []);
 
   const setLanguage = (code: string) => {
-    if (!config || code === language) return;
-    setLanguageState(code);
+    if (code === lang.current) return;
+    choose(code);
     writeJSON(LANG_KEY, code);
-    void start(config, code);
+    // No catalogue means the last boot never got one, so go back to the top.
+    if (config) void start(config, code);
+    else void boot();
   };
 
-  const retry = () => { if (config) void start(config, language); };
+  const retry = () => { void boot(); };
 
   return {
     phase,
