@@ -65,6 +65,21 @@ def test_phase2_defaults(monkeypatch):
     assert s.llm_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+def test_cycle_loop_bounds(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.agent_max_cycles == 2 and s.cycle_first_byte_s == 1.2
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, agent_max_cycles=5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, agent_max_cycles=0)
+    # The old name keeps working for .env files written against it.
+    monkeypatch.setenv("CYCLE2_FIRST_BYTE_S", "0.7")
+    assert Settings(_env_file=None).cycle_first_byte_s == 0.7
+    monkeypatch.setenv("CYCLE_FIRST_BYTE_S", "0.9")
+    assert Settings(_env_file=None).cycle_first_byte_s == 0.9
+
+
 def test_openai_env_names_are_accepted_as_aliases(monkeypatch):
     """The OpenAI SDK speaks OPENAI_*; a .env written for them still works."""
     _set_required(monkeypatch)

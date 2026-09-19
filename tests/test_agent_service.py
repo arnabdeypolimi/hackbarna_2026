@@ -178,12 +178,52 @@ async def test_awaited_action_triggers_second_cycle():
     assert (await bus.next_outbound()).verb == "focus"
 
 
-async def test_cycles_are_capped_at_two():
-    tools, client = FakeTools(), FakeOpenAI([RECO_1, RECO_1])
-    agent = _agent(client, RecordingBus(), tools=tools)
+@pytest.mark.parametrize("max_cycles", [1, 2, 3])
+async def test_cycles_are_capped_at_setting(max_cycles):
+    """The model asks for a tool on every cycle; the loop still ends at AGENT_MAX_CYCLES
+    and the last cycle's tool call is refused rather than run without a reply."""
+    settings = _settings().model_copy(update={"agent_max_cycles": max_cycles})
+    tools, client = FakeTools(), FakeOpenAI([RECO_1] * 4)
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=tools)
+    sink = TimingSink()
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
+    assert len(client.calls) == max_cycles
+    assert len(tools.calls) == max_cycles - 1      # the final cycle's internal tool is not dispatched
+    assert _spoken(sink) == ["Let me look."] * max_cycles
+    assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
+
+
+async def test_feedback_tells_the_model_when_tools_are_still_allowed():
+    settings = _settings().model_copy(update={"agent_max_cycles": 3})
+    client = FakeOpenAI([RECO_1, RECO_1, RECO_2])
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend"))])
+    assert len(client.calls) == 3
+    second, third = client.calls[1]["messages"][-1]["content"], client.calls[2]["messages"][-1]["content"]
+    assert second.startswith("[tool results]") and third.startswith("[tool results]")
+    assert "Do not call internal tools again" not in second and "one more internal tool" in second
+    assert "Do not call internal tools again" in third
+    # Every follow-up cycle carries the whole exchange so far: envelope, results, envelope, results.
+    assert [m["role"] for m in client.calls[2]["messages"][-4:]] == ["assistant", "user", "assistant", "user"]
+
+
+async def test_every_follow_up_cycle_is_budgeted():
+    """With a 3-cycle cap, a slow cycle 2 still falls back after ONE budget — no cycle 3."""
+    class TwoSpeeds(FakeOpenAI):
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeStream(self.scripts.pop(0), delay_s=0.0 if len(self.calls) == 1 else 0.3)
+
+    settings = _settings().model_copy(update={"agent_max_cycles": 3, "cycle_first_byte_s": 0.15})
+    client, sink, bus = TwoSpeeds([RECO_1, RECO_1, RECO_2]), TimingSink(), RecordingBus()
+    agent = SGRAgentService(settings, bus, FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
     assert len(client.calls) == 2
-    assert len(tools.calls) == 1  # cycle-2 internal tools are not dispatched
+    assert _spoken(sink) == ["Let me look.", "How about Heat, or Inception?"]
+    assert (await bus.next_outbound()).verb == "focus"
 
 
 async def test_interruption_frame_cancels_stream_and_queued_commands():
@@ -346,7 +386,7 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
             text = self.scripts.pop(0)
             return FakeStream(text, delay_s=0.0 if len(self.calls) == 1 else 0.3)
 
-    settings = _settings().model_copy(update={"cycle2_first_byte_s": 0.15})
+    settings = _settings().model_copy(update={"cycle_first_byte_s": 0.15})
     session = SessionState("sess_t", "tok", 0, user_id="u1")
     bus, sink, tools, lane = RecordingBus(), TimingSink(), FakeTools(), FakeMemoryLane()
     client = TwoSpeeds([RECO_1, RECO_2])

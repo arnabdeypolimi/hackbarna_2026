@@ -129,6 +129,15 @@ Reply with exactly one JSON object: {"intent": ..., "say": ..., "actions": [...]
 Actions run in parallel. Internal tools return results to you; TV commands do not."""
 
 
+def tool_results_message(feedback: str, *, final: bool) -> str:
+    """The observation step between SGR cycles: tool results as a user message.
+    On the last allowed cycle the model is told it must answer from them."""
+    tail = ("Now answer the user using these results. Do not call internal tools again." if final else
+            "Now answer the user using these results, or call one more internal tool only if you cannot "
+            "answer without it.")
+    return f"[tool results]\n{feedback}\n{tail}"
+
+
 def build_system_prompt(language: LanguageProfile) -> str:
     return "\n\n".join([
         _PERSONA.format(language=language.name),

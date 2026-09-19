@@ -4,9 +4,9 @@ endpoint (D8, D12).
 Receives LLMContextFrame, streams `say` downstream one complete sentence at a
 time as AggregatedTextFrames (see `_speak` for why not raw LLMTextFrames),
 dispatches actions in parallel as each array element completes, and runs a
-bounded second cycle when an internal tool returns data. InterruptionFrame
-cancels the in-flight completion and the turn's unsent commands, then keeps
-flowing so TTS and the avatar stop together.
+bounded loop of follow-up cycles (AGENT_MAX_CYCLES) when an internal tool
+returns data. InterruptionFrame cancels the in-flight completion and the turn's
+unsent commands, then keeps flowing so TTS and the avatar stop together.
 """
 import asyncio
 import contextlib
@@ -36,6 +36,7 @@ from tv_avatar.agent.prompt import (
     greeting_brief,
     is_greeting,
     render_screen,
+    tool_results_message,
     volatile_sections,
 )
 from tv_avatar.agent.stream_parse import (
@@ -56,7 +57,6 @@ from tv_avatar.recs.catalog import CatalogStore
 from tv_avatar.recs.engine import RecsEngine
 from tv_avatar.session.state import SessionState
 
-MAX_CYCLES = 2
 MAX_TOKENS = 220           # say is 1–2 spoken sentences; actions are small
 TEMPERATURE = 0.2
 #: Conversation history kept in the prompt (non-system messages). TTFT grows
@@ -212,24 +212,29 @@ class SGRAgentService(LLMService):
         log.debug("cycle start", step="cycle", cycle=1, n_messages=len(messages))
         outcome = await self._cycle(messages, ctx, 1, metrics)
         log.debug("cycle envelope", step="cycle", cycle=1, raw=outcome.raw)
-        if not outcome.needs_another_cycle:
-            log.debug("cycle end", step="cycle", cycle=1, second_cycle=False,
-                      awaited=[r.verb for r in outcome.results])
-        else:
+        # The SGR loop: a cycle-earning tool result buys one more LLM cycle, up
+        # to the cap. Every follow-up cycle must start speaking within its budget
+        # or the results are spoken from a template — the loop never outlives it.
+        max_cycles = self._cfg.agent_max_cycles
+        for cycle in range(2, max_cycles + 1):
+            if not outcome.needs_another_cycle:
+                break
             feedback = outcome.feedback()
-            log.debug("cycle end", step="cycle", cycle=1, second_cycle=True,
+            log.debug("cycle end", step="cycle", cycle=cycle - 1, next_cycle=True,
                       awaited=[r.verb for r in outcome.results], feedback_chars=len(feedback))
             log.debug("tool results fed back", step="feedback", results=feedback)
             messages = messages + [
                 {"role": "assistant", "content": outcome.raw},
-                {"role": "user", "content": "[tool results]\n" + feedback
-                    + "\nNow answer the user using these results. Do not call internal tools again."},
+                {"role": "user", "content": tool_results_message(feedback, final=cycle == max_cycles)},
             ]
-            # Cycle 2 must start speaking within its budget or the tool results
-            # are spoken from a template — the loop never outlives the budget.
-            if await self._cycle_with_budget(messages, ctx, 2, metrics) is None:
+            budgeted = await self._cycle_with_budget(messages, ctx, cycle, metrics)
+            if budgeted is None:
                 metrics.fallback = True
                 await self._speak_fallback(outcome.results, ctx)
+                break
+            outcome = budgeted
+        log.debug("cycle end", step="cycle", cycle=metrics.cycles, next_cycle=False,
+                  awaited=[r.verb for r in outcome.results])
         await self.push_frame(LLMFullResponseEndFrame())
         await self.stop_processing_metrics()
         metrics.total_ms = ctx.elapsed_ms()
@@ -239,8 +244,8 @@ class SGRAgentService(LLMService):
 
     async def _cycle_with_budget(self, messages: list[dict], ctx: TurnContext, cycle: int,
                                  metrics: TurnMetrics) -> CycleOutcome | None:
-        """Run a follow-up cycle; None if it produced no speech within `cycle2_first_byte_s`."""
-        budget_s = self._cfg.cycle2_first_byte_s
+        """Run a follow-up cycle; None if it produced no speech within `cycle_first_byte_s`."""
+        budget_s = self._cfg.cycle_first_byte_s
         first_say = asyncio.Event()
         ctx.log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages),
                       budget_ms=round(budget_s * 1000))
@@ -259,7 +264,6 @@ class SGRAgentService(LLMService):
             return None
         outcome = await task
         ctx.log.debug("cycle envelope", step="cycle", cycle=cycle, raw=outcome.raw)
-        ctx.log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False)
         return outcome
 
     async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext) -> None:
@@ -350,7 +354,7 @@ class SGRAgentService(LLMService):
                                             reason=str(err).splitlines()[0])
                                 continue
                             verb, spec = str(action.verb), REGISTRY[str(action.verb)]
-                            if spec.earns_cycle and cycle >= MAX_CYCLES:
+                            if spec.earns_cycle and cycle >= self._cfg.agent_max_cycles:
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
                                 continue  # no open-ended loops on a voice interface

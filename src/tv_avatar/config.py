@@ -96,9 +96,16 @@ class Settings(BaseSettings):
     # Turn behaviour
     mem_prefetch_min_chars: int = 6
     tool_timeout_s: float = 0.4
-    #: The second SGR cycle (speaking tool results) must produce its first byte
-    #: within this budget or the results are spoken from a template instead.
-    cycle2_first_byte_s: float = 1.2
+    #: SGR cycles per turn. Cycle 1 streams the envelope; each further cycle
+    #: is a full LLM round trip that feeds tool results back. The last cycle
+    #: refuses internal tools so the loop always ends in speech. 2 is the
+    #: measured sweet spot on a voice budget; every extra cycle is ~1 s of
+    #: waiting the viewer hears.
+    agent_max_cycles: int = Field(default=2, ge=1, le=4)
+    #: Every cycle after the first must produce its first `say` byte within this
+    #: budget or the tool results are spoken from a template instead.
+    cycle_first_byte_s: float = Field(
+        default=1.2, validation_alias=AliasChoices("CYCLE_FIRST_BYTE_S", "CYCLE2_FIRST_BYTE_S"))
     log_level: str = "INFO"
 
 
