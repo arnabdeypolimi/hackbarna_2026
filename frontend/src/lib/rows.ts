@@ -16,9 +16,16 @@ export const TAB_TITLES: Record<Tab, string> = {
  */
 export function matches(x: Title, query: string): boolean {
   const hay = `${x.title} ${x.genres.join(' ')}`.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w && !FILLER.has(w));
   return words.length > 0 && words.every((w) => hay.includes(w));
 }
+
+// Words a spoken request carries that no title or genre does: "space movie" must still
+// find 2001: A Space Odyssey. A query made only of these matches nothing.
+const FILLER = new Set([
+  'a', 'an', 'the', 'some', 'any', 'me', 'for', 'of', 'to', 'in', 'on', 'with', 'about', 'like',
+  'movie', 'movies', 'film', 'films', 'show', 'shows', 'series', 'title', 'titles', 'something',
+]);
 
 export function buildRow(items: Title[], tab: Tab, query: string, myList: string[]): Title[] {
   if (query) return items.filter((x) => matches(x, query)).slice(0, ROW_MAX);
