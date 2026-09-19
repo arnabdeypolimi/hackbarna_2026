@@ -43,54 +43,38 @@ def test_shipped_catalog_loads_and_covers_the_four_languages():
     cat = load_catalog(DEFAULT_CATALOG_PATH)
     assert [l.code for l in cat.languages] == ["en", "es", "fr", "ca"]
     assert [l.pipecat for l in cat.languages] == [Language.EN, Language.ES, Language.FR, Language.CA]
-    assert cat.avatar(cat.default_avatar).voice
-
-
-def test_shipped_igor_is_english_only_with_his_own_voice():
-    cat = load_catalog(DEFAULT_CATALOG_PATH)
-    igor = cat.avatar("igor")
-    assert igor.voice == "228fca29-3a0a-435c-8728-5cb483251068"
-    assert igor.languages == ("en",)
-    assert igor.voice != cat.avatar("cara").voice
-    assert cat.resolve("igor", "en").language.code == "en"
-    with pytest.raises(KeyError, match="does not speak 'ca'"):
-        cat.resolve("igor", "ca")
-
-
-def test_shipped_lucia_is_spanish_only_with_a_distinct_anam_avatar():
-    cat = load_catalog(DEFAULT_CATALOG_PATH)
-    lucia = cat.avatar("lucia")
-    assert lucia.languages == ("es",)
-    assert lucia.anam_avatar_id != cat.avatar("cara").anam_avatar_id
-    assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
-    assert cat.resolve("lucia", "es").language.pipecat == Language.ES
-    # Omitting the language falls back to hers, not to the catalog default (en).
-    assert cat.resolve("lucia").language.code == "es"
-    with pytest.raises(KeyError, match="does not speak 'en'"):
-        cat.resolve("lucia", "en")
-
-
-def test_shipped_chloe_is_french_only():
-    cat = load_catalog(DEFAULT_CATALOG_PATH)
-    chloe = cat.avatar("chloe")
-    assert chloe.languages == ("fr",)
-    assert cat.resolve("chloe").language.pipecat == Language.FR
-    # Every shipped avatar has its own Anam id and voice, except Igor's
-    # placeholder video (tracked by the TODO in avatars.yaml).
-    assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
-    assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars) - 1
     # Between them the shipped avatars cover every catalog language.
     spoken = {c for a in cat.avatars for c in (a.languages or ())}
     assert spoken == {l.code for l in cat.languages}
 
 
-def test_shipped_pau_speaks_catalan_but_is_voiced_in_spanish():
+def test_shipped_avatars_are_distinguishable():
+    # Structural invariants only: which voice or Anam id an avatar uses is a
+    # data decision, so the literal UUIDs are deliberately not pinned here.
     cat = load_catalog(DEFAULT_CATALOG_PATH)
-    pau = cat.avatar("pau")
-    assert pau.languages == ("ca",)
-    ca = cat.resolve("pau").language
+    assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
+    # Igor reuses Cara's video until he has his own (TODO in avatars.yaml).
+    assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars) - 1
+
+
+def test_shipped_single_language_avatars_resolve_to_their_own_language():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    for avatar in cat.avatars:
+        if avatar.languages is None or len(avatar.languages) != 1:
+            continue
+        (only,) = avatar.languages
+        # Omitting the language falls back to theirs, not to the catalog default.
+        assert cat.resolve(avatar.id).language.code == only
+        for other in (l.code for l in cat.languages if l.code != only):
+            with pytest.raises(KeyError, match=f"does not speak '{other}'"):
+                cat.resolve(avatar.id, other)
+
+
+def test_shipped_catalan_is_voiced_in_spanish_because_cartesia_has_no_catalan():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    ca = cat.language("ca")
     assert ca.pipecat == Language.CA          # STT and prompt stay Catalan
-    assert ca.pipecat_tts == Language.ES      # Cartesia has no `ca`
+    assert ca.pipecat_tts == Language.ES      # Cartesia Sonic 3.x has no `ca`
     for other in ("en", "es", "fr"):
         assert cat.language(other).pipecat_tts == cat.language(other).pipecat
 

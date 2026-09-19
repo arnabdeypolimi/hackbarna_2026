@@ -58,6 +58,9 @@ def create_app(
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
     app.state.manager = SessionManager()
+    # Fail at boot on a broken avatars.yaml, as Settings does on a bad .env,
+    # rather than turning every /config and POST /sessions into a 500.
+    get_catalog()
 
     def sweep(now: float | None = None) -> list[str]:
         """Reap expired sessions together with their buses. Returns the ids."""

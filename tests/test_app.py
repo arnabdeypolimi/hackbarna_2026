@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tv_avatar.app import create_app
@@ -51,6 +52,21 @@ def test_create_session_rejects_unknown_avatar_or_language():
         assert "nobody" in res.json()["detail"]
         # Not in the LanguageCode literal: pydantic rejects before we look it up.
         assert c.post("/sessions", json={"language": "de"}).status_code == 422
+
+
+def test_app_refuses_to_start_on_a_broken_catalog(monkeypatch, tmp_path):
+    """A bad avatars.yaml must fail at boot, like a bad .env, not on first request."""
+    from pydantic import ValidationError
+    from tv_avatar.catalog import get_catalog
+    broken = tmp_path / "avatars.yaml"
+    broken.write_text("default_avatar: ghost\nlanguages: []\navatars: []\n", encoding="utf-8")
+    monkeypatch.setenv("AVATARS_FILE", str(broken))
+    get_catalog.cache_clear()
+    try:
+        with pytest.raises(ValidationError):
+            create_app()
+    finally:
+        get_catalog.cache_clear()
 
 
 def test_create_session_rejects_a_language_the_avatar_does_not_speak():

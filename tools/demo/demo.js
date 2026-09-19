@@ -330,9 +330,9 @@ fetch("/config").then((r) => r.json()).then((c) => {
   const syncLanguages = () => {
     const avatar = c.avatars.find((a) => a.id === el.avatarPick.value);
     const allowed = c.languages.filter((l) => !avatar || avatar.languages.includes(l.code));
-    const keep = allowed.some((l) => l.code === el.languagePick.value) ? el.languagePick.value : c.default_language;
+    const codes = allowed.map((l) => l.code);
+    const keep = [el.languagePick.value, c.default_language, codes[0]].find((v) => codes.includes(v));
     fillPicker(el.languagePick, allowed, (l) => l.code, (l) => l.native_name, keep);
-    if (!el.languagePick.value && allowed.length) el.languagePick.value = allowed[0].code;
   };
   el.avatarPick.onchange = syncLanguages;
   syncLanguages();
