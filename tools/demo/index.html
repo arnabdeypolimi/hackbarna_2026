@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tv-avatar · console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <header class="masthead">
+    <h1>tv-avatar <span class="dim">/ console</span></h1>
+    <dl class="ids" id="ids">
+      <div><dt>session</dt><dd id="id-session">—</dd></div>
+      <div><dt>peer</dt><dd id="id-pc">—</dd></div>
+      <div><dt>ice</dt><dd id="id-ice">new</dd></div>
+      <div><dt>control</dt><dd id="id-ws">closed</dd></div>
+    </dl>
+  </header>
+
+  <main class="console">
+    <aside class="stage">
+      <figure class="portrait" id="portrait" data-state="off">
+        <video id="video" autoplay playsinline></video>
+        <figcaption>
+          <span id="fps" class="num">— fps</span>
+          <span id="res" class="num">—</span>
+        </figcaption>
+      </figure>
+
+      <div class="status" id="status" data-state="idle">
+        <span class="status-dot"></span>
+        <span class="status-label" id="status-label">disconnected</span>
+      </div>
+
+      <div class="mic" aria-label="microphone level">
+        <span class="mic-label">mic</span>
+        <span class="mic-track"><span class="mic-level" id="mic-level"></span></span>
+      </div>
+
+      <div class="controls">
+        <button id="connect" class="primary">Connect</button>
+        <div class="toggles">
+          <label class="toggle">
+            <input type="checkbox" id="avatar" checked />
+            <span>Avatar video</span>
+          </label>
+          <label class="toggle" title="Mute the mic while the avatar speaks. Use on laptop speakers; disables barge-in.">
+            <input type="checkbox" id="halfduplex" />
+            <span>Half-duplex</span>
+          </label>
+        </div>
+      </div>
+
+      <dl class="rtc" id="rtc">
+        <div><dt>rtt</dt><dd id="rtc-rtt" class="num">—</dd></div>
+        <div><dt>jitter</dt><dd id="rtc-jitter" class="num">—</dd></div>
+        <div><dt>lost</dt><dd id="rtc-lost" class="num">—</dd></div>
+        <div><dt>v kbps</dt><dd id="rtc-vbr" class="num">—</dd></div>
+        <div><dt>a kbps</dt><dd id="rtc-abr" class="num">—</dd></div>
+      </dl>
+
+      <div class="stack" id="stack">
+        <span>llm <b id="stack-llm">—</b></span>
+        <span>stt <b id="stack-stt">—</b></span>
+        <span>tts <b id="stack-tts">—</b></span>
+      </div>
+    </aside>
+
+    <section class="transcript" aria-live="polite">
+      <h2>Transcript</h2>
+      <ol id="transcript">
+        <li class="empty">
+          Connect, allow the microphone, and say hello.<br />
+          The avatar greets first; each turn's timings land below.
+        </li>
+      </ol>
+    </section>
+
+    <section class="turns">
+      <h2>Turns <span class="dim">user stop → first word → done</span></h2>
+      <ol id="turns"></ol>
+    </section>
+
+    <section class="wire">
+      <h2>Wire <button id="clear-wire" class="ghost">clear</button></h2>
+      <pre id="wire"></pre>
+    </section>
+  </main>
+
+  <script src="demo.js" type="module"></script>
+</body>
+</html>

@@ -11,12 +11,12 @@ import uuid
 from collections import deque
 
 from tv_avatar.agent.commands import AWAITS_RESULT, parse_command
-from tv_avatar.control.protocol import CommandMsg
+from tv_avatar.control.protocol import CommandMsg, ServerMessage
 
 
 class CommandBus:
     def __init__(self, search_timeout_s: float = 0.4) -> None:
-        self._outbound: deque[CommandMsg] = deque()
+        self._outbound: deque[ServerMessage] = deque()
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
@@ -47,11 +47,18 @@ class CommandBus:
             self._pending.pop(msg.id, None)
             self._pending_turn.pop(msg.id, None)
 
-    def _enqueue(self, msg: CommandMsg) -> None:
+    def publish(self, msg: ServerMessage) -> None:
+        """Queue a non-command server message (agent_status, transcript).
+
+        Shares the command queue so the client sees events and commands in
+        the order the pipeline produced them."""
+        self._enqueue(msg)
+
+    def _enqueue(self, msg: ServerMessage) -> None:
         self._outbound.append(msg)
         self._ready.set()
 
-    async def next_outbound(self) -> CommandMsg:
+    async def next_outbound(self) -> ServerMessage:
         while not self._outbound:
             self._ready.clear()
             await self._ready.wait()
@@ -64,7 +71,10 @@ class CommandBus:
         (spec §9, rule 4). A ``search_catalog`` handler still awaiting its
         result is released immediately with ``{"status": "cancelled"}`` so
         the interrupted turn does not sit out the 400 ms timeout."""
-        keep = deque(m for m in self._outbound if m.turn_id != turn_id)
+        keep = deque(
+            m for m in self._outbound
+            if not isinstance(m, CommandMsg) or m.turn_id != turn_id
+        )
         dropped = len(self._outbound) - len(keep)
         self._outbound = keep
         if not self._outbound:

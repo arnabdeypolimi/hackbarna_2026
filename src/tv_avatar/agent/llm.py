@@ -24,10 +24,22 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.settings import LLMSettings
 
+from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
 from tv_avatar.session.state import SessionState
+
+
+def build_llm(settings: Settings) -> OpenAILLMService:
+    """Nebius Token Factory exposes an OpenAI-compatible API, so the stock
+    OpenAI service is the provider adapter (spec D4)."""
+    return OpenAILLMService(
+        api_key=settings.nebius_api_key,
+        base_url=settings.nebius_base_url,
+        settings=OpenAILLMService.Settings(model=settings.llm_model),
+    )
 
 
 @dataclass
