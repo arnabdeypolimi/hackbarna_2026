@@ -57,6 +57,19 @@ def test_shipped_igor_is_english_only_with_his_own_voice():
         cat.resolve("igor", "ca")
 
 
+def test_shipped_lucia_is_spanish_only_with_a_distinct_anam_avatar():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    lucia = cat.avatar("lucia")
+    assert lucia.languages == ("es",)
+    assert lucia.anam_avatar_id != cat.avatar("cara").anam_avatar_id
+    assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
+    assert cat.resolve("lucia", "es").language.pipecat == Language.ES
+    # Omitting the language falls back to hers, not to the catalog default (en).
+    assert cat.resolve("lucia").language.code == "es"
+    with pytest.raises(KeyError, match="does not speak 'en'"):
+        cat.resolve("lucia", "en")
+
+
 def test_get_catalog_is_cached_and_honours_env_override(monkeypatch, tmp_path):
     assert get_catalog() is get_catalog()
     custom = tmp_path / "c.yaml"

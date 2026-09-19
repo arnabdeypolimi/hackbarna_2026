@@ -111,11 +111,17 @@ class AvatarCatalog(BaseModel):
     def resolve(self, avatar_id: str | None = None, language: str | None = None) -> SessionPersona:
         """Pick a persona, falling back to the catalog defaults.
 
+        When ``language`` is omitted and the avatar cannot speak the catalog
+        default, its first listed language is used instead, so a Spanish-only
+        avatar can be requested without also naming ``es``.
+
         Raises ``KeyError`` for an unknown id or code, and for a pairing the
         avatar does not allow (an English-only avatar asked to speak Catalan).
         """
         avatar = self.avatar(avatar_id or self.default_avatar)
-        lang = self.language(language or self.default_language)
+        if language is None:
+            language = self.default_language if avatar.speaks(self.default_language) else avatar.languages[0]
+        lang = self.language(language)
         if not avatar.speaks(lang.code):
             raise KeyError(f"avatar {avatar.id!r} does not speak {lang.code!r}; "
                            f"it speaks: {list(avatar.languages or ())}")

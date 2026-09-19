@@ -40,3 +40,11 @@ avatars:
     anam_avatar_model: cara-4
     voice: 228fca29-3a0a-435c-8728-5cb483251068
     languages: [en]
+  - id: lucia
+    name: Lucía
+    description: Female host. Spanish only.
+    anam_avatar_id: dc9aa3e1-32f2-499e-9921-ecabac1076fc
+    anam_avatar_model: cara-4
+    # Cartesia "Spanish-speaking Lady": native Castilian, conversational.
+    voice: 846d6cb0-2301-48b6-9683-48f5618ea2f6
+    languages: [es]
