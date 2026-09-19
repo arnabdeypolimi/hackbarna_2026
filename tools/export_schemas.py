@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from tv_avatar.agent.commands import COMMAND_MODELS, AWAITS_RESULT, Verb
+from tv_avatar.agent.commands import AWAITS_RESULT, COMMAND_MODELS
 from tv_avatar.control.protocol import (
     PROTOCOL_VERSION,
     ClientMessage,
