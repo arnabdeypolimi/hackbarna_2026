@@ -7,7 +7,7 @@ loop passes around instead of positional parameters, a `marks` dict and
 """
 import json
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 from tv_avatar.agent.envelope import REGISTRY
@@ -52,6 +52,44 @@ class TurnMetrics:
             elif value is not None or f.name in ("cycles", "n_actions", "intent"):
                 out[f.name] = value
         return out
+
+
+#: TV verbs whose title_id, emitted after recommendation results came back,
+#: means the agent put that title in front of the viewer.
+_OFFERING_VERBS = frozenset({"focus", "open_details", "play"})
+
+
+@dataclass
+class TurnTrace:
+    """What the turn heard, said and pointed at — for memory ingest and the
+    viewing log. Recommendation results are candidates; only the ones the agent
+    then named or focused count as offered (see `offered_ids`)."""
+    user_text: str = ""
+    said: list[str] = field(default_factory=list)
+    candidates: dict[str, str] = field(default_factory=dict)  # title_id -> name
+    referenced_ids: set[str] = field(default_factory=set)
+
+    def spoken(self) -> str:
+        return "".join(self.said)
+
+    def add_results(self, results: tuple["ToolResult", ...]) -> None:
+        for r in results:
+            if r.verb == "recommend_titles":
+                for t in r.payload.get("titles") or []:
+                    if t.get("title_id") and t.get("name"):
+                        self.candidates[str(t["title_id"])] = str(t["name"])
+
+    def add_action(self, verb: str, args: dict[str, Any], *, after_results: bool) -> None:
+        if after_results and verb in _OFFERING_VERBS and args.get("title_id"):
+            self.referenced_ids.add(str(args["title_id"]))
+
+    def offered_ids(self, extra_spoken: str = "") -> list[str]:
+        """Candidates the agent focused/opened/played, or named in what it said.
+        Titles are spoken verbatim (persona rule), so a case-folded substring
+        match on the name is the deliberate, simple heuristic."""
+        spoken = (self.spoken() + " " + extra_spoken).casefold()
+        return [tid for tid, name in self.candidates.items()
+                if tid in self.referenced_ids or (name and name.casefold() in spoken)]
 
 
 @dataclass(frozen=True)

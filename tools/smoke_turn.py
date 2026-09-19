@@ -90,7 +90,7 @@ async def main(user_id: str, turns: list[str]) -> int:
     tools = InternalTools(runtime.recs, runtime.lane, runtime.catalog, recorder=runtime.recorder,
                           timeout_s=settings.tool_timeout_s)
     agent = SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
-                            catalog=runtime.catalog, tools=tools)
+                            catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)
 
     print(f"\nuser_id={user_id}  screen: " + " | ".join(t.label() for t in tiles) + "\n")
     for text in turns:

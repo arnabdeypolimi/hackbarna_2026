@@ -405,6 +405,84 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     assert lane.ingests == [("u1", "recommend me a heist movie", "Let me look.")]
 
 
+class FakeRecorder:
+    """HistoryRecorder stand-in: records rec_shown calls with timestamps."""
+    def __init__(self) -> None:
+        self.shown: list[tuple[float, list[str]]] = []
+
+    async def on_rec_shown(self, user_id, ids):
+        self.shown.append((time.perf_counter(), list(ids)))
+
+    def spawn(self, coro):
+        return asyncio.create_task(coro)
+
+
+class FiveTitles(FakeTools):
+    async def run(self, action, user_id):
+        await super().run(action, user_id)
+        return {"titles": [{"title_id": i, "name": n} for i, n in
+                           (("949", "Heat"), ("27205", "Inception"), ("680", "Pulp Fiction"),
+                            ("8", "Drive"), ("9", "Extra"))]}
+
+
+def _agent_with_recorder(client, settings=None, **kw):
+    recorder = FakeRecorder()
+    session = SessionState("sess_t", "tok", 0, user_id="u1")
+    agent = SGRAgentService(settings or _settings(), kw.pop("bus", RecordingBus()), kw.pop("lane", FakeMemoryLane()),
+                            None, None, session, client=client, tools=kw.pop("tools", FiveTitles()),
+                            recorder=recorder)
+    return agent, recorder
+
+
+async def test_rec_shown_records_only_what_was_offered_after_the_turn_ends():
+    """Five candidates came back; the agent named two and focused one of them.
+    Only those two are logged as shown, and only once the turn has closed."""
+    agent, recorder = _agent_with_recorder(FakeOpenAI([RECO_1, RECO_2]))
+    end_at: list[float] = []
+    original_push = agent.push_frame
+
+    async def timed_push(frame, direction=FrameDirection.DOWNSTREAM):   # push is async to the sink
+        if isinstance(frame, LLMFullResponseEndFrame):
+            end_at.append(time.perf_counter())
+        await original_push(frame, direction)
+
+    agent.push_frame = timed_push
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
+    await asyncio.sleep(0.02)
+    assert [ids for _, ids in recorder.shown] == [["949", "27205"]]
+    assert recorder.shown[0][0] > end_at[0]
+
+
+async def test_rec_shown_from_the_templated_fallback():
+    class TwoSpeeds(FakeOpenAI):
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeStream(self.scripts.pop(0), delay_s=0.0 if len(self.calls) == 1 else 0.3)
+
+    settings = _settings().model_copy(update={"cycle_first_byte_s": 0.15})
+    agent, recorder = _agent_with_recorder(TwoSpeeds([RECO_1, RECO_2]), settings)
+    sink = TimingSink()
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
+    await asyncio.sleep(0.02)
+    assert "How about Heat, Inception, or Pulp Fiction?" in _spoken(sink)
+    assert [ids for _, ids in recorder.shown] == [["949", "27205", "680"]]   # the three named + focus on 949
+
+
+async def test_interrupted_turn_records_nothing_as_shown():
+    slow = FakeOpenAI([RECO_1, RECO_2], delay_s=0.05)
+    agent, recorder = _agent_with_recorder(slow)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend")), SleepFrame(0.3), InterruptionFrame()])
+    await asyncio.sleep(0.02)
+    assert recorder.shown == []
+
+
+async def test_a_turn_without_recommendations_records_nothing():
+    agent, recorder = _agent_with_recorder(FakeOpenAI([PLAY]))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one"))])
+    await asyncio.sleep(0.02)
+    assert recorder.shown == []
+
+
 def test_render_fallback_shapes():
     from tv_avatar.agent.service import render_fallback
     from tv_avatar.agent.turn import ToolResult

@@ -48,9 +48,16 @@ from tv_avatar.agent.stream_parse import (
     SayDone,
 )
 from tv_avatar.agent.tools import InternalTools
-from tv_avatar.agent.turn import CycleOutcome, ToolResult, TurnContext, TurnMetrics
+from tv_avatar.agent.turn import (
+    CycleOutcome,
+    ToolResult,
+    TurnContext,
+    TurnMetrics,
+    TurnTrace,
+)
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
+from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.memory.lane import MemoryBlock, MemoryLane
 from tv_avatar.recs.catalog import CatalogStore
@@ -98,7 +105,8 @@ class SGRAgentService(LLMService):
     def __init__(self, settings: Settings, bus: CommandBus, lane: MemoryLane,
                  recs: RecsEngine | None, history: HistoryStore | None, session: SessionState,
                  *, catalog: CatalogStore | None = None, client: Any | None = None,
-                 tools: InternalTools | None = None, **kwargs) -> None:
+                 tools: InternalTools | None = None, recorder: HistoryRecorder | None = None,
+                 **kwargs) -> None:
         kwargs.setdefault("settings", LLMSettings(
             model=settings.llm_model, temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
             system_instruction=None, top_p=None, top_k=None, frequency_penalty=None,
@@ -113,15 +121,16 @@ class SGRAgentService(LLMService):
         self._catalog = catalog
         self._session = session
         self._client = client or AsyncOpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
-        self._tools = tools or InternalTools(recs, lane, catalog, timeout_s=settings.tool_timeout_s)
+        self._tools = tools or InternalTools(recs, lane, catalog, recorder=recorder,
+                                             timeout_s=settings.tool_timeout_s)
+        self._recorder = recorder
         self._turn_task: asyncio.Task | None = None
         self._turn_id: str | None = None
         self._interrupted = False
-        # What the current turn heard and has said so far — ingested into memory
+        # What the current turn heard, said and pointed at — ingested into memory
         # at turn end, or on interruption with the partial reply (D6: the user's
         # words are a memory even when the answer was cut off).
-        self._turn_user_text = ""
-        self._turn_said: list[str] = []
+        self._trace = TurnTrace()
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -150,8 +159,8 @@ class SGRAgentService(LLMService):
 
     def _schedule_ingest(self, *, interrupted: bool) -> None:
         """Off the turn: never awaited by the pipeline."""
-        user_text, said = self._turn_user_text, "".join(self._turn_said)
-        self._turn_user_text, self._turn_said = "", []
+        trace, self._trace = self._trace, TurnTrace()
+        user_text, said = trace.user_text, trace.spoken()
         if not user_text.strip() or is_greeting(user_text):
             return
         user_id = self._session.user_id or self._session.session_id
@@ -188,7 +197,7 @@ class SGRAgentService(LLMService):
         await self.start_processing_metrics()
         messages = list(context.get_messages())
         user_text = _last_user_text(messages)
-        self._turn_user_text, self._turn_said = user_text, []
+        self._trace = TurnTrace(user_text=user_text)
         log.debug("turn open", step="start", user_text=user_text, history_msgs=len(messages),
                   screen=self._session.screen is not None)
 
@@ -212,6 +221,8 @@ class SGRAgentService(LLMService):
         log.debug("cycle start", step="cycle", cycle=1, n_messages=len(messages))
         outcome = await self._cycle(messages, ctx, 1, metrics)
         log.debug("cycle envelope", step="cycle", cycle=1, raw=outcome.raw)
+        self._trace.add_results(outcome.results)
+        fallback_text = ""
         # The SGR loop: a cycle-earning tool result buys one more LLM cycle, up
         # to the cap. Every follow-up cycle must start speaking within its budget
         # or the results are spoken from a template — the loop never outlives it.
@@ -230,13 +241,15 @@ class SGRAgentService(LLMService):
             budgeted = await self._cycle_with_budget(messages, ctx, cycle, metrics)
             if budgeted is None:
                 metrics.fallback = True
-                await self._speak_fallback(outcome.results, ctx)
+                fallback_text = await self._speak_fallback(outcome.results, ctx)
                 break
             outcome = budgeted
+            self._trace.add_results(outcome.results)
         log.debug("cycle end", step="cycle", cycle=metrics.cycles, next_cycle=False,
                   awaited=[r.verb for r in outcome.results])
         await self.push_frame(LLMFullResponseEndFrame())
         await self.stop_processing_metrics()
+        self._record_offered(ctx, fallback_text)
         metrics.total_ms = ctx.elapsed_ms()
         log.debug("turn close", step="end", **metrics.as_log_fields())
         log.info("turn", **metrics.as_log_fields())
@@ -266,15 +279,26 @@ class SGRAgentService(LLMService):
         ctx.log.debug("cycle envelope", step="cycle", cycle=cycle, raw=outcome.raw)
         return outcome
 
-    async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext) -> None:
+    def _record_offered(self, ctx: TurnContext, fallback_text: str) -> None:
+        """Viewing log: the recommendation candidates the agent actually named or
+        focused this turn — not everything the tool returned. Off the turn."""
+        offered = self._trace.offered_ids(fallback_text)
+        if offered and self._recorder is not None:
+            ctx.log.debug("recommendations offered", step="history", title_ids=offered)
+            self._recorder.spawn(self._recorder.on_rec_shown(ctx.user_id, offered))
+
+    async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext) -> str:
+        """Speak the templated answer; returns its text for the offered-titles log."""
         text, actions = render_fallback(results)
         ctx.log.debug("fallback", step="say", text=text, actions=actions)
-        # Deliberately not added to _turn_said: a template built from substitute
-        # results is not the agent's reply, and the memory profile must not learn
-        # the viewer "wanted" whatever the popular channel happened to return.
+        # Deliberately not added to the trace's `said`: a template built from
+        # substitute results is not the agent's reply, and the memory profile must
+        # not learn the viewer "wanted" whatever the popular channel returned.
         await self._speak(text)
         for verb, args in actions:
+            self._trace.add_action(verb, args, after_results=True)
             await self.dispatch_action(parse_action({"verb": verb, **args}), ctx)
+        return text
 
     async def _speak(self, text: str) -> None:
         """Hand one complete sentence to TTS.
@@ -328,7 +352,7 @@ class SGRAgentService(LLMService):
                             log.debug("intent", step="intent", cycle=cycle, intent=intent, ms=ms())
                         case SayDelta(text=text):
                             said.append(text)
-                            self._turn_said.append(text)
+                            self._trace.said.append(text)
                             if first_say_pending:
                                 first_say_pending = False
                                 if first_say is not None:
@@ -358,9 +382,10 @@ class SGRAgentService(LLMService):
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
                                 continue  # no open-ended loops on a voice interface
-                            log.debug("action ready", step="action", cycle=cycle, verb=verb,
-                                      args=action.model_dump(exclude={"verb"}, exclude_none=True),
+                            args = action.model_dump(exclude={"verb"}, exclude_none=True)
+                            log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
                                       awaited=spec.awaits_result, ms=ms())
+                            self._trace.add_action(verb, args, after_results=cycle > 1)
                             task = asyncio.create_task(self.dispatch_action(action, ctx))
                             if spec.awaits_result:
                                 awaited.append((verb, task))

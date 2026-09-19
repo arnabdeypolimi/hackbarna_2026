@@ -86,14 +86,12 @@ class InternalTools:
                 "why": r.reasons,
             })
         # With a free-text query, "popular" is the engine's fill-in for nothing having
-        # matched it. Those are substitutes, not recommendations: the model is told so,
-        # and they are not logged as shown — otherwise the next greeting offers to
-        # "carry on" with whatever happened to be popular. Without a query (a genre or
-        # year request) popular-within-the-filters is the genuine answer.
+        # matched it. Those are substitutes, not recommendations: the model is told so.
+        # Without a query (a genre or year request) popular-within-the-filters is the
+        # genuine answer. Nothing is logged as shown here — the turn records the
+        # titles the agent actually went on to name or focus (TurnTrace.offered_ids).
         substitute = bool(req.query) and not req.similar_to
         matched = [t for t in titles if not (substitute and t["why"] == ["popular"])]
-        if self._recorder is not None and matched:
-            self._recorder.spawn(self._recorder.on_rec_shown(user_id, [t["title_id"] for t in matched]))
         result: dict[str, Any] = {"titles": titles, "matched": bool(matched)}
         if titles and not matched:
             result["note"] = ("nothing in the catalog matched the request; these are popular fill-ins — "

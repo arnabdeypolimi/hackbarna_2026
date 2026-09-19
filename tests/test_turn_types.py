@@ -1,5 +1,35 @@
 """The typed turn state that replaced the `marks` dict and (verb, dict) tuples."""
-from tv_avatar.agent.turn import CycleOutcome, ToolResult, TurnMetrics
+from tv_avatar.agent.turn import CycleOutcome, ToolResult, TurnMetrics, TurnTrace
+
+
+def _reco(*names: tuple[str, str]) -> ToolResult:
+    return ToolResult("recommend_titles", {"titles": [{"title_id": i, "name": n} for i, n in names]})
+
+
+def test_offered_ids_are_the_candidates_named_or_pointed_at():
+    trace = TurnTrace()
+    trace.add_results((_reco(("949", "Heat"), ("27205", "Inception"), ("680", "Pulp Fiction"),
+                             ("8", "Drive"), ("9", "Extra")),))
+    trace.said += ["Let me look.", "Try Heat or Inception."]
+    trace.add_action("focus", {"title_id": "949"}, after_results=True)
+    assert trace.offered_ids() == ["949", "27205"]
+
+
+def test_offered_ids_match_names_case_insensitively_and_from_fallback_text():
+    trace = TurnTrace()
+    trace.add_results((_reco(("1", "The Nun II"), ("2", "Saw X")),))
+    assert trace.offered_ids() == []
+    assert trace.offered_ids("How about THE NUN II from 2023?") == ["1"]
+
+
+def test_actions_before_results_do_not_count_as_offers():
+    """A cycle-1 `focus` targets the screen, not a recommendation."""
+    trace = TurnTrace()
+    trace.add_results((_reco(("949", "Heat"),),))
+    trace.add_action("focus", {"title_id": "949"}, after_results=False)
+    trace.add_action("pause", {}, after_results=True)
+    trace.add_action("focus", {"title_id": "not-a-candidate"}, after_results=True)
+    assert trace.offered_ids() == []
 
 
 def test_metrics_log_fields_omit_unset_and_false_fallback():

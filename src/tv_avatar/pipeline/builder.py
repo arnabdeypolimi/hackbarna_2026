@@ -42,7 +42,7 @@ def build_agent(settings: Settings, runtime: Runtime, session: SessionState, bus
             tools = InternalTools(runtime.recs, runtime.lane, runtime.catalog,
                                   recorder=runtime.recorder, timeout_s=settings.tool_timeout_s)
             return SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
-                                   catalog=runtime.catalog, tools=tools)
+                                   catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)
         case "chat":
             return build_llm(settings)
         case _:
