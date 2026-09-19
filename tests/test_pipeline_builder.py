@@ -34,6 +34,35 @@ def test_stt_uses_configured_model_and_region():
     assert stt._ttfs_p99_latency == RESON8_TTFS_P99_S
 
 
+async def test_stt_coalesces_audio_under_slng_message_rate_limit(monkeypatch):
+    """SLNG closes the socket past 2000 msgs/min; 20 ms WebRTC frames are 50/s."""
+    from pipecat.frames.frames import VADUserStoppedSpeakingFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat_slng import SlngSTTService
+
+    sent: list[int] = []
+
+    async def fake_run_stt(self, audio):
+        sent.append(len(audio))
+        yield None
+
+    monkeypatch.setattr(SlngSTTService, "run_stt", fake_run_stt)
+    stt = build_stt(_settings())
+    stt._sample_rate = 16000                    # what setup() derives from the pipeline
+    frame_20ms = b"\0" * 640
+    for _ in range(10):                          # 200 ms of audio
+        async for _ in stt.run_stt(frame_20ms):
+            pass
+    assert sent == [1920, 1920, 1920]            # 60 ms sends -> ~17 msgs/s, not 50
+
+    async def no_parent(frame, direction):       # the tail is flushed before `finalize`
+        pass
+
+    monkeypatch.setattr(SlngSTTService, "process_frame", lambda self, f, d: no_parent(f, d))
+    await stt.process_frame(VADUserStoppedSpeakingFrame(stop_secs=0.2), FrameDirection.DOWNSTREAM)
+    assert sent == [1920, 1920, 1920, 640]
+
+
 def test_tts_uses_configured_voice_encoding_and_region():
     tts = build_tts(_settings())
     url, headers, init = tts._connection_options()

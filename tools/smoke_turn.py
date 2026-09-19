@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from loguru import logger
-from pipecat.frames.frames import LLMContextFrame, LLMTextFrame
+from pipecat.frames.frames import AggregatedTextFrame, LLMContextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameProcessor
@@ -62,7 +62,7 @@ class Sink(FrameProcessor):
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
-        if isinstance(frame, LLMTextFrame):
+        if isinstance(frame, AggregatedTextFrame):
             self.said.append(frame.text)
         await self.push_frame(frame, direction)
 
@@ -107,7 +107,7 @@ async def main(user_id: str, turns: list[str]) -> int:
         await run_test(Pipeline([injector, agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
                        expected_down_frames=None, start_timeout=5)
         elapsed = round((time.perf_counter() - t0) * 1000)
-        said = "".join(sink.said)
+        said = " ".join(sink.said)
         context.add_message({"role": "assistant", "content": said})
         commands: list[CommandMsg] = []
         while True:

@@ -2,9 +2,10 @@
 
 Feeds raw JSON text a chunk at a time — chunk boundaries are arbitrary — and
 emits `SayDelta` for characters inside the top-level `"say"` string as they
-arrive, `ActionReady` for each completed element of `"actions"`, `IntentReady`
-once the intent string closes, and `Done` when the top-level object closes.
-Handles any key order. Never raises: malformed input yields nothing more.
+arrive, `SayDone` when that string closes, `ActionReady` for each completed
+element of `"actions"`, `IntentReady` once the intent string closes, and
+`Done` when the top-level object closes. Handles any key order. Never raises:
+malformed input yields nothing more.
 """
 import json
 from dataclasses import dataclass
@@ -15,6 +16,11 @@ _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r"
 @dataclass(frozen=True)
 class SayDelta:
     text: str
+
+
+@dataclass(frozen=True)
+class SayDone:
+    """The `say` string closed: whatever is buffered is the whole reply."""
 
 
 @dataclass(frozen=True)
@@ -32,7 +38,7 @@ class Done:
     pass
 
 
-Event = SayDelta | ActionReady | IntentReady | Done
+Event = SayDelta | SayDone | ActionReady | IntentReady | Done
 
 
 class EnvelopeStreamer:
@@ -76,7 +82,7 @@ class EnvelopeStreamer:
     # happened after the say string closed in that same chunk.
     def _say_insert_index(self, events: list[Event]) -> int:
         for i, e in enumerate(events):
-            if isinstance(e, (ActionReady, Done)) and not self._say_mode:
+            if isinstance(e, (SayDone, ActionReady, Done)) and not self._say_mode:
                 return i
         return len(events)
 
@@ -172,6 +178,7 @@ class EnvelopeStreamer:
         elif self._str_role == "value" and self._depth == 1:
             if self._say_mode:
                 self._say_mode = False
+                events.append(SayDone())
             elif self._top_key == "intent":
                 events.append(IntentReady(text))
             self._top_key = None

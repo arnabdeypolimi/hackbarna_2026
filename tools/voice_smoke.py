@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     Frame,
     InputAudioRawFrame,
     LLMContextFrame,
@@ -113,7 +114,7 @@ class Tap(FrameProcessor):
             s.transcript = (s.transcript + " " + frame.text).strip()
         elif isinstance(frame, LLMContextFrame):
             s.t_context = s.t_context or now
-        elif isinstance(frame, LLMTextFrame):
+        elif isinstance(frame, (LLMTextFrame, AggregatedTextFrame)):
             s.t_first_text = s.t_first_text or now
         elif isinstance(frame, TTSTextFrame):
             s.said.append(frame.text)
@@ -205,7 +206,7 @@ async def main(user_id: str, turns: list[str]) -> int:
         Tap(reply),                      # LLMContextFrame (turn opens)
         ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history),
         build_agent(settings, runtime, session, bus),
-        Tap(reply),                      # first say byte (LLMTextFrame)
+        Tap(reply),                      # first say sentence (AggregatedTextFrame)
         build_tts(settings),
         Tap(reply),                      # spoken text, first audio
         assistant_agg,

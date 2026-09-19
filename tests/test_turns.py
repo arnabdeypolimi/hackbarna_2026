@@ -30,6 +30,16 @@ def test_full_duplex_is_the_default():
     assert params.vad_analyzer is not None
 
 
+def test_vad_is_stricter_than_pipecat_defaults():
+    """Every VAD start cancels TTS; room noise must not qualify (2026-09-19 field log)."""
+    from pipecat.audio.vad.vad_analyzer import VAD_CONFIDENCE, VAD_MIN_VOLUME, VAD_START_SECS
+    vad = user_aggregator_params().vad_analyzer.params
+    assert vad.confidence > VAD_CONFIDENCE
+    assert vad.start_secs > VAD_START_SECS
+    assert vad.min_volume > VAD_MIN_VOLUME
+    assert vad.min_volume <= 0.7  # ~-40 LUFS: a quiet viewer must still get through
+
+
 def test_turn_ends_on_a_silence_timer_not_the_smart_turn_model():
     params = user_aggregator_params(turn_silence_s=0.7)
     (stop,) = params.user_turn_strategies.stop

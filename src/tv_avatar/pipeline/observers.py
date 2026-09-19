@@ -10,6 +10,7 @@ from collections import deque
 
 from loguru import logger
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
@@ -121,7 +122,8 @@ class TurnLatencyObserver(_DedupObserver):
             # The assistant aggregator re-pushes a context frame after the reply;
             # only the first one per turn marks the start of inference.
             self._t_context = now
-        elif isinstance(frame, LLMTextFrame) and self._t_first_text is None:
+        elif isinstance(frame, (LLMTextFrame, AggregatedTextFrame)) and self._t_first_text is None:
+            # LLMTextFrame from the chat LLM; the SGR agent hands TTS whole sentences.
             self._t_first_text = now
         elif isinstance(frame, InterruptionFrame):
             self._t_interrupt = now

@@ -6,6 +6,7 @@ from tv_avatar.agent.stream_parse import (
     EnvelopeStreamer,
     IntentReady,
     SayDelta,
+    SayDone,
 )
 
 ENVELOPE = '{"intent":"control","say":"Putting that on.","actions":[{"verb":"play","title_id":"1"}]}'
@@ -30,6 +31,18 @@ def test_streamer_emits_say_deltas_then_actions():
     assert "ActionReady" in kinds and kinds[-1] == "Done"
     assert _say(events) == "Putting that on."
     assert [e.action for e in events if isinstance(e, ActionReady)] == [{"verb": "play", "title_id": "1"}]
+
+
+def test_say_done_follows_the_last_delta_and_precedes_actions():
+    for events in (_feed_chars(ENVELOPE), EnvelopeStreamer().feed(ENVELOPE)):
+        kinds = [type(e).__name__ for e in events]
+        assert kinds.count("SayDone") == 1
+        i = kinds.index("SayDone")
+        assert "SayDelta" not in kinds[i:] and "ActionReady" not in kinds[:i]
+    # Whole envelope in one chunk: the delta gathered across the chunk still lands before SayDone.
+    whole = EnvelopeStreamer().feed(ENVELOPE)
+    assert [type(e) for e in whole[:3]] == [IntentReady, SayDelta, SayDone]
+    assert not any(isinstance(e, SayDone) for e in _feed_chars('{"intent":"chitchat","actions":[]}'))
 
 
 def test_chunk_boundaries_do_not_matter():

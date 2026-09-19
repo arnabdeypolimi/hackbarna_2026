@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     Frame,
     InterruptionFrame,
     LLMContextFrame,
@@ -75,16 +76,26 @@ class TimingSink(FrameProcessor):
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         self.frames.append(frame)
-        if isinstance(frame, LLMTextFrame) and self.first_text_at is None:
+        if isinstance(frame, AggregatedTextFrame) and self.first_text_at is None:
             self.first_text_at = time.perf_counter()
         await self.push_frame(frame, direction)
+
+
+def _spoken(sink: TimingSink) -> list[str]:
+    """Sentences handed to TTS, in order. The agent never streams raw
+    LLMTextFrames: the TTS aggregator's lookahead would hold a cycle's last
+    sentence until the next cycle's text arrived."""
+    assert not any(isinstance(f, LLMTextFrame) for f in sink.frames)
+    return [f.text for f in sink.frames if isinstance(f, AggregatedTextFrame)]
 
 
 class FakeTools(InternalTools):
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.first_call_at: float | None = None
 
     async def run(self, verb, args, user_id, memory_text):
+        self.first_call_at = self.first_call_at or time.perf_counter()
         self.calls.append((verb, args))
         return {"titles": [{"title_id": "949", "name": "Heat"}, {"title_id": "27205", "name": "Inception"}]}
 
@@ -110,40 +121,58 @@ async def _run(agent, sink, frames):
                           start_timeout=5.0)
 
 
-async def test_say_streams_as_llm_text_frames_before_actions_dispatch():
-    bus, sink = RecordingBus(), TimingSink()
-    agent = _agent(FakeOpenAI([PLAY]), bus)
+def _time_first_speech(agent) -> list[float]:
+    """When the agent *pushed* its first sentence (the sink sees it a queue hop later)."""
     pushed_text_at: list[float] = []
     original_push = agent.push_frame
 
     async def timed_push(frame, direction=FrameDirection.DOWNSTREAM):
-        if isinstance(frame, LLMTextFrame) and not pushed_text_at:
+        if isinstance(frame, AggregatedTextFrame) and not pushed_text_at:
             pushed_text_at.append(time.perf_counter())
         await original_push(frame, direction)
 
     agent.push_frame = timed_push
+    return pushed_text_at
+
+
+async def test_say_reaches_tts_as_sentences_before_actions_dispatch():
+    bus, sink = RecordingBus(), TimingSink()
+    agent = _agent(FakeOpenAI([PLAY]), bus)
+    pushed_text_at = _time_first_speech(agent)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("play the first one"))])
 
     kinds = [type(f).__name__ for f in sink.frames
              if not type(f).__name__.startswith(("Start", "End", "LLMServiceMetadata"))]
     assert kinds[0] == "LLMFullResponseStartFrame"
-    assert "LLMTextFrame" in kinds and kinds[-1] == "LLMFullResponseEndFrame"
-    assert "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame)) == "On it."
+    assert "AggregatedTextFrame" in kinds and kinds[-1] == "LLMFullResponseEndFrame"
+    assert _spoken(sink) == ["On it."]
     assert pushed_text_at[0] < bus.first_dispatch_at          # filler before action
     assert (await bus.next_outbound()).verb == "play"
+
+
+async def test_multi_sentence_say_is_split_and_streamed_per_sentence():
+    sink = TimingSink()
+    agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
+                   RecordingBus())
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("something depressing"))])
+    # The trailing fragment has no terminal punctuation: it must still be spoken.
+    assert _spoken(sink) == ["Sure thing.", "Rainy, slow and sad it is"]
 
 
 async def test_awaited_action_triggers_second_cycle():
     bus, sink, tools = RecordingBus(), TimingSink(), FakeTools()
     client = FakeOpenAI([RECO_1, RECO_2])
     agent = _agent(client, bus, tools=tools)
+    pushed_text_at = _time_first_speech(agent)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
 
     assert [c[0] for c in tools.calls] == ["recommend_titles"]
     assert len(client.calls) == 2
     assert "Heat" in client.calls[1]["messages"][-1]["content"]      # results fed back
-    said = "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame))
-    assert said == "Let me look.Try Heat or Inception."
+    # Two sentences, two frames: the filler is spoken while the tool runs and
+    # the answer is never glued to it ("Let me look.Try Heat...").
+    assert _spoken(sink) == ["Let me look.", "Try Heat or Inception."]
+    assert pushed_text_at[0] < tools.first_call_at
     assert sum(isinstance(f, LLMFullResponseStartFrame) for f in sink.frames) == 1
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
     assert (await bus.next_outbound()).verb == "focus"
@@ -222,6 +251,37 @@ async def test_greeting_instruction_is_never_ingested():
     assert lane.ingests == []
 
 
+async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp_path):
+    """A fresh session for a returning user_id opens with what we talked about last time in the prompt."""
+    import time as _t
+
+    from tv_avatar.agent.prompt import GREETING_INSTRUCTION
+    from tv_avatar.history.store import Event, EventKind, HistoryStore
+    from tv_avatar.recs.catalog import CatalogItem
+
+    class Cat:
+        def lookup(self, title_id):
+            return CatalogItem(title_id="155", name="The Dark Knight", year=2008) if title_id == "155" else None
+
+    history = HistoryStore(str(tmp_path / "h.db"))
+    await history.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="155", ts=_t.time() - 86400 - 60))
+    lane = FakeMemoryLane({"u1": MemoryBlock.from_lines(["loves Batman films"], [])})
+    client = FakeOpenAI(['{"intent":"chitchat","say":"Welcome back, want to carry on with The Dark Knight?","actions":[]}'])
+    session = SessionState("sess_new", "tok", 0, user_id="u1")  # new session, same user
+    agent = SGRAgentService(_settings(), RecordingBus(), lane, None, history, session,
+                            catalog=Cat(), client=client, tools=FakeTools())
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(GREETING_INSTRUCTION))])
+    await history.close()
+
+    system, user = client.calls[0]["messages"][0]["content"], client.calls[0]["messages"][-1]["content"]
+    assert "Recently recommended: The Dark Knight (2008) (yesterday)" in system
+    # The greeting brief repeats the context right next to the instruction.
+    assert user.startswith(GREETING_INSTRUCTION)
+    assert "Recently recommended: The Dark Knight (2008) (yesterday)" in user
+    assert "loves Batman films" in user
+    assert lane.ingests == []  # the synthetic greeting still is not stored as a user utterance
+
+
 async def test_slow_llm_gets_a_spoken_filler():
     settings = _settings().model_copy(update={"filler_after_ms": 100})
     session = SessionState("sess_t", "tok", 0, user_id="u1")
@@ -233,8 +293,8 @@ async def test_slow_llm_gets_a_spoken_filler():
     await _run(agent, sink, [LLMContextFrame(context=_ctx("hello"))])
     kinds = [type(f).__name__ for f in sink.frames]
     assert "TTSSpeakFrame" in kinds
-    assert kinds.index("TTSSpeakFrame") < kinds.index("LLMTextFrame")
-    assert "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame)) == "Here you go."
+    assert kinds.index("TTSSpeakFrame") < kinds.index("AggregatedTextFrame")
+    assert _spoken(sink) == ["Here you go."]
 
 
 async def test_fast_llm_gets_no_filler():
@@ -262,8 +322,8 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     agent = SGRAgentService(settings, bus, FakeMemoryLane(), None, None, session, client=client, tools=tools)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
 
-    said = "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame))
-    assert said.startswith("Let me look.")
+    said = _spoken(sink)
+    assert said[0] == "Let me look."
     assert "How about Heat, or Inception?" in said            # from FakeTools' two titles
     assert (await bus.next_outbound()).verb == "focus"        # first title focused
     assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled

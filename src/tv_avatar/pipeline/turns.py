@@ -33,6 +33,15 @@ DEFAULT_TURN_SILENCE_S = 0.5
 #: threshold above runs on top of it, so end-to-end endpointing is the sum.
 VAD_STOP_SECS = 0.2
 
+#: Barge-in is VAD-driven, so every Silero start cancels TTS. In a live room
+#: (2026-09-19) cross-talk and noise started turns that never produced a word
+#: and cut replies before their first audio byte. Pipecat defaults are
+#: confidence 0.7 / start 0.2 s / volume 0.6 (~-50 LUFS); these demand a
+#: sustained, clearly voiced, near-mic signal (~-40 LUFS) before interrupting.
+VAD_CONFIDENCE = 0.85
+VAD_START_SECS = 0.35
+VAD_MIN_VOLUME = 0.7
+
 #: How long a turn may stay open with VAD activity but no transcript before it
 #: is abandoned. Speaker echo and room noise trip Silero without producing
 #: words; the default 5 s left the avatar mute for that long.
@@ -74,10 +83,8 @@ def user_aggregator_params(
     """
     return LLMUserAggregatorParams(
         vad_analyzer=SileroVADAnalyzer(
-            # Slightly stricter than default: fewer false starts on echo and
-            # room noise.
-            params=VADParams(confidence=0.75, start_secs=0.2,
-                             stop_secs=VAD_STOP_SECS, min_volume=0.65),
+            params=VADParams(confidence=VAD_CONFIDENCE, start_secs=VAD_START_SECS,
+                             stop_secs=VAD_STOP_SECS, min_volume=VAD_MIN_VOLUME),
         ),
         user_turn_strategies=UserTurnStrategies(
             stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=turn_silence_s)],

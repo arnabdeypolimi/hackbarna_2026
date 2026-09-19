@@ -1,12 +1,12 @@
 """The real agent: a Pipecat LLMService running SGR over an OpenAI-compatible
 endpoint (D8, D12).
 
-Receives LLMContextFrame, streams `say` downstream as LLMTextFrames (so
-SlngTTSService speaks it exactly like any other LLM's output), dispatches
-actions in parallel as each array element completes, and runs a bounded
-second cycle when an internal tool returns data. InterruptionFrame cancels
-the in-flight completion and the turn's unsent commands, then keeps flowing
-so TTS and the avatar stop together.
+Receives LLMContextFrame, streams `say` downstream one complete sentence at a
+time as AggregatedTextFrames (see `_speak` for why not raw LLMTextFrames),
+dispatches actions in parallel as each array element completes, and runs a
+bounded second cycle when an internal tool returns data. InterruptionFrame
+cancels the in-flight completion and the turn's unsent commands, then keeps
+flowing so TTS and the avatar stop together.
 """
 import asyncio
 import contextlib
@@ -18,17 +18,19 @@ from typing import Any
 from loguru import logger
 from openai import AsyncOpenAI
 from pipecat.frames.frames import (
+    AggregatedTextFrame,
     Frame,
     InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    LLMTextFrame,
     TTSSpeakFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService, LLMSettings
+from pipecat.utils.text.base_text_aggregator import AggregationType
+from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
 from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, turn_plan_schema
 from tv_avatar.agent.prompt import (
@@ -43,6 +45,7 @@ from tv_avatar.agent.stream_parse import (
     EnvelopeStreamer,
     IntentReady,
     SayDelta,
+    SayDone,
 )
 from tv_avatar.agent.tools import InternalTools
 from tv_avatar.config import Settings
@@ -273,15 +276,30 @@ class SGRAgentService(LLMService):
         text, actions = render_fallback(results)
         log.debug("fallback", step="say", text=text, actions=actions)
         self._turn_said.append(text)
-        await self.push_frame(LLMTextFrame(text))
+        await self._speak(text)
         for verb, args in actions:
             await self.dispatch_action(verb, args, turn_id, user_id, memory_text)
+
+    async def _speak(self, text: str) -> None:
+        """Hand one complete sentence to TTS.
+
+        Not an LLMTextFrame: the TTS service's own sentence aggregator releases
+        a sentence only once it sees the *next* non-space character after the
+        punctuation. A cycle's last sentence has no next character until the
+        next cycle streams — so "Let me find something." sat unspoken while the
+        tool ran and then came out glued to the answer ("...something.Here are
+        ...") as one utterance, which a single barge-in dropped whole.
+        """
+        text = text.strip()
+        if text:
+            await self.push_frame(AggregatedTextFrame(text, AggregationType.SENTENCE))
 
     async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
                      cycle: int, marks: dict, t0: float,
                      first_say: asyncio.Event | None = None) -> tuple[str, list[tuple[str, dict]]]:
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         streamer = EnvelopeStreamer()
+        sentences = SimpleTextAggregator()  # same splitter the TTS would use, but we own the flush
         raw: list[str] = []
         said: list[str] = []
         awaited: list[tuple[str, asyncio.Task]] = []
@@ -323,9 +341,19 @@ class SGRAgentService(LLMService):
                                     filler.cancel()
                                 await self.stop_ttfb_metrics()
                                 marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
-                                log.debug("first say byte -> TTS", step="say", cycle=cycle,
+                                log.debug("first say byte", step="say", cycle=cycle,
                                           ms=round((time.perf_counter() - t_req) * 1000))
-                            await self.push_frame(LLMTextFrame(text))
+                            async for sentence in sentences.aggregate(text):
+                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=sentence.text,
+                                          ms=round((time.perf_counter() - t_req) * 1000))
+                                await self._speak(sentence.text)
+                        case SayDone():
+                            # The say string closed: speak the tail now rather
+                            # than after the actions array (or the next cycle).
+                            if (tail := await sentences.flush()) is not None:
+                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=tail.text,
+                                          ms=round((time.perf_counter() - t_req) * 1000))
+                                await self._speak(tail.text)
                         case ActionReady(action=action):
                             verb = str(action.get("verb", ""))
                             args = {k: v for k, v in action.items() if k != "verb" and v is not None}
@@ -356,6 +384,8 @@ class SGRAgentService(LLMService):
             close = getattr(stream, "close", None)
             if close is not None:
                 await close()
+        if (tail := await sentences.flush()) is not None:  # say never closed: truncated or malformed envelope
+            await self._speak(tail.text)
         if first_say_pending:
             await self.stop_ttfb_metrics()
         log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
