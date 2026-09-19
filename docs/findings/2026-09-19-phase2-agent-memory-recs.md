@@ -200,6 +200,24 @@ route on the typed union, `turn.py` (`TurnContext`/`TurnMetrics`/`ToolResult`/`C
 `HistoryRecorder.on_command` / `REC_ACCEPTED` / `SEARCH_ISSUED` (never called). `service.py`
 454 → 251 lines.
 
+Live text-mode check after the cleanup (`tools/smoke_turn.py`, Nemotron-3_5-Lightning, 500-title catalog):
+
+| Turn | intent | said | commands | cycles | TTFT | total |
+|---|---|---|---|---|---|---|
+| "something like Sicario, but newer" | recommend | "Let me look." + "…Retribution from 2023, Fast X, and Saw X…" | `focus 762430` | 2 | 528 ms (884 cold) | 1462 ms |
+| "play the first one" | control | "On it." | `play 762430` | 1 | 452 ms | 555 ms |
+| "what did I just start watching?" | answer | "You started watching Blue Beetle from 2023." | — | 1 | 504 ms | 568 ms |
+| *new session* greeting | — | "Welcome back — want to carry on with Retribution?" | — | 1 | 689 ms | 778 ms |
+| "yes, play it" | control | "On it." | `play 762430` | 1 | 741 ms | 835 ms |
+
+`rec_shown` for the first turn: exactly the three titles named (717930, 744278, 299054 in an
+earlier run), not the five the tool returned. The greeting → "yes, play it" path plays the
+offered title although it is not on screen — the id came from `Recent activity`. The live run
+also surfaced two small defects fixed in `05bded4`: cycle-2 speech was appended to cycle-1's in
+the memory transcript with no space, and `smoke_turn.py` ingested every turn a second time.
+Note on n=1: in one of two recommend runs the model named three titles but emitted no `focus`;
+the prompt asks for one, the schema does not require it.
+
 Left as decisions (§4b of the plan): `recall_memory` returns the profile that is already in the
 prompt (a wasted second cycle — delete or make it search the session archive); facts from the
 current session are invisible after 5 exchanges until `finish_session` rewrites the profile.
