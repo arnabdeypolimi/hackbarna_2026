@@ -4,7 +4,8 @@ A 10-foot browse screen for Titan OS TVs: a "Recommended" poster row with detail
 
 ## Getting started
 
-Requires Node 20.19 or newer.
+Requires Node 20.19 or newer, and Git LFS for the sky loops in `public/sky/`: a clone made
+without it holds pointer files there instead of video, and the room simply stays still.
 
 ```bash
 npm install
@@ -104,7 +105,10 @@ and fades in once it is running. It is the one thing in the app that does work o
 and it is allowed because that work happens in the set's hardware decoder, not on the CPU and
 not in a filter. Three rules keep it honest: it pauses while a trailer plays, since a set usually
 has one decoder; it is never mounted under `prefers-reduced-motion`; and if it fails to load or
-to play, the still sky is simply what stays.
+to play, the still sky is simply what stays. Only the current sky's loop is ever requested, and
+not before the titles have loaded, so its megabytes never come ahead of the data; a loop held
+still in the picker is not fetched at all. The loops are Git LFS objects, which keeps 45 MB of
+video out of the repository's history.
 
 `npm run sky` builds the loops, and the choices behind the shipped set (which band of each clip)
 are the flags on that script in `package.json`. A sky whose footage sits in `src/videos/`, named after the sky
@@ -119,10 +123,11 @@ at 960×540: slow drifting bands, periodic in time so they loop the same way. Th
 4K at 20 to 35 MB a clip and stays out of git like the TMDB export does; `public/sky/` is what
 ships, at a few hundred kilobytes synthesised and some ten megabytes per loop cut from footage.
 
-Either way the script measures each loop's lightest patch against the sky's contrast grading and
-prints the `shade` to set in `src/lib/theme.ts` when the loop is lighter than the sky's first
-stop, which the still gradient was graded for. The script needs numpy and an ffmpeg built with
-libx264, or `pip install imageio-ffmpeg`.
+Either way the script solves each sky's `shade` twice, against the still gradient's first stop
+and against the loop's lightest patch, and prints the value to set in `src/lib/theme.ts` when the
+sky has less than the lighter of the two needs. The still is what shows until the loop plays,
+under Sky: Still and under reduced motion, so it has to hold on its own. The script needs numpy
+and an ffmpeg built with libx264, or `pip install imageio-ffmpeg`.
 
 The room fills the browser window rather than the 16:9 stage, so a desktop window of any shape
 shows sky edge to edge with the panels scaled and centred inside it. A television's window is the

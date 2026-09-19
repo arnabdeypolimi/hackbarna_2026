@@ -43,10 +43,12 @@ export interface Theme {
    * the sky's own deepest stop.
    *
    * White ink and a white focus ring have to hold against whatever sky is behind them, and
-   * a spring sky is four times lighter than a winter one. So the scrim is graded
-   * per sky against the lightest patch its loop ever shows: the ring at 3:1 under the brightest
-   * light, and ink-3 on the glass over it at 4.17:1, which is what the original grey room
-   * measured. Nothing else writes directly on the room. scripts/render_sky.py re-checks it
+   * a spring sky is four times lighter than a winter one. So the scrim is graded per sky
+   * against the lightest thing the room ever shows: the still gradient's first stop, which is
+   * the room under reduced motion, under Sky: Still, and on every start until the loop plays,
+   * or the lightest patch of the loop when that is lighter. The ring holds 3:1 there under the
+   * brightest light, and ink-3 on the glass over it 4.17:1, which is what the original grey
+   * room measured. Nothing else writes directly on the room. scripts/render_sky.py checks both
    * whenever a loop is cut.
    */
   shade: number;
@@ -68,9 +70,9 @@ export interface Theme {
  */
 export const THEMES: Theme[] = [
   { id: 'blossom', name: 'Blossom sky', season: 'Spring', from: 3,
-    stops: ['#ffeff6', '#f2c4dc', '#c9a6e8', '#7e8fd0'], shade: 0.48, grain: 0.02 },
+    stops: ['#ffeff6', '#f2c4dc', '#c9a6e8', '#7e8fd0'], shade: 0.56, grain: 0.02 },
   { id: 'blue', name: 'Blue sky', season: 'Summer', from: 6,
-    stops: ['#e6f2ff', '#b3d9ff', '#80b3ff', '#6699e6'], shade: 0.46, grain: 0.02 },
+    stops: ['#e6f2ff', '#b3d9ff', '#80b3ff', '#6699e6'], shade: 0.56, grain: 0.02 },
   { id: 'golden', name: 'Golden hour', season: 'Autumn', from: 9,
     stops: ['#fff3d6', '#ffd9a0', '#ffae66', '#e07a52'], shade: 0.56, grain: 0.025 },
   // Read off the winter loop: its lightest and darkest patches, with two even steps between.

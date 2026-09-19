@@ -296,6 +296,9 @@ on 1–1.5 GB TV boards. It has its own README, its own toolchain and its own da
 cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
 
+The sky loops in `frontend/public/sky/` are Git LFS objects: clone with `git lfs` installed, or
+that folder holds pointer files and the room stays still.
+
 It is **not yet wired to this backend.** Watch, Episodes and Continue record local history
 and report what they would do; the YouTube trailer player is the only real playback surface.
 Connecting those seams to the control protocol above is the work that joins the two halves.

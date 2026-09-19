@@ -20,10 +20,11 @@ left to right, for footage composed the wrong way round for the panels in front 
 A sky with no footage is synthesised instead: slow drifting bands of its own four stops,
 periodic in time so it loops the same way.
 
-Either way the loop is checked against the sky's contrast grading. theme.ts gives each sky a
-`shade`, the strength of the scrim over the room, solved so white ink stays legible over the
-still gradient. A loop that is lighter than the still where it matters needs a heavier scrim,
-and the script prints the value to set in theme.ts.
+Either way the sky is checked against its contrast grading. theme.ts gives each sky a `shade`,
+the strength of the scrim over the room, and it has to keep white ink legible in two places:
+over the still gradient's first stop, which is the room until the loop plays, under Sky: Still
+and under reduced motion; and over the loop's lightest patch. When either is lighter than the
+shade allows, the script prints the value to set in theme.ts.
 
 Needs numpy and an ffmpeg built with libx264: one on PATH, or `pip install imageio-ffmpeg`.
 """
@@ -125,6 +126,11 @@ def shade_for(stops, lightest):
         if contrast(WHITE, bg) >= RING_MIN and contrast(over(WHITE, INK3_ALPHA, pane), pane) >= INK3_MIN:
             return alpha
     return 1.0
+
+
+def grade(alpha):
+    """Up to the next 0.02, as theme.ts writes shades. Rounded first: 0.56 * 50 is 28.000000000000004."""
+    return math.ceil(round(alpha * 50, 6)) / 50
 
 
 def lightest_patch(exe, path):
@@ -253,6 +259,29 @@ def find_footage(theme, folder, overrides):
 
 # ---------- main ----------
 
+def size_arg(text):
+    """WIDTHxHEIGHT in even pixels: yuv420p, which every decoder wants, halves the chroma plane."""
+    parts = text.lower().split("x")
+    if len(parts) != 2 or not all(p.isdigit() and int(p) > 0 for p in parts):
+        raise argparse.ArgumentTypeError(f"wants WIDTHxHEIGHT in pixels, not {text!r}")
+    w, h = (int(p) for p in parts)
+    if w % 2 or h % 2:
+        raise argparse.ArgumentTypeError(f"wants even dimensions, not {text!r}")
+    return w, h
+
+
+def positive(text):
+    if not text.isdigit() or int(text) <= 0:
+        raise argparse.ArgumentTypeError(f"wants a whole number above zero, not {text!r}")
+    return int(text)
+
+
+def crf_arg(text):
+    if not text.isdigit() or int(text) > 51:
+        raise argparse.ArgumentTypeError(f"wants 0 to 51, not {text!r}")
+    return int(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("ids", nargs="*", help="theme ids to render; default all")
@@ -265,34 +294,55 @@ def main():
     ap.add_argument("--flip", action="append", default=[], metavar="ID",
                     help="mirror this sky's clip left to right")
     ap.add_argument("--out", default=os.path.join(HERE, "..", "public", "sky"))
-    ap.add_argument("--footage-size", default="3840x2160",
+    ap.add_argument("--footage-size", type=size_arg, default="3840x2160",
                     help="what ships; 1920x1080 is the stage's own size and all a band of a 4K clip really holds")
-    ap.add_argument("--size", default="960x540", help="a synthesised sky needs no more; the stage scales it")
-    ap.add_argument("--seconds", type=int, default=20, help="length of a synthesised loop")
-    ap.add_argument("--fps", type=int, default=24, help="frame rate of a synthesised loop")
-    ap.add_argument("--crf", type=int, default=20, help="x264 quality; soft gradients block up above ~22")
+    ap.add_argument("--size", type=size_arg, default="960x540",
+                    help="a synthesised sky needs no more; the stage scales it")
+    ap.add_argument("--seconds", type=positive, default=20, help="length of a synthesised loop")
+    ap.add_argument("--fps", type=positive, default=24, help="frame rate of a synthesised loop")
+    ap.add_argument("--crf", type=crf_arg, default=20, help="x264 quality; soft gradients block up above ~22")
     args = ap.parse_args()
 
-    overrides = dict(u.split("=", 1) for u in args.use)
+    # Every id and file is checked before ffmpeg is looked up or a frame is rendered, so a
+    # mistyped flag says what it was, not what ffmpeg made of it twenty minutes in.
+    themes = read_themes()
+    known = {t["id"] for t in themes}
+    wanted = set(args.ids) or known
+    if wanted - known:
+        sys.exit(f"unknown theme id(s): {', '.join(sorted(wanted - known))}")
+
+    overrides = {}
+    for spec in args.use:
+        key, sep, path = spec.partition("=")
+        if not sep or not key or not path:
+            sys.exit(f"--use wants ID=FILE: {spec}")
+        if key not in known:
+            sys.exit(f"--use names a theme this file does not have: {key}")
+        full = path if os.path.isabs(path) else os.path.join(args.footage, path)
+        if not os.path.isfile(full):
+            sys.exit(f"--use {key}: no such clip: {full}")
+        overrides[key] = path
     frames = {}
     for spec in args.frame:
         key, _, box = spec.rpartition("=")
+        if key and key not in known:
+            sys.exit(f"--frame names a theme this file does not have: {key}")
         try:
             box = tuple(float(v) for v in box.split(","))
         except ValueError:
             box = ()
         if len(box) != 4 or any(v < 0 or v > 1 for v in box) or box[2] <= 0 or box[3] <= 0:
             sys.exit(f"--frame wants four fractions x,y,w,h: {spec}")
+        if box[0] + box[2] > 1 + 1e-9 or box[1] + box[3] > 1 + 1e-9:
+            sys.exit(f"--frame runs off the clip: {spec}")
         frames[key or "*"] = box
-    fw, fh = (int(v) for v in args.footage_size.lower().split("x"))
-    sw, sh = (int(v) for v in args.size.lower().split("x"))
+    for key in args.flip:
+        if key not in known:
+            sys.exit(f"--flip names a theme this file does not have: {key}")
+    fw, fh = args.footage_size
+    sw, sh = args.size
     exe = ffmpeg_exe()
     os.makedirs(args.out, exist_ok=True)
-    themes = read_themes()
-    known = {t["id"] for t in themes}
-    wanted = set(args.ids) or known
-    if wanted - known:
-        sys.exit(f"unknown theme id(s): {', '.join(sorted(wanted - known))}")
 
     for theme in themes:
         if theme["id"] not in wanted:
@@ -307,8 +357,13 @@ def main():
             synthesise(exe, theme, out, sw, sh, args.fps, args.seconds, args.crf)
             source = "synthesised"
 
-        need = math.ceil(shade_for(theme["stops"], lightest_patch(exe, out)) * 50) / 50  # up to the next 0.02
-        verdict = "ok" if need <= theme["shade"] else f"set shade: {need:.2f} in theme.ts (has {theme['shade']:.2f})"
+        # The still gradient's first stop is the room until the loop plays, under Sky: Still and
+        # under reduced motion, so the scrim has to hold there as much as at the loop's lightest.
+        still = shade_for(theme["stops"], hex_rgb(theme["stops"][0]))
+        loop = shade_for(theme["stops"], lightest_patch(exe, out))
+        need, where = grade(max(still, loop)), "still gradient" if still >= loop else "loop"
+        verdict = ("ok" if need <= theme["shade"]
+                   else f"set shade: {need:.2f} in theme.ts (has {theme['shade']:.2f}; the {where} needs it)")
         print(f"{theme['id']:8s} {os.path.getsize(out) / 1024:6.0f} KB  {source:20s} {verdict}")
 
 

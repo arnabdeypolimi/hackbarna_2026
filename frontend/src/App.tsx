@@ -412,7 +412,8 @@ export default function App() {
   return (
     <>
       {/* Outside the stage so it fills the window, whatever shape a desktop gives it; the stage scales inside. */}
-      <div className="room"><SkyVideo theme={theme} paused={!!player} enabled={tunes[theme.id].motion} /></div>
+      {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
+      <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
       <Stage ref={stageRef}>
         <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
         <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={onFile} />
