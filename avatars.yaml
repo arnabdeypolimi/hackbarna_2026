@@ -48,3 +48,11 @@ avatars:
     # Cartesia "Spanish-speaking Lady": native Castilian, conversational.
     voice: 846d6cb0-2301-48b6-9683-48f5618ea2f6
     languages: [es]
+  - id: chloe
+    name: Chloé
+    description: Female host. French only.
+    anam_avatar_id: 27e12daa-50fc-4384-93c2-ebca73f1f78d
+    anam_avatar_model: cara-4
+    # Cartesia "French Conversational Lady": native French, conversational.
+    voice: a249eaff-1e96-4d2c-b23b-12efa4f66f41
+    languages: [fr]

@@ -70,6 +70,17 @@ def test_shipped_lucia_is_spanish_only_with_a_distinct_anam_avatar():
         cat.resolve("lucia", "en")
 
 
+def test_shipped_chloe_is_french_only():
+    cat = load_catalog(DEFAULT_CATALOG_PATH)
+    chloe = cat.avatar("chloe")
+    assert chloe.languages == ("fr",)
+    assert cat.resolve("chloe").language.pipecat == Language.FR
+    # Every shipped avatar has its own Anam id and voice, except Igor's
+    # placeholder video (tracked by the TODO in avatars.yaml).
+    assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
+    assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars) - 1
+
+
 def test_get_catalog_is_cached_and_honours_env_override(monkeypatch, tmp_path):
     assert get_catalog() is get_catalog()
     custom = tmp_path / "c.yaml"
