@@ -33,7 +33,7 @@ def test_stack_defaults_match_the_chosen_providers(monkeypatch):
     s = Settings(_env_file=None)
     assert s.nebius_base_url.startswith("https://api.tokenfactory.nebius.com/v1")
     assert s.llm_model == "Qwen/Qwen3-30B-A3B-Instruct-2507"
-    assert s.slng_stt_model == "reson8/reson8stt:v1"
+    assert s.slng_stt_model == "deepgram/nova:3"
     assert s.slng_tts_model == "cartesia/sonic:3"
     assert s.slng_tts_encoding == "linear16"
     assert s.slng_tts_sample_rate == 24000

@@ -12,25 +12,6 @@ from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
 
-TMDB_GENRES = (
-    "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family",
-    "Fantasy", "History", "Horror", "Music", "Mystery", "Romance", "Science Fiction", "TV Movie",
-    "Thriller", "War", "Western",
-)
-_GENRE_ALIASES = {"scifi": "Science Fiction", "sci-fi": "Science Fiction", "sf": "Science Fiction",
-                  "romcom": "Romance", "cartoon": "Animation", "kids": "Family", "doc": "Documentary"}
-
-
-def parse_genres(text: str | None) -> set[str]:
-    """'crime thriller' → {'Crime', 'Thriller'}; unknown words are dropped, never filtered on.
-    Multi-word matches are ANY-of: the hard filter widens rather than returning nothing."""
-    if not text:
-        return set()
-    lowered = text.lower()
-    found = {g for g in TMDB_GENRES if g.lower() in lowered}
-    found |= {canon for alias, canon in _GENRE_ALIASES.items() if alias in lowered}
-    return found
-
 
 class InternalTools:
     def __init__(self, recs: RecsEngine | None, lane: MemoryLane, catalog: CatalogStore | None,
@@ -63,14 +44,17 @@ class InternalTools:
     async def _recommend(self, req: RecommendTitles, user_id: str, memory_text: str | None) -> dict:
         if self._recs is None:
             return {"status": "unavailable", "reason": "no catalog"}
+        disliked = set(req.exclude_genres)
         constraints = CatalogFilter(
-            genres_any=parse_genres(req.genre), year_min=req.year_min, year_max=req.year_max,
+            genres_any=set(req.genres) - disliked, genres_none=disliked,
+            year_min=req.year_min, year_max=req.year_max,
         )
         ctx = RecsContext(user_id=user_id, query_text=req.query, constraints=constraints,
                           memory_text=memory_text, limit=req.limit)
         log = logger.bind(user_id=user_id)
-        log.debug("recommend_titles", step="tool", query=req.query, genre_raw=req.genre,
-                  genres=sorted(constraints.genres_any), year_min=req.year_min, year_max=req.year_max,
+        log.debug("recommend_titles", step="tool", query=req.query,
+                  genres=sorted(constraints.genres_any), excluded_genres=sorted(disliked),
+                  year_min=req.year_min, year_max=req.year_max,
                   similar_to=req.similar_to, limit=req.limit, has_memory=memory_text is not None)
         if req.similar_to:
             recs = await self._recs.similar(req.similar_to, ctx)

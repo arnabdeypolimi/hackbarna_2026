@@ -48,6 +48,7 @@ class CatalogItem(BaseModel):
 
 class CatalogFilter(BaseModel):
     genres_any: set[str] = Field(default_factory=set)
+    genres_none: set[str] = Field(default_factory=set)
     exclude_ids: set[str] = Field(default_factory=set)
     year_min: int | None = None
     year_max: int | None = None
@@ -65,6 +66,8 @@ class CatalogFilter(BaseModel):
             must.append(models.FieldCondition(key="year", range=models.Range(gte=self.year_min, lte=self.year_max)))
         if self.min_vote_count is not None:
             must.append(models.FieldCondition(key="vote_count", range=models.Range(gte=self.min_vote_count)))
+        if self.genres_none:
+            must_not.append(models.FieldCondition(key="genres", match=models.MatchAny(any=sorted(self.genres_none))))
         if self.exclude_ids:
             must_not.append(models.HasIdCondition(has_id=[int(i) for i in self.exclude_ids if i.isdigit()]))
         if not must and not must_not:

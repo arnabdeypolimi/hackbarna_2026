@@ -11,12 +11,25 @@ from pydantic import BaseModel, Field
 
 from tv_avatar.agent.commands import AWAITS_RESULT, COMMAND_MODELS, Verb
 
+Genre = Literal[
+    "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family",
+    "Fantasy", "History", "Horror", "Music", "Mystery", "Romance", "Science Fiction", "TV Movie",
+    "Thriller", "War", "Western",
+]
+TMDB_GENRES: tuple[str, ...] = Genre.__args__  # type: ignore[attr-defined]
+
 
 class RecommendTitles(BaseModel):
-    """Internal: ask the recommendation engine for titles; results feed cycle 2."""
+    """Internal: ask the recommendation engine for titles; results feed cycle 2.
+
+    Constraints are typed so constrained decoding can only emit real TMDB genres;
+    the model — not a keyword list — decides what the user's memory implies."""
     verb: Literal["recommend_titles"] = "recommend_titles"
     query: str | None = None
-    genre: str | None = Field(default=None, description="TMDB genre words, e.g. 'Crime Thriller'; any match")
+    genres: list[Genre] = Field(default_factory=list, description="wanted genres (any match)")
+    exclude_genres: list[Genre] = Field(
+        default_factory=list,
+        description="genres to never return — fill from Memory dislikes (e.g. 'dislikes horror' -> Horror)")
     year_min: int | None = None
     year_max: int | None = None
     similar_to: str | None = None

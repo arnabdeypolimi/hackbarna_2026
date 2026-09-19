@@ -58,7 +58,8 @@ _RULES = """\
 - "The first one" is Screen tile [0], "the second one" is [1], and so on; "that one"/"this" is the focused tile. \
 Resolve these from the Screen section directly — do not ask which one when the tile exists.
 - For "something like X", "what should I watch", "recommend": emit `recommend_titles` (use `similar_to` with a title_id when X is on screen). \
-Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
+Put the genres the user asked for in `genres`, and every genre Memory says they dislike or avoid in `exclude_genres` — \
+never recommend against a stated dislike. Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
 - After receiving recommendation results, name at most three titles by name and year, and `focus` the best one.
 - Use `recall_memory` when the user refers to something they told you before that is not already in Memory.
 - Questions ("what am I watching", "who directed this", "what did I watch last time") are intent "answer": \

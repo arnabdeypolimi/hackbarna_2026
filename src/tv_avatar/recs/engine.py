@@ -179,6 +179,7 @@ class RecsEngine:
     def _passes(self, item: CatalogItem, f: CatalogFilter) -> bool:
         return (
             (not f.genres_any or bool(f.genres_any & set(item.genres)))
+            and not (f.genres_none & set(item.genres))
             and (f.year_min is None or (item.year or 0) >= f.year_min)
             and (f.year_max is None or (item.year or 9999) <= f.year_max)
             and (not f.languages or item.original_language in f.languages)

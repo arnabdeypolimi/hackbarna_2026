@@ -90,3 +90,13 @@ async def test_similar_excludes_anchor(engine):
     recs = await engine.similar("27205", RecsContext(user_id="u9", limit=5))
     assert recs and "27205" not in {r.title_id for r in recs}
     assert all("like Inception" in r.reasons for r in recs)
+
+
+async def test_genres_none_is_a_hard_exclusion(engine):
+    ctx = RecsContext(user_id="u9", query_text="scary movie", constraints=CatalogFilter(genres_none={"Horror"}))
+    recs = await engine.recommend(ctx)
+    assert recs
+    for r in recs:
+        assert "Horror" not in engine._catalog.lookup(r.title_id).genres
+    popular = await engine.recommend(RecsContext(user_id="nobody", constraints=CatalogFilter(genres_none={"Horror"})))
+    assert popular and all("Horror" not in engine._catalog.lookup(r.title_id).genres for r in popular)

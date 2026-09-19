@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     # hostnames such as eu.api.slng.ai do not resolve.
     slng_base_url: str = "api.slng.ai"
     slng_world_part: str | None = "eu"
-    slng_stt_model: str = "reson8/reson8stt:v1"
+    # Deepgram Nova 3 hosted on SLNG (language comes from the init config; the plugin
+    # docs' "slng/deepgram/nova:3-en" is rejected with 422). Alternative: reson8/reson8stt:v1.
+    slng_stt_model: str = "deepgram/nova:3"
     slng_tts_model: str = "cartesia/sonic:3"
     slng_tts_voice: str = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
     slng_tts_encoding: str = "linear16"

@@ -260,6 +260,7 @@ class SGRAgentService(LLMService):
                         budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
             return False
         raw, _results = await task
+        marks["cycles"] = 2
         log.debug("cycle envelope", step="cycle", cycle=2, raw=raw)
         log.debug("cycle end", step="cycle", cycle=2, second_cycle=False)
         return True

@@ -5,8 +5,9 @@ threads — measured faster than all-threads on the dev Mac). Ingest is a cloud
 LLM call on VOICEMEM_CHAT_MODEL and runs on its own single-worker executor so
 a slow write can never starve `to_thread`'s shared pool during a prefetch.
 
-Verified on voicemem 0.2.3: `VoiceMem.from_config` exists; the default
-`mode="text_mode"` accepts plain-text ingest and still runs the rightbrain;
+Verified on voicemem 0.2.3: `VoiceMem.from_config` exists; `mode="leftbrain_only"`
+accepts plain-text ingest (the default text_mode also runs the rightbrain, which
+costs seconds per search for output we do not use);
 `warmup(audio=False)` loads only E5 (no ASR/VAD/perception models); E5 falls
 back to the HF id `intfloat/multilingual-e5-small` and downloads on first
 use when no `VOICEMEM_MODELS_DIR/embedding` dir exists.
@@ -72,7 +73,10 @@ class VoiceMemLane(BaseMemoryLane):
         return VoiceMem.from_config({
             "api_key": self._settings.nebius_api_key,
             "base_url": self._settings.nebius_base_url,
-            "mode": "text",
+            # leftbrain_only: facts/preferences only. The right brain (persona/
+            # affect) ran cloud LLM calls inside every search — 300–2150 ms vs
+            # 17–66 ms measured — and wrote Chinese coaching notes we discarded.
+            "mode": "leftbrain_only",
             "user_id": user_id,
             "memory_root": str(root),
             "top_k": 5,
