@@ -73,10 +73,7 @@ class VoiceMemLane(BaseMemoryLane):
         return VoiceMem.from_config({
             "api_key": self._settings.nebius_api_key,
             "base_url": self._settings.nebius_base_url,
-            # leftbrain_only: facts/preferences only. The right brain (persona/
-            # affect) ran cloud LLM calls inside every search — 300–2150 ms vs
-            # 17–66 ms measured — and wrote Chinese coaching notes we discarded.
-            "mode": "leftbrain_only",
+            "mode": self._settings.voicemem_mode,   # see Settings.voicemem_mode
             "user_id": user_id,
             "memory_root": str(root),
             "top_k": 5,
