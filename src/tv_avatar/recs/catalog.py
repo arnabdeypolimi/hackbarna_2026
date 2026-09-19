@@ -208,7 +208,10 @@ def load_source(csv_path: str | Path, limit: int | None, *, ids: set[str] | None
     if ids is not None:
         missing = ids - set(frame["title_id"].to_list())
         if missing:
-            logger.warning("{} requested title ids are not in the source CSV", len(missing), sample=sorted(missing)[:10])
+            logger.warning(
+                "{} requested title ids missing from the catalog (not in the source CSV, or cut by limit)",
+                len(missing), sample=sorted(missing)[:10],
+            )
     return frame
 
 

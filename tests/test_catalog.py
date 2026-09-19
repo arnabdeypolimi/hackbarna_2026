@@ -107,7 +107,8 @@ def test_build_restricted_to_tv_title_ids(tmp_path):
     store = CatalogStore(parquet, client=client)
     assert report.rows == 1 and len(store) == 1
     assert store.lookup("27205") is not None
-    assert store.search([0.1] * DIMS, limit=10) and all(i.title_id == "27205" for i, _ in store.search([0.1] * DIMS, limit=10))
+    hits = store.search([0.1] * DIMS, limit=10)
+    assert hits and all(i.title_id == "27205" for i, _ in hits)
 
 
 def test_index_built_with_another_width_is_rebuilt_not_resumed(tmp_path):
