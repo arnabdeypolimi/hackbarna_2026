@@ -68,3 +68,26 @@ async def test_recorder_renders_recent_names(tmp_path):
     assert "Inception" in text
     assert "(none yet)" in await store.render_for_prompt("nobody", catalog=Cat())
     await store.close()
+
+
+async def test_render_includes_recently_recommended_with_relative_time(tmp_path):
+    import time as _t
+
+    from tv_avatar.history.store import _when
+
+    class Cat:
+        def lookup(self, title_id):
+            from tv_avatar.recs.catalog import CatalogItem
+            names = {"155": ("The Dark Knight", 2008), "272": ("Batman Begins", 2005)}
+            return CatalogItem(title_id=title_id, name=names[title_id][0], year=names[title_id][1]) if title_id in names else None
+
+    store = HistoryStore(str(tmp_path / "h.db"))
+    yesterday = _t.time() - 86400 - 60
+    await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="155", ts=yesterday))
+    await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="272", ts=yesterday))
+    await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="155", ts=yesterday + 1))  # dedup
+    text = await store.render_for_prompt("u1", catalog=Cat())
+    assert text.startswith("Recently watched: (none yet)")
+    assert "Recently recommended: The Dark Knight (2008) (yesterday); Batman Begins (2005) (yesterday)" in text
+    assert _when(_t.time() - 30) == "just now" and _when(_t.time() - 7200) == "2 hours ago"
+    await store.close()

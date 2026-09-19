@@ -80,10 +80,9 @@ class Settings(BaseSettings):
     # Phase-2 local data — everything under data/ is git-ignored
     voicemem_local_models_dir: str = "data/voicemem_models"
     voicemem_chat_model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
-    # leftbrain_only = facts/preferences (local E5 retrieval, 17–66 ms). text = also
-    # the right brain (mood, "inner OS", response experiences): its lookup embeds the
-    # query through the cloud (300–2150 ms measured, usually past the recall budget),
-    # its notes are generated in Chinese, and ingest costs ~3.5x more LLM time.
+    # Which VoiceMem utils load. Both modes run left brain (facts) AND right brain
+    # (persona/affect notes) — with the local-E5 anchor patch a search is 13–17 ms in
+    # leftbrain_only; `text` additionally runs scene/trigger inference (~150–300 ms).
     voicemem_mode: Literal["leftbrain_only", "text"] = "leftbrain_only"
     catalog_path: str = "data/catalog.parquet"
     qdrant_path: str = "data/qdrant_db"

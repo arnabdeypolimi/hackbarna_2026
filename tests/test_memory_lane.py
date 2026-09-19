@@ -93,3 +93,12 @@ async def test_recall_waits_on_inflight_prefetch_only_within_budget():
     assert time.perf_counter() - t0 < 0.45
     assert block.stale
     await task
+
+
+def test_right_brain_render_vocabulary_is_translated():
+    from tv_avatar.memory.voicemem_lane import _english_note
+    assert _english_note("dislikes horror films（喜好与厌恶）｜他说过：I can't stand horror") == \
+        "dislikes horror films (likes/dislikes) — said: I can't stand horror"
+    assert _english_note("[2026-09-19] ✓ 有效方式：Confirmed the request（下次：keep it short）") == \
+        "[2026-09-19] ✓ Effective approach: Confirmed the request (next time: keep it short)"
+    assert _english_note("✓ 有效方式：简洁确认并排除用户不想要的内容") is None  # Chinese content: dropped

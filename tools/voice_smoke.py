@@ -12,7 +12,9 @@ the production path.
 """
 import argparse
 import asyncio
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -169,6 +171,13 @@ def _ms(a: float | None, b: float | None) -> str:
 async def main(user_id: str, turns: list[str]) -> int:
     settings = SmokeSettings()
     setup_logging(settings.log_level)
+    # Embedded Qdrant is single-process: a running uvicorn holds data/qdrant_db,
+    # so the harness works on a throw-away copy of the index.
+    if Path(settings.qdrant_path).exists():
+        scratch = Path(tempfile.mkdtemp(prefix="qdrant_smoke_"))
+        shutil.copytree(settings.qdrant_path, scratch / "qdrant_db")
+        (scratch / "qdrant_db" / ".lock").unlink(missing_ok=True)
+        settings = settings.model_copy(update={"qdrant_path": str(scratch / "qdrant_db")})
     runtime = build_runtime(settings)
     await runtime.lane.warmup()
 

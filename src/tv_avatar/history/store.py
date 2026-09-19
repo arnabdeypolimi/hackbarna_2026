@@ -39,6 +39,20 @@ class _Named(Protocol):
 
 
 _WATCHED = (EventKind.PLAY_STARTED, EventKind.PLAY_COMPLETED, EventKind.PLAY_ABANDONED)
+
+
+def _when(ts: float, now: float | None = None) -> str:
+    """'just now' / '2 hours ago' / 'yesterday' / '3 days ago' — spoken-friendly."""
+    age = (now if now is not None else time.time()) - ts
+    if age < 120:
+        return "just now"
+    if age < 3600:
+        return f"{int(age // 60)} minutes ago"
+    if age < 86400:
+        hours = int(age // 3600)
+        return "an hour ago" if hours == 1 else f"{hours} hours ago"
+    days = int(age // 86400)
+    return "yesterday" if days == 1 else f"{days} days ago"
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     user_id TEXT NOT NULL, ts REAL NOT NULL, kind TEXT NOT NULL,
@@ -125,12 +139,35 @@ class HistoryStore:
                 break
         return seen
 
+    async def recent_recommended(self, user_id: str, limit: int = 6) -> list[tuple[str, float]]:
+        """Titles the agent recommended to this user, newest first, with the event time."""
+        db = await self._conn()
+        async with db.execute(
+            "SELECT title_id, ts FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL ORDER BY ts DESC",
+            (user_id, EventKind.REC_SHOWN.value),
+        ) as cur:
+            rows = await cur.fetchall()
+        out: list[tuple[str, float]] = []
+        seen: set[str] = set()
+        for title_id, ts in rows:
+            if title_id not in seen:
+                seen.add(title_id)
+                out.append((title_id, ts))
+            if len(out) >= limit:
+                break
+        return out
+
     async def render_for_prompt(self, user_id: str, catalog: _Named | None = None, limit: int = 5) -> str:
-        ids = await self.recent_titles(user_id, limit)
-        if not ids:
-            return "Recently watched: (none yet)"
-        names = []
-        for title_id in ids:
+        """Episodic memory for the prompt: what was watched and what was recommended
+        (with when). Conversational facts live in VoiceMem; this is the event log."""
+        def name(title_id: str) -> str:
             item = catalog.lookup(title_id) if catalog else None
-            names.append(item.label() if item is not None else f"id={title_id}")
-        return "Recently watched: " + "; ".join(names)
+            return item.label() if item is not None else f"id={title_id}"
+
+        watched = await self.recent_titles(user_id, limit)
+        recommended = await self.recent_recommended(user_id, limit + 1)
+        lines = ["Recently watched: " + ("; ".join(name(t) for t in watched) if watched else "(none yet)")]
+        if recommended:
+            lines.append("Recently recommended: " + "; ".join(
+                f"{name(t)} ({_when(ts)})" for t, ts in recommended))
+        return "\n".join(lines)
