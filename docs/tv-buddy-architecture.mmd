@@ -1,0 +1,75 @@
+%% TV buddy architecture
+%% Paste into a GitHub README, Notion, or mermaid.live.
+%% The hand-drawn SVG version has the same content with tighter layout:
+%% tv-buddy-architecture.html
+
+flowchart LR
+
+  subgraph TVDEV["Titan OS TV, one device"]
+    MIC["TV mic<br/>living room"]
+    SCREEN["TV screen<br/>rows, focus, playback"]
+  end
+
+  subgraph MEDIA["media plane, WebRTC"]
+    direction LR
+    TRANSPORT["Transport<br/>Pipecat / LiveKit"]
+    STT["VAD + STT<br/>cloud streaming, the only ASR"]
+    LLM["LLM + tool loop"]
+    TTS["TTS"]
+    AVATAR["Avatar render<br/>Anam"]
+  end
+
+  subgraph CTOOLS["TV control tools, agent side"]
+    RESOLVE["resolve the reference<br/>'this', 'the second', a visible title<br/>against the snapshot pinned at VAD onset"]
+    ITEMCMD["item commands: focus, open_details, play<br/>carry a catalog ID<br/>retry once when the view is stale"]
+    STATECMD["state commands: back, close, pause<br/>not idempotent<br/>never retried, hand the fresh view back"]
+    GUARD["refusals: unknown catalog ID, ambiguous title,<br/>nothing focused, purchases"]
+  end
+
+  subgraph CONTROL["control plane, WebSocket"]
+    CPLANE["TV to agent: view snapshot, slot IDs, focus, seq<br/>agent to TV: command plus echoed seq, then ack<br/>reconnect means a full resync"]
+  end
+
+  subgraph REC["rec tool, inline in the turn"]
+    CATALOG["catalog and item embeddings<br/>watch history as CF signal"]
+    CANDS["candidate retrieval<br/>CF plus hard filters"]
+    RERANK["re-rank on memory<br/>returns catalog IDs only"]
+  end
+
+  subgraph VM["VoiceMem, parallel lane, finished before the turn opens"]
+    STREAM["partial transcript in<br/>speculative prefetch at 0 to 300 ms"]
+    LEFT["left brain<br/>schema to entity index<br/>stated preferences, facts"]
+    RIGHT["right brain<br/>persona, affect, voiceprint<br/>who is on the couch"]
+    MEM["memory block<br/>top-5, about 430 tokens, 134 ms"]
+    INGEST["ingest, an LLM call<br/>slow, kept off the turn"]
+  end
+
+  MIC --> TRANSPORT --> STT --> LLM --> TTS --> AVATAR --> SCREEN
+
+  LLM --> RESOLVE
+  RESOLVE --> ITEMCMD
+  RESOLVE --> STATECMD
+  RESOLVE --> GUARD
+  GUARD -. "ask the user instead of guessing" .-> LLM
+  ITEMCMD --> CPLANE
+  STATECMD --> CPLANE
+  CPLANE -. "ack, or stale_view" .-> RESOLVE
+  CPLANE <--> SCREEN
+
+  LLM --> CANDS
+  CATALOG --> CANDS --> RERANK
+  RERANK -. "catalog IDs" .-> LLM
+
+  STT -. "partials" .-> STREAM
+  STT -. "final transcript" .-> INGEST
+  STREAM --> LEFT
+  STREAM --> RIGHT
+  LEFT --> MEM
+  RIGHT --> MEM
+  MEM -. "injected as context" .-> LLM
+  STREAM -. "warm start" .-> CANDS
+  INGEST -. "writes the graph" .-> LEFT
+  INGEST -. "writes the graph" .-> RIGHT
+
+  classDef lane stroke-dasharray: 5 4
+  class VM lane

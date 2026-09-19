@@ -218,6 +218,10 @@ the memory transcript with no space, and `smoke_turn.py` ingested every turn a s
 Note on n=1: in one of two recommend runs the model named three titles but emitted no `focus`;
 the prompt asks for one, the schema does not require it.
 
-Left as decisions (§4b of the plan): `recall_memory` returns the profile that is already in the
-prompt (a wasted second cycle — delete or make it search the session archive); facts from the
-current session are invisible after 5 exchanges until `finish_session` rewrites the profile.
+Follow-ups from the plan's §4b, both taken: `recall_memory` is **gone** (`aa20b27`) — with the
+rolling-profile lane it returned the profile already in `# Memory`, buying a ~1 s second cycle
+for nothing; the schema fixture was regenerated (13-way `anyOf`). And the profile is now
+**refreshed mid-session** (`e0530b9`): every `MEMORY_REFRESH_EVERY_TURNS` (default 6) ingests
+the lane runs `finish_session` off the turn, so what the viewer said in turn 1 is back in the
+prompt by turn 7 even though the conversation window is 10 messages. `_commit` archives only
+the turns the summariser saw, so a turn appended while it ran is not lost.
