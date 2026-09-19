@@ -1,13 +1,13 @@
 """HTTP session lifecycle, the control WebSocket, the WebRTC offer endpoint
 and the catalog sample used by the demo client."""
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket
+from fastapi import FastAPI, Header, HTTPException, Query, Response, WebSocket
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from tv_avatar.config import Settings, get_settings
 from tv_avatar.control.channel import ControlChannel
@@ -16,6 +16,9 @@ from tv_avatar.logging import setup_logging
 from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionStore
+
+#: How often expired sessions (and their command buses) are reaped.
+SWEEP_INTERVAL_S = 60.0
 
 
 class CreateSessionRequest(BaseModel):
@@ -29,7 +32,12 @@ class OfferRequest(BaseModel):
     avatar: bool | None = None
 
 
-def create_app(store: SessionStore | None = None, runtime: Runtime | None = None) -> FastAPI:
+def create_app(
+    store: SessionStore | None = None,
+    runtime: Runtime | None = None,
+    *,
+    sweep_interval_s: float = SWEEP_INTERVAL_S,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings = _settings()
@@ -38,14 +46,31 @@ def create_app(store: SessionStore | None = None, runtime: Runtime | None = None
             app.state.runtime = build_runtime(settings)
         if app.state.runtime is not None and settings is not None and settings.agent_impl == "sgr":
             app.state.runtime.warm_in_background()
-        yield
-        if app.state.runtime is not None:
-            await app.state.runtime.close()
+        sweeper = asyncio.create_task(_sweep_loop(app, sweep_interval_s))
+        try:
+            yield
+        finally:
+            sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweeper
+            if app.state.runtime is not None:
+                await app.state.runtime.close()
 
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
     app.state.manager = SessionManager()
     app.state.runtime = runtime
+
+    def sweep(now: float | None = None) -> list[str]:
+        """Reap expired sessions together with their buses. Returns the ids."""
+        expired = app.state.store.sweep_expired(now)
+        for sid in expired:
+            app.state.manager.drop(sid)
+        if expired:
+            logger.info("swept {} expired session(s)", len(expired))
+        return expired
+
+    app.state.sweep = sweep
 
     @app.post("/sessions")
     async def create_session(body: CreateSessionRequest | None = None) -> dict:
@@ -61,6 +86,20 @@ def create_app(store: SessionStore | None = None, runtime: Runtime | None = None
             "offer_url": f"/sessions/{session.session_id}/offer",
             "protocol_version": PROTOCOL_VERSION,
         }
+
+    @app.delete("/sessions/{session_id}", status_code=204)
+    async def close_session(
+        session_id: str,
+        token: str = Header(default="", alias="X-Control-Token"),
+    ) -> Response:
+        """Explicit hang-up (spec §6, Closing). Token-authenticated like the socket."""
+        try:
+            app.state.store.authenticate(session_id, token)
+        except (KeyError, PermissionError):
+            return Response(status_code=401)
+        app.state.store.close(session_id)
+        app.state.manager.drop(session_id)
+        return Response(status_code=204)
 
     @app.websocket("/sessions/{session_id}/control")
     async def control(websocket: WebSocket, session_id: str,
@@ -79,6 +118,9 @@ def create_app(store: SessionStore | None = None, runtime: Runtime | None = None
             return
         bus = app.state.manager.bus_for(session_id)
         recorder = app.state.runtime.recorder if app.state.runtime is not None else None
+        # The bus deliberately survives this call returning: a dropped control
+        # socket is the Degraded state (spec §6) — commands queue until the TV
+        # app reconnects with the same session id. Expiry or DELETE reaps it.
         await ControlChannel(websocket, session, bus, recorder=recorder).run()
 
     @app.post("/sessions/{session_id}/offer")
@@ -130,6 +172,12 @@ def create_app(store: SessionStore | None = None, runtime: Runtime | None = None
     return app
 
 
+async def _sweep_loop(app: FastAPI, interval_s: float) -> None:
+    while True:
+        await asyncio.sleep(interval_s)
+        app.state.sweep()
+
+
 def _log_pipeline_end(session_id: str, task: asyncio.Task) -> None:
     log = logger.bind(session_id=session_id)
     if task.cancelled():
@@ -141,9 +189,13 @@ def _log_pipeline_end(session_id: str, task: asyncio.Task) -> None:
 
 
 def _settings() -> Settings | None:
+    """None only when required env vars are absent (tests run without keys).
+
+    Any other failure is a real configuration bug and must propagate.
+    """
     try:
         return get_settings()
-    except Exception:  # noqa: BLE001 — tests run without keys present
+    except ValidationError:
         return None
 
 

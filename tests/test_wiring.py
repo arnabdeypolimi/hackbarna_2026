@@ -5,10 +5,10 @@ from fastapi.testclient import TestClient
 from pipecat.pipeline.pipeline import Pipeline
 
 from tv_avatar.app import create_app
+from tv_avatar.config import Settings
 from tv_avatar.control.protocol import PROTOCOL_VERSION
 from tv_avatar.history.store import EventKind
 from tv_avatar.runtime import build_runtime
-from tv_avatar.config import Settings
 
 
 def _settings(tmp_path) -> Settings:

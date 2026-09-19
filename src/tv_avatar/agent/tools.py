@@ -12,7 +12,6 @@ from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
 
-
 TMDB_GENRES = (
     "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family",
     "Fantasy", "History", "Horror", "Music", "Mystery", "Romance", "Science Fiction", "TV Movie",
@@ -54,7 +53,7 @@ class InternalTools:
                         self._recall(RecallMemory.model_validate(args), user_id), timeout=self._timeout)
                 case _:
                     return {"status": "unknown_tool", "verb": verb}
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.bind(user_id=user_id).warning("internal tool timed out", verb=verb)
             return {"status": "unavailable", "reason": "timeout"}
         except Exception as err:  # noqa: BLE001 — a tool failure is a degraded answer, not a failed turn

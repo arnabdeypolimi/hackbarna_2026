@@ -97,11 +97,11 @@ class RecsEngine:
             if pending is not None:
                 return await asyncio.wait_for(asyncio.shield(pending), timeout=self._timeout)
             return await asyncio.wait_for(self._embed_and_cache(key, ctx.query_text), timeout=self._timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.debug("query embed timeout; falling back to taste/popular")
             return None
         except Exception as err:  # noqa: BLE001 — a rec is degraded, never a failed turn
-            log.warning("query embed failed: {}", type(err).__name__)
+            log.warning("query embed failed", error=type(err).__name__)
             return None
 
     # --- taste ------------------------------------------------------------
@@ -171,7 +171,7 @@ class RecsEngine:
     async def _safe_embed(self, text: str) -> list[float] | None:
         try:
             return (await asyncio.wait_for(self._embedder.embed([text]), timeout=self._timeout))[0]
-        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+        except (TimeoutError, Exception):  # noqa: BLE001
             return None
 
     def _passes(self, item: CatalogItem, f: CatalogFilter) -> bool:

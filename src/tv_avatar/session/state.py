@@ -83,3 +83,14 @@ class SessionStore:
 
     def close(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
+
+    def sweep_expired(self, now: float | None = None) -> list[str]:
+        """Remove every session past its ``expires_at``; return their ids.
+
+        Expiry is otherwise only checked at control-socket connect, so a
+        client that never connects would leak forever without this."""
+        now = time.time() if now is None else now
+        expired = [sid for sid, s in self._sessions.items() if now > s.expires_at]
+        for sid in expired:
+            del self._sessions[sid]
+        return expired

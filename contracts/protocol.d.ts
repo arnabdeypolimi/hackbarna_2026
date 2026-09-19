@@ -8,51 +8,149 @@ export type Verb = "back" | "close" | "focus" | "home" | "navigate" | "open_deta
 /** Verbs whose handler awaits a `result` message from the TV app. */
 export type AwaitsResult = "search_catalog";
 
-export interface Tile { title_id: string; name: string; position: number; }
+// ---- command arguments, one interface per verb ----
+export interface BackArgs {}
+
+export interface CloseArgs {}
+
+export interface FocusArgs {
+  title_id: string;
+}
+
+export interface HomeArgs {}
+
+export interface NavigateArgs {
+  direction: "up" | "down" | "left" | "right";
+  count?: number;
+}
+
+export interface OpenDetailsArgs {
+  title_id: string;
+}
+
+export interface PauseArgs {}
+
+export interface PlayArgs {
+  title_id: string;
+  resume_from?: number | null;
+}
+
+export interface ResumeArgs {}
+
+export interface SearchCatalogArgs {
+  query: string;
+  limit?: number;
+}
+
+export interface SeekArgs {
+  to_seconds?: number | null;
+  delta_seconds?: number | null;
+}
+
+export interface ShowProductsArgs {
+  title_id: string;
+  scene_at?: number | null;
+}
+
+export interface CommandArgsByVerb {
+  "back": BackArgs;
+  "close": CloseArgs;
+  "focus": FocusArgs;
+  "home": HomeArgs;
+  "navigate": NavigateArgs;
+  "open_details": OpenDetailsArgs;
+  "pause": PauseArgs;
+  "play": PlayArgs;
+  "resume": ResumeArgs;
+  "search_catalog": SearchCatalogArgs;
+  "seek": SeekArgs;
+  "show_products": ShowProductsArgs;
+}
+
+// ---- client -> server ----
+export interface AckMsg {
+  v: 1;
+  type: "ack";
+  command_id: string;
+  ok: boolean;
+  error?: string | null;
+}
 
 export interface Playback {
   state: "stopped" | "playing" | "paused";
-  title_id: string | null;
-  position_s: number;
+  title_id?: string | null;
+  position_s?: number;
+}
+
+export interface ResultMsg {
+  v: 1;
+  type: "result";
+  command_id: string;
+  data: Record<string, unknown>;
 }
 
 export interface ScreenState {
   view: "grid" | "details" | "player" | "products";
-  rail_id: string | null;
-  focus_index: number | null;
-  tiles: Tile[];
+  rail_id?: string | null;
+  focus_index?: number | null;
+  tiles?: Array<Tile>;
   playback: Playback;
 }
 
-export interface CommandMsg {
-  v: typeof PROTOCOL_VERSION;
-  type: "command";
-  id: string;
-  turn_id: string;
-  verb: Verb;
-  args: Record<string, unknown>;
-  ts: number;
+export interface ScreenStateMsg {
+  v: 1;
+  type: "screen_state";
+  state: ScreenState;
 }
 
+export interface Tile {
+  title_id: string;
+  name: string;
+  position: number;
+}
+
+export interface UserEventMsg {
+  v: 1;
+  type: "user_event";
+  event: string;
+  detail?: Record<string, unknown>;
+}
+
+export type ClientMessage = ScreenStateMsg | AckMsg | ResultMsg | UserEventMsg;
+
+// ---- server -> client ----
 export interface AgentStatusMsg {
-  v: typeof PROTOCOL_VERSION;
+  v: 1;
   type: "agent_status";
   state: "idle" | "listening" | "thinking" | "speaking";
 }
 
+export interface CommandMsgBase {
+  v: 1;
+  type: "command";
+  id: string;
+  turn_id: string;
+  ts: number;
+}
+
+/** Discriminated on `verb`; `args` is typed per verb. */
+export type CommandMsg = {
+  [V in Verb]: CommandMsgBase & { verb: V; args: CommandArgsByVerb[V] };
+}[Verb];
+
+export interface ErrorMsg {
+  v: 1;
+  type: "error";
+  code: string;
+  message: string;
+}
+
 export interface TranscriptMsg {
-  v: typeof PROTOCOL_VERSION;
+  v: 1;
   type: "transcript";
   role: "user" | "assistant";
   text: string;
   final: boolean;
-}
-
-export interface ErrorMsg {
-  v: typeof PROTOCOL_VERSION;
-  type: "error";
-  code: string;
-  message: string;
 }
 
 export type ServerMessage = CommandMsg | AgentStatusMsg | TranscriptMsg | ErrorMsg;

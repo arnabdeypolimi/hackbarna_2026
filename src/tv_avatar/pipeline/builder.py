@@ -34,7 +34,7 @@ def build_agent(settings: Settings, runtime: Runtime, session: SessionState, bus
                               recorder=runtime.recorder, timeout_s=settings.tool_timeout_s)
         return SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
                                catalog=runtime.catalog, tools=tools)
-    return StubLLMService(bus=bus)
+    return StubLLMService(bus=bus, session=session)
 
 
 def build_pipeline(
@@ -54,6 +54,8 @@ def build_pipeline(
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
+    # TODO(phase 2): insert ScreenContextInjector between user_agg and the LLM
+    # so session.render_for_prompt() is injected fresh on every run (spec §4).
     stages = [
         transport.input(),
         build_stt(settings),

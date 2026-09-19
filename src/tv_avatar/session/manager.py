@@ -9,5 +9,8 @@ class SessionManager:
     def bus_for(self, session_id: str) -> CommandBus:
         return self._buses.setdefault(session_id, CommandBus())
 
+    def has(self, session_id: str) -> bool:
+        return session_id in self._buses
+
     def drop(self, session_id: str) -> None:
         self._buses.pop(session_id, None)

@@ -3,10 +3,10 @@ from importlib.metadata import version
 
 
 def test_new_dependencies_import():
+    import aiosqlite  # noqa: F401
     import openai  # noqa: F401
     import polars  # noqa: F401
     import pyarrow  # noqa: F401
-    import aiosqlite  # noqa: F401
     from qdrant_client import QdrantClient  # noqa: F401
 
 

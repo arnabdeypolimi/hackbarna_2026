@@ -16,23 +16,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from loguru import logger  # noqa: E402
-from pipecat.frames.frames import LLMContextFrame, LLMTextFrame  # noqa: E402
-from pipecat.pipeline.pipeline import Pipeline  # noqa: E402
-from pipecat.processors.aggregators.llm_context import LLMContext  # noqa: E402
-from pipecat.processors.frame_processor import FrameProcessor  # noqa: E402
-from pipecat.tests.utils import run_test  # noqa: E402
-from pydantic_settings import SettingsConfigDict  # noqa: E402
+from loguru import logger
+from pipecat.frames.frames import LLMContextFrame, LLMTextFrame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.tests.utils import run_test
+from pydantic_settings import SettingsConfigDict
 
-from tv_avatar.agent.injector import ScreenContextInjector  # noqa: E402
-from tv_avatar.agent.service import SGRAgentService  # noqa: E402
-from tv_avatar.agent.tools import InternalTools  # noqa: E402
-from tv_avatar.config import Settings  # noqa: E402
-from tv_avatar.control.bus import CommandBus  # noqa: E402
-from tv_avatar.control.protocol import CommandMsg, Playback, ScreenState, Tile  # noqa: E402
-from tv_avatar.logging import setup_logging  # noqa: E402
-from tv_avatar.runtime import build_runtime  # noqa: E402
-from tv_avatar.session.state import SessionState  # noqa: E402
+from tv_avatar.agent.injector import ScreenContextInjector
+from tv_avatar.agent.service import SGRAgentService
+from tv_avatar.agent.tools import InternalTools
+from tv_avatar.config import Settings
+from tv_avatar.control.bus import CommandBus
+from tv_avatar.control.protocol import (
+    CommandMsg,
+    Playback,
+    ScreenState,
+    Tile,
+)
+from tv_avatar.logging import setup_logging
+from tv_avatar.runtime import build_runtime
+from tv_avatar.session.state import SessionState
 
 DEFAULT_TURNS = [
     "something like Sicario, but newer",
@@ -104,7 +109,7 @@ async def main(user_id: str, turns: list[str]) -> int:
         while True:
             try:
                 msg = await asyncio.wait_for(bus.next_outbound(), timeout=0.05)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if isinstance(msg, CommandMsg):
                 commands.append(msg)

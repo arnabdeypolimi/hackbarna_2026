@@ -70,10 +70,10 @@ class MemoryPrefetchTap(FrameProcessor):
         elif isinstance(frame, InterimTranscriptionFrame) and not self._fired_this_utterance:
             if len(frame.text.strip()) >= self._min_chars:
                 self._prefetch(frame.text)
-        elif isinstance(frame, TranscriptionFrame) and not self._fired_this_utterance:
+        elif (isinstance(frame, TranscriptionFrame) and not self._fired_this_utterance
+              and len(frame.text.strip()) >= self._min_chars):
             # STT without partials: the final is the first text we see — still worth warming.
-            if len(frame.text.strip()) >= self._min_chars:
-                self._prefetch(frame.text)
+            self._prefetch(frame.text)
         await self.push_frame(frame, direction)
 
     def _prefetch(self, text: str) -> None:

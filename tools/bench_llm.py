@@ -4,7 +4,9 @@ and timings only; never prints keys. Reads OPENAI_API_KEY / OPENAI_BASE_URL.
 
 Run: set -a; . ./.env; set +a; uv run --with openai python tools/bench_llm.py
 """
-import json, os, sys, time
+import json
+import time
+
 from openai import OpenAI
 
 c = OpenAI()
@@ -61,9 +63,10 @@ def bench(model, extra, runs=2):
             total = time.perf_counter() - t0
             out = "".join(buf).strip()
             try: j = json.loads(out); ok = "valid"; order = list(j)[:2] == ["intent", "say"]
-            except Exception: ok = "INVALID"; order = False
+            except Exception:  # noqa: BLE001 — bench: any parse failure is just INVALID
+                ok = "INVALID"; order = False
             rows.append((ttft, total, ok, order, reason, fin, out))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — bench: record and move on
             rows.append((None, None, f"ERR {type(e).__name__}", False, 0, str(e)[:90], ""))
     best = min(rows, key=lambda r: r[1] or 1e9)
     ttft, total, ok, order, reason, fin, out = best

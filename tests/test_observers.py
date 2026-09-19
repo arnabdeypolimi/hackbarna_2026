@@ -1,13 +1,11 @@
 import asyncio
 
-import pytest
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
-    TextFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -32,7 +30,7 @@ async def _drain(bus: CommandBus) -> list:
     while True:
         try:
             out.append(await asyncio.wait_for(bus.next_outbound(), timeout=0.02))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return out
 
 

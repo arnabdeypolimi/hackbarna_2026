@@ -9,6 +9,7 @@ the in-flight completion and the turn's unsent commands, then keeps flowing
 so TTS and the avatar stop together.
 """
 import asyncio
+import contextlib
 import json
 import time
 from typing import Any
@@ -29,7 +30,13 @@ from pipecat.services.llm_service import LLMService, LLMSettings
 
 from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, turn_plan_schema
 from tv_avatar.agent.prompt import build_system_prompt, volatile_sections
-from tv_avatar.agent.stream_parse import ActionReady, Done, EnvelopeStreamer, IntentReady, SayDelta
+from tv_avatar.agent.stream_parse import (
+    ActionReady,
+    Done,
+    EnvelopeStreamer,
+    IntentReady,
+    SayDelta,
+)
 from tv_avatar.agent.tools import InternalTools
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
@@ -215,10 +222,8 @@ class SGRAgentService(LLMService):
             except Exception as err:  # noqa: BLE001
                 results.append((verb, {"status": "error", "reason": type(err).__name__}))
         for task in fire:
-            try:
+            with contextlib.suppress(Exception):  # failures are logged in dispatch_action
                 await task
-            except Exception:  # noqa: BLE001 — fire-and-forget failures are logged in dispatch_action
-                pass
         return "".join(raw), results
 
     # --- pieces the tests call directly -------------------------------------

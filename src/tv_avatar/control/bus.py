@@ -16,7 +16,7 @@ from collections import deque
 
 from pydantic import BaseModel
 
-from tv_avatar.agent.commands import AWAITS_RESULT, Verb, parse_command
+from tv_avatar.agent.commands import AWAITS_RESULT, parse_command
 from tv_avatar.control.protocol import CommandMsg
 
 
@@ -25,6 +25,7 @@ class CommandBus:
         self._outbound: deque[BaseModel] = deque()
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
+        self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
         self._search_timeout_s = search_timeout_s
 
     async def dispatch(self, verb: str, args: dict, turn_id: str) -> dict:
@@ -42,13 +43,15 @@ class CommandBus:
 
         future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[msg.id] = future
+        self._pending_turn[msg.id] = turn_id
         self._enqueue(msg)
         try:
             return await asyncio.wait_for(future, timeout=self._search_timeout_s)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"status": "unavailable", "reason": "timeout"}
         finally:
             self._pending.pop(msg.id, None)
+            self._pending_turn.pop(msg.id, None)
 
     def push_server_message(self, msg: BaseModel) -> None:
         """Queue a non-command ServerMessage (agent_status, transcript, error)."""
@@ -68,7 +71,10 @@ class CommandBus:
         """Drop queued-but-unsent commands for an interrupted turn.
 
         Commands already handed to the WebSocket are NOT rolled back
-        (spec §9, rule 4). Status/transcript messages are never dropped."""
+        (spec §9, rule 4). Status/transcript messages are never dropped.
+        A ``search_catalog`` handler still awaiting its result is released
+        immediately with ``{"status": "cancelled"}`` so the interrupted turn
+        does not sit out the 400 ms timeout."""
         keep = deque(
             m for m in self._outbound
             if not (isinstance(m, CommandMsg) and m.turn_id == turn_id)
@@ -77,6 +83,13 @@ class CommandBus:
         self._outbound = keep
         if not self._outbound:
             self._ready.clear()
+
+        for command_id, pending_turn in list(self._pending_turn.items()):
+            if pending_turn != turn_id:
+                continue
+            future = self._pending.get(command_id)
+            if future is not None and not future.done():
+                future.set_result({"status": "cancelled", "reason": "interrupted"})
         return dropped
 
     def resolve(self, command_id: str, data: dict) -> None:

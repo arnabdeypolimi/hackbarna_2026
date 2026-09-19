@@ -77,7 +77,7 @@ def test_malformed_input_never_raises_and_emits_nothing_after():
     events = s.feed('{"say":"hi","actions":[{"verb":"play" "oops"}]}')
     assert not any(isinstance(e, ActionReady) for e in events)
     assert _say(events) == "hi"
-    assert s.feed("garbage }}}") == [] or not s.finished or True  # must not raise
+    s.feed("garbage }}}")  # must not raise
 
 
 def test_empty_actions_and_done_once():

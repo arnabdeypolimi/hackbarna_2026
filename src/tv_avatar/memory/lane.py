@@ -5,6 +5,7 @@ recall(): if a prefetch for this user finished within PREFETCH_TTL_S and its
 query prefix-matches the final transcript, reuse it (the speculative win);
 otherwise search fresh. Nothing here may block the turn beyond one search."""
 import asyncio
+import contextlib
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -107,7 +108,7 @@ class BaseMemoryLane(ABC):
         try:
             block = await self._search(user_id, text)
         except Exception as err:  # noqa: BLE001 — memory is best-effort on the turn
-            log.warning("memory prefetch failed: {}", type(err).__name__)
+            log.warning("memory prefetch failed", error=type(err).__name__)
             block = MemoryBlock(stale=True)
         self._prefetched[user_id] = _Prefetched(prefix, time.monotonic(), block)
         log.debug("memory prefetch done", ms=round((time.perf_counter() - t0) * 1000, 1))
@@ -118,10 +119,8 @@ class BaseMemoryLane(ABC):
         prefix = _prefix(final)
         pending = self._inflight.get(user_id)
         if pending is not None and not pending.done():
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):  # logged by the prefetch task
                 await asyncio.shield(pending)
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
         cached = self._prefetched.get(user_id)
         if cached is not None:
             age = time.monotonic() - cached.done_at
@@ -132,7 +131,7 @@ class BaseMemoryLane(ABC):
         try:
             return await self._search(user_id, final)
         except Exception as err:  # noqa: BLE001
-            log.warning("memory recall failed: {}", type(err).__name__)
+            log.warning("memory recall failed", error=type(err).__name__)
             return MemoryBlock(stale=True)
 
     async def ingest_turn(self, user_id: str, user_text: str, assistant_text: str) -> None:
