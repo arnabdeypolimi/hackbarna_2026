@@ -61,12 +61,6 @@ def test_encode_serialises_concurrent_callers(fake_model):
     assert fake_model.max_active == 1 and len(fake_model.calls) == 6
 
 
-def test_lock_is_reentrant_for_voicemems_wrapped_encode(fake_model):
-    """voicemem_lane wraps model.encode in the same lock; e5.encode must nest inside it."""
-    with e5.lock():
-        assert e5.encode(["x"], kind="passage")  # would deadlock on a plain Lock
-
-
 async def test_local_e5_embedder_embeds_queries_off_the_loop(fake_model):
     vectors = await LocalE5Embedder().embed(["something like Sicario"])
     assert fake_model.calls == [["query: something like Sicario"]]

@@ -51,6 +51,16 @@ async def test_watched_titles_never_recommended(engine, u1_with_history):
     assert "27205" not in {r.title_id for r in recs}
 
 
+async def test_rejected_titles_never_recommended_again(engine, history):
+    first = await engine.recommend(RecsContext(user_id="u2", query_text="heist dream", limit=3))
+    declined = first[0].title_id
+    await history.record(Event(user_id="u2", kind=EventKind.REC_REJECTED, title_id=declined))
+    again = await engine.recommend(RecsContext(user_id="u2", query_text="heist dream", limit=3))
+    assert again and declined not in {r.title_id for r in again}
+    similar = await engine.similar("27205", RecsContext(user_id="u2", limit=5))
+    assert declined not in {r.title_id for r in similar}
+
+
 async def test_cold_start_falls_back_to_popular(engine):
     recs = await engine.recommend(RecsContext(user_id="new_user", limit=5))
     assert len(recs) == 5

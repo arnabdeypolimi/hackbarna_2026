@@ -26,17 +26,20 @@ say you have not been connected to the remote yet if they press for details.\
 
 GREETING_INSTRUCTION = (
     "The viewer has just turned you on. Greet them in one short sentence, no actions. "
-    "If any title is listed below as watched or recommended, welcome them back and offer "
-    "the most recent one by name (\"Welcome back — want to carry on with The Batman?\"). "
-    "Only if nothing is listed, ask what they would like to watch."
+    "Recent activity below lists titles newest first. If it names any title, welcome them back and "
+    "offer the FIRST title under 'Recently watched', or if that says (none yet) the FIRST under "
+    "'Recently recommended' (\"Welcome back — want to carry on with The Batman?\"). "
+    "The viewer profile is only for tone and preferences — never take the title from it. "
+    "Only if no title is listed anywhere, ask what they would like to watch."
 )
 
 
 def greeting_brief(history: str, memory: str) -> str:
     """The greeting turn's user message with the returning viewer's context spelled
     out inline — the model reliably uses what sits next to the instruction, less
-    so a section several thousand characters earlier in the system prompt."""
-    return f"{GREETING_INSTRUCTION}\n\n{history}\nMemory: {memory}"
+    so a section several thousand characters earlier in the system prompt.
+    History first: it decides the title; the profile only shades the wording."""
+    return f"{GREETING_INSTRUCTION}\n\n# Recent activity (newest first)\n{history}\n\n# Viewer profile (tone only)\n{memory}"
 
 
 def initial_messages() -> list[dict[str, str]]:
@@ -69,15 +72,24 @@ Resolve these from the Screen section directly — do not ask which one when the
 - For "something like X", "what should I watch", "recommend": emit `recommend_titles` (use `similar_to` with a title_id when X is on screen). \
 Put the genres the user asked for in `genres`, and every genre Memory says they dislike or avoid in `exclude_genres` — \
 never recommend against a stated dislike. Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
+- Memory describes tendencies; the words just spoken are the request. If the user asks for something Memory says they usually \
+avoid, do it — never refuse, lecture, or ask them to confirm. Memory only fills in what the request leaves open.
 - After receiving recommendation results, name at most three titles by name and year, and `focus` the best one.
 - Use `recall_memory` when the user refers to something they told you before that is not already in Memory.
+- When the user declines a title you offered ("no", "not that one", "forget about X", "something else"), do not ask what they meant: \
+emit one `reject_title` per declined title_id (all of them if they reject the whole set) and then `recommend_titles` for a fresh set, \
+in the same actions list. A rejected title is never offered again. Example, after you offered The Nun II (title_id 968051) and the \
+user says "no, not that one, something else": \
+{"intent": "recommend", "say": "Sure, let me find something else.", "actions": [{"verb": "reject_title", "title_id": "968051"}, \
+{"verb": "recommend_titles", "query": "horror", "genres": ["Horror"], "exclude_genres": [], "year_min": null, "year_max": null, "similar_to": null, "limit": 3}]}
 - Questions ("what am I watching", "who directed this", "what did I watch last time", "what did we talk about", \
 "what did you recommend yesterday") are intent "answer": answer from Screen, Memory and Recent activity with an EMPTY \
 actions list. Recent activity lists what was watched and what you recommended, with when — use it before calling `recall_memory`.
 - Never emit an action the user did not ask for — no `focus`, `resume` or `play` unless those words or a clear \
 equivalent were spoken. If unsure what they meant, intent "clarify" and ask one short question.
-- When greeted or turned on: one sentence, no actions. If Recent activity names a title they watched or you recommended, \
-welcome them back and offer the most recent one ("want to carry on with X?"); only when it says (none yet) ask what they would like to watch."""
+- When greeted or turned on: one sentence, no actions. Recent activity is newest first: if it names a title, welcome them back \
+and offer the first watched title, else the first recommended one ("want to carry on with X?"). Memory never picks the title. \
+Only when nothing is listed ask what they would like to watch."""
 
 _CONTRACT = """\
 # Output contract

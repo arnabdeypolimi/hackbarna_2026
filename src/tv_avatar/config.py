@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # LLM — Nebius Token Factory, OpenAI-compatible. The same key/URL feed the
-    # SGR agent, the catalog embedder and VoiceMem's ingest LLM (phase-2 D7).
+    # SGR agent, the cloud embedder option and the memory summariser (phase-2 D7).
     # OPENAI_* is accepted as an alias so an OpenAI-SDK-style .env keeps working.
     nebius_api_key: Secret = Field(
         validation_alias=AliasChoices("NEBIUS_API_KEY", "OPENAI_API_KEY"))
@@ -73,8 +73,8 @@ class Settings(BaseSettings):
     # test double.
     agent_impl: Literal["stub", "chat", "sgr"] = "sgr"
 
-    # Embeddings (catalog index + query). `local` = the process-shared
-    # multilingual-e5-small VoiceMem already loads (~15 ms/query, 384 dims);
+    # Embeddings (catalog index + query). `local` = multilingual-e5-small
+    # in-process via sentence-transformers (~15 ms/query, 384 dims);
     # `nebius` = the cloud model below (200–500 ms — blew the tool budget in
     # the field). The index must be built with the same provider.
     embedding_provider: Literal["local", "nebius"] = "local"
@@ -86,17 +86,17 @@ class Settings(BaseSettings):
         from tv_avatar.e5 import E5_DIM
         return E5_DIM if self.embedding_provider == "local" else self.embedding_dimensions
 
+    # Long-term memory: one LLM-written profile per user under memory_root,
+    # rewritten from the session transcript when the session ends. Titles are
+    # not part of it — history.db is the viewing log. Empty model = llm_model.
+    memory_model: str = ""
+    memory_profile_max_words: int = 200
+
     # Phase-2 local data — everything under data/ is git-ignored
-    voicemem_local_models_dir: str = "data/voicemem_models"
-    voicemem_chat_model: str = "deepseek-ai/DeepSeek-V4-Flash-0731"
-    # Which VoiceMem utils load. Both modes run left brain (facts) AND right brain
-    # (persona/affect notes) — with the local-E5 anchor patch a search is 13–17 ms in
-    # leftbrain_only; `text` additionally runs scene/trigger inference (~150–300 ms).
-    voicemem_mode: Literal["leftbrain_only", "text"] = "leftbrain_only"
     catalog_path: str = "data/catalog.parquet"
     qdrant_path: str = "data/qdrant_db"
     history_db_path: str = "data/history.db"
-    memory_root: str = "data/voicemem"
+    memory_root: str = "data/memory"
     catalog_index_limit: int = 100_000
 
     # Turn behaviour

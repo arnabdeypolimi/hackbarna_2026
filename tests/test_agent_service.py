@@ -279,6 +279,9 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     assert user.startswith(GREETING_INSTRUCTION)
     assert "Recently recommended: The Dark Knight (2008) (yesterday)" in user
     assert "loves Batman films" in user
+    # History decides the title, the profile only the tone — and it says so, in that order.
+    assert user.index("Recent activity (newest first)") < user.index("Viewer profile (tone only)")
+    assert "never take the title from it" in user and "Memory never picks the title" in system
     assert lane.ingests == []  # the synthetic greeting still is not stored as a user utterance
 
 
@@ -317,9 +320,9 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
 
     settings = _settings().model_copy(update={"cycle2_first_byte_s": 0.15})
     session = SessionState("sess_t", "tok", 0, user_id="u1")
-    bus, sink, tools = RecordingBus(), TimingSink(), FakeTools()
+    bus, sink, tools, lane = RecordingBus(), TimingSink(), FakeTools(), FakeMemoryLane()
     client = TwoSpeeds([RECO_1, RECO_2])
-    agent = SGRAgentService(settings, bus, FakeMemoryLane(), None, None, session, client=client, tools=tools)
+    agent = SGRAgentService(settings, bus, lane, None, None, session, client=client, tools=tools)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
 
     said = _spoken(sink)
@@ -328,6 +331,10 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     assert (await bus.next_outbound()).verb == "focus"        # first title focused
     assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
+    await asyncio.sleep(0.02)
+    # The template is spoken but is not the agent's reply: memory must not learn
+    # "wants Heat" from a substitute the popular channel happened to return.
+    assert lane.ingests == [("u1", "recommend me a heist movie", "Let me look.")]
 
 
 def test_render_fallback_shapes():

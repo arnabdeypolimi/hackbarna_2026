@@ -16,6 +16,7 @@ from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.memory.fake import FakeMemoryLane
 from tv_avatar.memory.lane import MemoryLane
+from tv_avatar.memory.summary_lane import SummaryMemoryLane
 from tv_avatar.recs.catalog import CatalogStore
 from tv_avatar.recs.embedder import Embedder, LocalE5Embedder, OpenAIEmbedder
 from tv_avatar.recs.engine import RecsEngine
@@ -38,12 +39,9 @@ class Runtime:
     recs: RecsEngine | None = None
 
     def warm_in_background(self) -> asyncio.Task:
-        """Pre-load the local E5 so no first search or query embed pays the ~6 s load.
-
-        The recs engine's query embed has a 240 ms budget; a cold model would
-        time every query out into the "popular" fallback until loaded — so the
-        load is triggered here even when the memory lane is not VoiceMem.
-        """
+        """Pre-load the local E5 (the recs query embed has a 240 ms budget; a cold
+        model would time every query out into the "popular" fallback) and let the
+        memory lane fold in any session that ended without a summary."""
         async def warm() -> None:
             if self.recs is not None and self.settings.embedding_provider == "local":
                 try:
@@ -84,8 +82,7 @@ def build_runtime(settings: Settings, *, lane: MemoryLane | None = None) -> Runt
 
     if lane is None:
         if settings.agent_impl == "sgr" and settings.nebius_api_key:
-            from tv_avatar.memory.voicemem_lane import VoiceMemLane
-            lane = VoiceMemLane(settings)
+            lane = SummaryMemoryLane(settings)
         else:
             lane = FakeMemoryLane()
     return Runtime(settings=settings, history=history, recorder=HistoryRecorder(history, catalog),

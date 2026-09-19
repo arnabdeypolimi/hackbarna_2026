@@ -1,12 +1,12 @@
 """Internal tool dispatch — verbs that never reach the TV (recommend_titles,
-recall_memory). Every call is bounded by the 400 ms tool budget and degrades
+recall_memory, reject_title). Every call is bounded by the 400 ms tool budget and degrades
 to a spoken fallback instead of hanging the turn."""
 import asyncio
 from typing import Any
 
 from loguru import logger
 
-from tv_avatar.agent.envelope import RecallMemory, RecommendTitles
+from tv_avatar.agent.envelope import RecallMemory, RecommendTitles, RejectTitle
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
@@ -32,6 +32,8 @@ class InternalTools:
                 case "recall_memory":
                     return await asyncio.wait_for(
                         self._recall(RecallMemory.model_validate(args), user_id), timeout=self._timeout)
+                case "reject_title":
+                    return self._reject(RejectTitle.model_validate(args), user_id)
                 case _:
                     return {"status": "unknown_tool", "verb": verb}
         except TimeoutError:
@@ -71,9 +73,26 @@ class InternalTools:
                 "genres": item.genres[:3] if item else [],
                 "why": r.reasons,
             })
-        if self._recorder is not None and titles:
-            self._recorder.spawn(self._recorder.on_rec_shown(user_id, [t["title_id"] for t in titles]))
-        return {"titles": titles}
+        # With a free-text query, "popular" is the engine's fill-in for nothing having
+        # matched it. Those are substitutes, not recommendations: the model is told so,
+        # and they are not logged as shown — otherwise the next greeting offers to
+        # "carry on" with whatever happened to be popular. Without a query (a genre or
+        # year request) popular-within-the-filters is the genuine answer.
+        substitute = bool(req.query) and not req.similar_to
+        matched = [t for t in titles if not (substitute and t["why"] == ["popular"])]
+        if self._recorder is not None and matched:
+            self._recorder.spawn(self._recorder.on_rec_shown(user_id, [t["title_id"] for t in matched]))
+        result: dict[str, Any] = {"titles": titles, "matched": bool(matched)}
+        if titles and not matched:
+            result["note"] = ("nothing in the catalog matched the request; these are popular fill-ins — "
+                              "tell the viewer you could not find a match before offering them")
+        return result
+
+    def _reject(self, req: RejectTitle, user_id: str) -> dict:
+        logger.bind(user_id=user_id).info("title rejected", step="tool", title_id=req.title_id)
+        if self._recorder is not None:
+            self._recorder.spawn(self._recorder.on_rec_rejected(user_id, req.title_id))
+        return {"status": "ok"}
 
     async def _recall(self, req: RecallMemory, user_id: str) -> dict:
         block = await self._lane.recall(user_id, req.query)

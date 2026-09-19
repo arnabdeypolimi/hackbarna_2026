@@ -122,10 +122,11 @@ class RecsEngine:
 
     async def recommend(self, ctx: RecsContext) -> list[RecoItem]:
         t0 = time.perf_counter()
-        watched = await self._history.watched_ids(ctx.user_id)
+        watched, rejected = await asyncio.gather(
+            self._history.watched_ids(ctx.user_id), self._history.rejected_ids(ctx.user_id))
         base = ctx.constraints
         filters = base.model_copy(update={
-            "exclude_ids": base.exclude_ids | watched,
+            "exclude_ids": base.exclude_ids | watched | rejected,
             "min_vote_count": base.min_vote_count if base.min_vote_count is not None else DEFAULT_MIN_VOTES,
         })
 
@@ -160,9 +161,10 @@ class RecsEngine:
         vec = self._catalog.vectors([title_id]).get(title_id)
         if vec is None:
             return await self.recommend(ctx)
-        watched = await self._history.watched_ids(ctx.user_id)
+        watched, rejected = await asyncio.gather(
+            self._history.watched_ids(ctx.user_id), self._history.rejected_ids(ctx.user_id))
         filters = ctx.constraints.model_copy(update={
-            "exclude_ids": ctx.constraints.exclude_ids | watched | {title_id}
+            "exclude_ids": ctx.constraints.exclude_ids | watched | rejected | {title_id}
         })
         anchor = self._catalog.lookup(title_id)
         tag = f"like {anchor.name}" if anchor else "similar"

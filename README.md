@@ -1,8 +1,8 @@
 # TV avatar backend
 
 Low-latency voice agent for a TV: Pipecat pipeline (SLNG speech I/O, Anam avatar), a
-Schema-Guided-Reasoning agent over an OpenAI-compatible LLM (Nebius), VoiceMem
-conversational memory, and TMDB recommendations. See `docs/superpowers/` for the spec and
+Schema-Guided-Reasoning agent over an OpenAI-compatible LLM (Nebius), a per-user
+memory profile rewritten at the end of every session, and TMDB recommendations. See `docs/superpowers/` for the spec and
 plans, `docs/findings/` for measured behaviour.
 
 ## Setup
@@ -49,8 +49,7 @@ have been spoken, the TV commands, and per-turn timings.
 ## Tests
 
 ```bash
-uv run pytest                                  # 115 tests, no network
-VOICEMEM_LIVE=1 uv run pytest -k slow_ingest   # live VoiceMem (downloads E5 once)
+uv run pytest                                  # no network
 ```
 
 Logs are loguru-only; every in-session line is bound with `session_id`/`user_id`/`turn_id`

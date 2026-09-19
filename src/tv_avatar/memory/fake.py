@@ -14,6 +14,10 @@ class FakeMemoryLane(BaseMemoryLane):
         self.fail_ingest = fail_ingest
         self.searches: list[tuple[str, str]] = []
         self.ingests: list[tuple[str, str, str]] = []
+        self.finished: list[str] = []
+
+    async def finish_session(self, user_id: str) -> None:
+        self.finished.append(user_id)
 
     async def _search(self, user_id: str, text: str) -> MemoryBlock:
         self.searches.append((user_id, text))

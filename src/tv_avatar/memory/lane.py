@@ -25,17 +25,21 @@ RECALL_BUDGET_S = 0.35
 class MemoryBlock(BaseModel):
     left: str = ""
     right: str = ""
+    #: A ready-to-read viewer profile (SummaryMemoryLane); rendered verbatim.
+    profile: str = ""
     speaker_id: str | None = None
     token_est: int = 0
     stale: bool = False
 
     @property
     def empty(self) -> bool:
-        return not (self.left.strip() or self.right.strip())
+        return not (self.left.strip() or self.right.strip() or self.profile.strip())
 
     def render_for_prompt(self) -> str:
         if self.empty:
             return "(none yet)"
+        if self.profile.strip():
+            return self.profile.strip()[:MAX_RENDER_CHARS]
         parts = []
         if self.left.strip():
             parts.append(f"Known facts and preferences:\n{self.left.strip()}")
@@ -58,6 +62,7 @@ class MemoryLane(Protocol):
     async def prefetch(self, user_id: str, partial: str) -> None: ...
     async def recall(self, user_id: str, final: str) -> MemoryBlock: ...
     async def ingest_turn(self, user_id: str, user_text: str, assistant_text: str) -> None: ...
+    async def finish_session(self, user_id: str) -> None: ...
     async def warmup(self) -> None: ...
 
 
@@ -90,6 +95,10 @@ class BaseMemoryLane(ABC):
     async def _ingest(self, user_id: str, user_text: str, assistant_text: str) -> dict: ...
 
     async def warmup(self) -> None:
+        return None
+
+    async def finish_session(self, user_id: str) -> None:
+        """Called once when the user's pipeline ends; lanes that consolidate per session override."""
         return None
 
     async def prefetch(self, user_id: str, partial: str) -> None:

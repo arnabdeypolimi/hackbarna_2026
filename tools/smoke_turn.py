@@ -1,5 +1,5 @@
 """Text-mode end-to-end smoke of the SGR agent: real Nebius LLM, real catalog,
-real VoiceMem lane and history — no speech keys needed.
+real memory lane and history — no speech keys needed.
 
 Drives SGRAgentService with LLMContextFrames through a Pipecat test pipeline
 and prints what would have been spoken, the commands that hit the bus, and
@@ -74,7 +74,7 @@ async def main(user_id: str, turns: list[str]) -> int:
     if runtime.catalog is None:
         logger.error("catalog missing — run tools/build_catalog.py --limit 500 first")
         return 1
-    await runtime.lane.warmup()
+    await runtime.warm()  # E5 for the recs query embed + memory catch-up, as the app does at start
 
     session = SessionState("sess_smoke", "tok", 0, user_id=user_id)
     tiles = runtime.catalog.sample(4)
@@ -125,6 +125,11 @@ async def main(user_id: str, turns: list[str]) -> int:
         print(f"  said: {said!r}")
         print(f"  commands: {[(c.verb, c.args) for c in commands]}   ({elapsed} ms)\n")
         await runtime.lane.ingest_turn(user_id, text, said)
+    # What the pipeline runner does when the session ends: consolidate the transcript.
+    await runtime.lane.finish_session(user_id)
+    profile = getattr(runtime.lane, "read_profile", lambda _u: "")(user_id)
+    if profile:
+        print("memory profile after this session:\n  " + profile.replace("\n", "\n  ") + "\n")
     await runtime.close()
     return 0
 

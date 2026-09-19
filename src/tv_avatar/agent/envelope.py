@@ -42,11 +42,21 @@ class RecallMemory(BaseModel):
     query: str
 
 
+class RejectTitle(BaseModel):
+    """Internal: the viewer declined a title that was offered. Recorded in the
+    viewing log so it is not recommended again or offered at the next greeting.
+    Fire-and-forget — no result comes back and no second cycle follows."""
+    verb: Literal["reject_title"] = "reject_title"
+    title_id: str
+
+
 INTERNAL_MODELS: dict[str, type[BaseModel]] = {
     "recommend_titles": RecommendTitles,
     "recall_memory": RecallMemory,
+    "reject_title": RejectTitle,
 }
-INTERNAL_AWAIT: frozenset[str] = frozenset(INTERNAL_MODELS)
+#: Internal verbs whose result the turn waits for (and that earn a second cycle).
+INTERNAL_AWAIT: frozenset[str] = frozenset({"recommend_titles", "recall_memory"})
 
 ALL_MODELS: dict[str, type[BaseModel]] = {
     **{v.value: m for v, m in COMMAND_MODELS.items()},
@@ -112,6 +122,7 @@ _VERB_DOCS: dict[str, str] = {
     Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
     "recommend_titles": "INTERNAL — ask the recommendation engine; you receive titles and then speak them",
     "recall_memory": "INTERNAL — look up something the user told you in the past",
+    "reject_title": "INTERNAL — the user declined a title you offered; it will not be offered again",
 }
 
 

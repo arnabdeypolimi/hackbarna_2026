@@ -66,6 +66,9 @@ class HistoryRecorder:
         for title_id in ids:
             await self._store.record(Event(user_id=user_id, kind=EventKind.REC_SHOWN, title_id=title_id))
 
+    async def on_rec_rejected(self, user_id: str, title_id: str) -> None:
+        await self._store.record(Event(user_id=user_id, kind=EventKind.REC_REJECTED, title_id=title_id))
+
     async def on_command(self, user_id: str, verb: str, args: dict[str, Any]) -> None:
         if verb == "search_catalog":
             await self._store.record(Event(user_id=user_id, kind=EventKind.SEARCH_ISSUED, detail=args))

@@ -67,7 +67,7 @@ def test_phase2_defaults(monkeypatch):
 
 
 def test_openai_env_names_are_accepted_as_aliases(monkeypatch):
-    """VoiceMem/mem0 and the OpenAI SDK speak OPENAI_*; a .env written for them still works."""
+    """The OpenAI SDK speaks OPENAI_*; a .env written for them still works."""
     _set_required(monkeypatch)
     monkeypatch.delenv("NEBIUS_API_KEY")
     monkeypatch.setenv("OPENAI_API_KEY", "nb-alias")

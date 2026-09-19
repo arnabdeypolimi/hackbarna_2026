@@ -14,7 +14,7 @@ def _isolated_runtime_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CATALOG_PATH", str(tmp_path / "catalog.parquet"))
     monkeypatch.setenv("QDRANT_PATH", str(tmp_path / "qdrant_db"))
     monkeypatch.setenv("HISTORY_DB_PATH", str(tmp_path / "history.db"))
-    monkeypatch.setenv("MEMORY_ROOT", str(tmp_path / "voicemem"))
+    monkeypatch.setenv("MEMORY_ROOT", str(tmp_path / "memory"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

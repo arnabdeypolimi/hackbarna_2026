@@ -32,7 +32,7 @@ from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
-from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, turn_plan_schema
+from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, INTERNAL_MODELS, turn_plan_schema
 from tv_avatar.agent.prompt import (
     GREETING_INSTRUCTION,
     build_system_prompt,
@@ -275,7 +275,9 @@ class SGRAgentService(LLMService):
                               memory_text: str | None, log) -> None:
         text, actions = render_fallback(results)
         log.debug("fallback", step="say", text=text, actions=actions)
-        self._turn_said.append(text)
+        # Deliberately not added to _turn_said: a template built from substitute
+        # results is not the agent's reply, and the memory profile must not learn
+        # the viewer "wanted" whatever the popular channel happened to return.
         await self._speak(text)
         for verb, args in actions:
             await self.dispatch_action(verb, args, turn_id, user_id, memory_text)
@@ -430,7 +432,7 @@ class SGRAgentService(LLMService):
                               memory_text: str | None = None) -> dict:
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         t0 = time.perf_counter()
-        if verb in INTERNAL_AWAIT:
+        if verb in INTERNAL_MODELS:
             log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
             result = await self._tools.run(verb, args, user_id, memory_text)
             ms = round((time.perf_counter() - t0) * 1000)

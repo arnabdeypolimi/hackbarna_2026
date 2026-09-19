@@ -23,6 +23,8 @@ class EventKind(StrEnum):
     SEARCH_ISSUED = "search_issued"
     REC_SHOWN = "rec_shown"
     REC_ACCEPTED = "rec_accepted"
+    #: The viewer declined a title the agent offered ("no, not that one").
+    REC_REJECTED = "rec_rejected"
     USER_EVENT = "user_event"
 
 
@@ -139,19 +141,46 @@ class HistoryStore:
                 break
         return seen
 
+    async def rejected_ids(self, user_id: str) -> set[str]:
+        """Titles the viewer declined and has not played since — kept out of
+        recommendations and the greeting until they do."""
+        db = await self._conn()
+        async with db.execute(
+            "SELECT title_id, kind FROM events WHERE user_id=? AND title_id IS NOT NULL AND kind IN (?, ?) "
+            "ORDER BY ts ASC",
+            (user_id, EventKind.REC_REJECTED.value, EventKind.PLAY_STARTED.value),
+        ) as cur:
+            rows = await cur.fetchall()
+        rejected: set[str] = set()
+        for title_id, kind in rows:  # chronological: a later play forgives an earlier rejection
+            if kind == EventKind.REC_REJECTED.value:
+                rejected.add(title_id)
+            else:
+                rejected.discard(title_id)
+        return rejected
+
+    async def recent_events(self, user_id: str, kind: EventKind, limit: int = 20) -> list[Event]:
+        db = await self._conn()
+        async with db.execute(
+            "SELECT ts, title_id, detail_json FROM events WHERE user_id=? AND kind=? ORDER BY ts DESC LIMIT ?",
+            (user_id, kind.value, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [Event(user_id=user_id, kind=kind, title_id=t, detail=json.loads(d), ts=ts) for ts, t, d in rows]
+
     async def recent_recommended(self, user_id: str, limit: int = 6) -> list[tuple[str, float]]:
-        """Titles the agent recommended to this user, newest first, with the event time."""
+        """Titles the agent recommended to this user and they did not decline,
+        newest first, with the event time."""
         db = await self._conn()
         async with db.execute(
             "SELECT title_id, ts FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL ORDER BY ts DESC",
             (user_id, EventKind.REC_SHOWN.value),
         ) as cur:
             rows = await cur.fetchall()
+        skip = await self.rejected_ids(user_id)
         out: list[tuple[str, float]] = []
-        seen: set[str] = set()
         for title_id, ts in rows:
-            if title_id not in seen:
-                seen.add(title_id)
+            if title_id not in skip and all(t != title_id for t, _ in out):
                 out.append((title_id, ts))
             if len(out) >= limit:
                 break
@@ -159,7 +188,7 @@ class HistoryStore:
 
     async def render_for_prompt(self, user_id: str, catalog: _Named | None = None, limit: int = 5) -> str:
         """Episodic memory for the prompt: what was watched and what was recommended
-        (with when). Conversational facts live in VoiceMem; this is the event log."""
+        (with when). Durable preferences live in the memory profile; this is the event log."""
         def name(title_id: str) -> str:
             item = catalog.lookup(title_id) if catalog else None
             return item.label() if item is not None else f"id={title_id}"

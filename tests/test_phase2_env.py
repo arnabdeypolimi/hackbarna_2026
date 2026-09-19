@@ -10,11 +10,10 @@ def test_new_dependencies_import():
     from qdrant_client import QdrantClient  # noqa: F401
 
 
-def test_voicemem_imports_and_constructs_in_text_config():
-    """Import alone must not load local models (they are lazy), and a
-    VoiceMem instance must be constructible without downloading anything."""
-    import voicemem
-    assert hasattr(voicemem, "VoiceMem")
+def test_sentence_transformers_is_a_direct_dependency():
+    """The local E5 recs embedder loads it itself (it used to arrive via VoiceMem)."""
+    import sentence_transformers  # noqa: F401
+    assert version("sentence-transformers")
 
 
 def test_pipecat_stack_unchanged():

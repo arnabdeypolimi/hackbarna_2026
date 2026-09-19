@@ -1,1 +1,1 @@
-"""Conversational memory lane — VoiceMem in text mode behind a protocol (D6, D9)."""
+"""Conversational memory lane — a rolling per-user profile behind a protocol (D6, D9)."""

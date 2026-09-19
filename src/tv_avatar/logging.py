@@ -1,6 +1,6 @@
 """Loguru is the only logger (phase-2 global constraint).
 
-Third-party libraries (VoiceMem, mem0, qdrant-client, openai, httpx) log
+Third-party libraries (qdrant-client, sentence-transformers, openai, httpx) log
 through stdlib ``logging``; a single intercept handler on the root logger
 turns those records into loguru records so one sink sees everything and
 ``session_id``/``turn_id`` bindings stay the sole way to correlate a turn.

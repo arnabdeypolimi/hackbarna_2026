@@ -70,6 +70,20 @@ async def test_recorder_renders_recent_names(tmp_path):
     await store.close()
 
 
+async def test_rejected_titles_leave_recently_recommended_until_played(tmp_path):
+    store = HistoryStore(str(tmp_path / "h.db"))
+    await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="346698", ts=1.0))   # Barbie
+    await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="980078", ts=2.0))
+    await store.record(Event(user_id="u1", kind=EventKind.REC_REJECTED, title_id="346698", ts=3.0))
+    assert await store.rejected_ids("u1") == {"346698"}
+    assert [t for t, _ in await store.recent_recommended("u1")] == ["980078"]
+    # Playing it later forgives the rejection: chronological, not a permanent blacklist.
+    await store.record(Event(user_id="u1", kind=EventKind.PLAY_STARTED, title_id="346698", ts=4.0))
+    assert await store.rejected_ids("u1") == set()
+    assert [e.title_id for e in await store.recent_events("u1", EventKind.REC_REJECTED)] == ["346698"]
+    await store.close()
+
+
 async def test_render_includes_recently_recommended_with_relative_time(tmp_path):
     import time as _t
 
