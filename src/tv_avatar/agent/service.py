@@ -41,6 +41,7 @@ from tv_avatar.session.state import SessionState
 
 MAX_CYCLES = 2
 MAX_TOKENS = 400
+TEMPERATURE = 0.2
 
 
 def _last_user_text(messages: list[dict]) -> str:
@@ -60,7 +61,12 @@ class SGRAgentService(LLMService):
                  recs: RecsEngine | None, history: HistoryStore | None, session: SessionState,
                  *, catalog: CatalogStore | None = None, client: Any | None = None,
                  tools: InternalTools | None = None, **kwargs) -> None:
-        kwargs.setdefault("settings", LLMSettings(model=settings.llm_model))
+        kwargs.setdefault("settings", LLMSettings(
+            model=settings.llm_model, temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
+            system_instruction=None, top_p=None, top_k=None, frequency_penalty=None,
+            presence_penalty=None, seed=None, filter_incomplete_user_turns=None,
+            user_turn_completion_config=None,
+        ))
         super().__init__(**kwargs)
         self._cfg = settings
         self._bus = bus
@@ -157,39 +163,48 @@ class SGRAgentService(LLMService):
         await self.start_ttfb_metrics()
         stream = await self._client.chat.completions.create(
             model=self._cfg.llm_model, messages=messages, stream=True,
-            temperature=0.2, max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
             response_format={"type": "json_schema", "json_schema": turn_plan_schema()},
             extra_body=self._cfg.llm_extra_body or None,
         )
-        async for chunk in stream:
-            choice = chunk.choices[0] if chunk.choices else None
-            delta = choice.delta.content if choice and choice.delta else None
-            if not delta:
-                continue
-            raw.append(delta)
-            for event in streamer.feed(delta):
-                match event:
-                    case IntentReady(intent=intent):
-                        marks["intent"] = intent
-                    case SayDelta(text=text):
-                        if first_say:
-                            first_say = False
-                            await self.stop_ttfb_metrics()
-                            marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
-                        await self.push_frame(LLMTextFrame(text))
-                    case ActionReady(action=action):
-                        verb = str(action.get("verb", ""))
-                        args = {k: v for k, v in action.items() if k != "verb" and v is not None}
-                        marks["n_actions"] += 1
-                        if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
-                            continue  # no open-ended loops on a voice interface
-                        task = asyncio.create_task(self.dispatch_action(verb, args, turn_id, user_id, memory_text))
-                        (awaited if verb in AWAITED_VERBS else fire).append((verb, task) if verb in AWAITED_VERBS else task)
-                        marks.setdefault("first_action_ms", round((time.perf_counter() - t0) * 1000))
-                    case Done():
-                        break
-            if streamer.finished:
-                break
+        try:
+            async for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                delta = choice.delta.content if choice and choice.delta else None
+                if not delta:
+                    continue
+                raw.append(delta)
+                for event in streamer.feed(delta):
+                    match event:
+                        case IntentReady(intent=intent):
+                            marks["intent"] = intent
+                        case SayDelta(text=text):
+                            if first_say:
+                                first_say = False
+                                await self.stop_ttfb_metrics()
+                                marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
+                            await self.push_frame(LLMTextFrame(text))
+                        case ActionReady(action=action):
+                            verb = str(action.get("verb", ""))
+                            args = {k: v for k, v in action.items() if k != "verb" and v is not None}
+                            marks["n_actions"] += 1
+                            if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
+                                continue  # no open-ended loops on a voice interface
+                            task = asyncio.create_task(
+                                self.dispatch_action(verb, args, turn_id, user_id, memory_text))
+                            if verb in AWAITED_VERBS:
+                                awaited.append((verb, task))
+                            else:
+                                fire.append(task)
+                            marks.setdefault("first_action_ms", round((time.perf_counter() - t0) * 1000))
+                        case Done():
+                            break
+                if streamer.finished:
+                    break
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                await close()
         if first_say:
             await self.stop_ttfb_metrics()
 
@@ -237,5 +252,6 @@ class SGRAgentService(LLMService):
 
     @staticmethod
     def needs_second_cycle(results: list[tuple[str, dict]]) -> bool:
-        return any(verb in INTERNAL_AWAIT and result.get("status") not in ("unavailable", "error")
-                   for verb, result in results)
+        """Any internal tool call earns a second cycle — including a failed one,
+        so the agent speaks the fallback instead of stopping at the filler."""
+        return any(verb in INTERNAL_AWAIT for verb, _ in results)

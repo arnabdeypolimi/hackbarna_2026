@@ -21,7 +21,10 @@ _RULES = """\
 Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
 - After receiving recommendation results, name at most three titles by name and year, and `focus` the best one.
 - Use `recall_memory` when the user refers to something they told you before that is not already in Memory.
-- Never emit an action the user did not ask for. If unsure what they meant, intent "clarify" and ask one short question."""
+- Questions ("what am I watching", "who directed this", "what did I watch last time") are intent "answer": \
+answer from Screen, Memory and Recent activity with an EMPTY actions list.
+- Never emit an action the user did not ask for — no `focus`, `resume` or `play` unless those words or a clear \
+equivalent were spoken. If unsure what they meant, intent "clarify" and ask one short question."""
 
 _CONTRACT = """\
 # Output contract

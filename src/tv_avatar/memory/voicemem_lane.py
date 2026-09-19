@@ -74,8 +74,14 @@ class VoiceMemLane(BaseMemoryLane):
             "top_k": 5,
             "embedding": {"provider": "local"},   # multilingual-e5-small, CPU — read path stays local
             "slots": {"provider": "local"},       # shares the E5 instance; no LLM hop
-            "llm": {"provider": "openai",         # ingest / extraction only — off the turn
-                    "config": {"model": self._settings.voicemem_chat_model}},
+            # ingest / extraction only — off the turn. api_key/base_url here make
+            # VoiceMem export OPENAI_API_KEY/OPENAI_BASE_URL itself, so every one
+            # of its internal OpenAI clients targets Nebius even when .env was
+            # not exported into the process environment.
+            "llm": {"provider": "openai",
+                    "config": {"model": self._settings.voicemem_chat_model,
+                               "api_key": self._settings.openai_api_key,
+                               "base_url": self._settings.openai_base_url}},
         })
 
     async def _vm_for(self, user_id: str):

@@ -23,6 +23,9 @@ CHANNEL_LIMIT = 50
 PREFIX_CHARS = 20
 QUERY_CACHE_TTL_S = 30.0
 DEFAULT_MIN_VOTES = 50
+#: The embed hop gets this share of the tool budget so a timeout still leaves
+#: room for the taste/popular channels to answer inside the same budget.
+EMBED_BUDGET_FRACTION = 0.6
 
 
 class RecsContext(BaseModel):
@@ -55,7 +58,7 @@ class RecsEngine:
         self._catalog = catalog
         self._history = history
         self._embedder = embedder
-        self._timeout = tool_timeout_s
+        self._timeout = tool_timeout_s * EMBED_BUDGET_FRACTION
         self._query_cache: dict[tuple[str, str], tuple[float, list[float]]] = {}
         self._inflight: dict[tuple[str, str], asyncio.Task] = {}
         self._taste_cache: dict[str, list[float] | None] = {}
