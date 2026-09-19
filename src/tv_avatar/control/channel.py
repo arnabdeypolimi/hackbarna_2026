@@ -59,6 +59,10 @@ class ControlChannel:
             case "screen_state":
                 old = self._session.screen
                 self._session.update_screen(msg.state)
+                pb = msg.state.playback
+                self._log.debug("screen state | view={} rail={} focus={} tiles={} playback={} {} @{}s",
+                                msg.state.view, msg.state.rail_id, msg.state.focus_index,
+                                len(msg.state.tiles), pb.state, pb.title_id, pb.position_s)
                 if self._recorder is not None:
                     self._recorder.spawn(
                         self._recorder.on_screen_transition(self._session.user_id, old, msg.state))
