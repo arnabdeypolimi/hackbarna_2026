@@ -1,5 +1,5 @@
 """Internal tool dispatch — verbs that never reach the TV (recommend_titles,
-recall_memory, reject_title). Every call is bounded by the 400 ms tool budget and degrades
+reject_title). Every call is bounded by the 400 ms tool budget and degrades
 to a spoken fallback instead of hanging the turn.
 
 `run` takes the parsed action (SGR routing: the union member *is* the branch),
@@ -12,21 +12,18 @@ from pydantic import BaseModel
 
 from tv_avatar.agent.envelope import (
     InternalAction,
-    RecallMemory,
     RecommendTitles,
     RejectTitle,
 )
 from tv_avatar.history.recorder import HistoryRecorder
-from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
 
 
 class InternalTools:
-    def __init__(self, recs: RecsEngine | None, lane: MemoryLane, catalog: CatalogStore | None,
+    def __init__(self, recs: RecsEngine | None, catalog: CatalogStore | None,
                  *, recorder: HistoryRecorder | None = None, timeout_s: float = 0.4) -> None:
         self._recs = recs
-        self._lane = lane
         self._catalog = catalog
         self._recorder = recorder
         self._timeout = timeout_s
@@ -37,8 +34,6 @@ class InternalTools:
             match action:
                 case RecommendTitles():
                     return await asyncio.wait_for(self._recommend(action, user_id), timeout=self._timeout)
-                case RecallMemory():
-                    return await asyncio.wait_for(self._recall(action, user_id), timeout=self._timeout)
                 case RejectTitle():
                     return self._reject(action, user_id)
                 case _:
@@ -103,9 +98,3 @@ class InternalTools:
         if self._recorder is not None:
             self._recorder.spawn(self._recorder.on_rec_rejected(user_id, req.title_id))
         return {"status": "ok"}
-
-    async def _recall(self, req: RecallMemory, user_id: str) -> dict:
-        block = await self._lane.recall(user_id, req.query)
-        logger.bind(user_id=user_id).debug("recall_memory", step="tool", query=req.query,
-                                           empty=block.empty, tokens=block.token_est)
-        return {"memory": block.render_for_prompt()}

@@ -146,24 +146,6 @@
     ],
     "type": "object"
    },
-   "RecallMemory": {
-    "additionalProperties": false,
-    "description": "Internal: search conversational memory for something the user told us before.",
-    "properties": {
-     "query": {
-      "type": "string"
-     },
-     "verb": {
-      "const": "recall_memory",
-      "type": "string"
-     }
-    },
-    "required": [
-     "verb",
-     "query"
-    ],
-    "type": "object"
-   },
    "RecommendTitles": {
     "additionalProperties": false,
     "description": "Internal: ask the recommendation engine for titles; results feed cycle 2.\n\nConstraints are typed so constrained decoding can only emit real TMDB genres;\nthe model — not a keyword list — decides what the user's memory implies.",
@@ -451,9 +433,6 @@
       },
       {
        "$ref": "#/$defs/RecommendTitles"
-      },
-      {
-       "$ref": "#/$defs/RecallMemory"
       },
       {
        "$ref": "#/$defs/RejectTitle"

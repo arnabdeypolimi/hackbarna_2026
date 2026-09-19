@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from tv_avatar.agent.commands import Verb
 from tv_avatar.agent.envelope import (
     REGISTRY,
-    RecallMemory,
     RecommendTitles,
     RejectTitle,
     TurnPlan,
@@ -42,7 +41,6 @@ def test_registry_classification():
     assert REGISTRY["play"].kind == "tv" and not REGISTRY["play"].awaits_result
     rec = REGISTRY["recommend_titles"]
     assert rec.kind == "internal" and rec.awaits_result and rec.earns_cycle
-    assert REGISTRY["recall_memory"].earns_cycle
     rej = REGISTRY["reject_title"]
     assert rej.kind == "internal" and not rej.awaits_result and not rej.earns_cycle
     # A result can only earn a cycle if the turn waited for it.
@@ -52,7 +50,6 @@ def test_registry_classification():
 
 def test_parse_action_returns_typed_model():
     assert isinstance(parse_action({"verb": "recommend_titles", "query": "heist"}), RecommendTitles)
-    assert isinstance(parse_action({"verb": "recall_memory", "query": "x"}), RecallMemory)
     assert isinstance(parse_action({"verb": "reject_title", "title_id": "1"}), RejectTitle)
     assert parse_action({"verb": "focus", "title_id": "27205"}).verb == Verb.FOCUS
     with pytest.raises(ValidationError):

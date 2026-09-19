@@ -51,7 +51,7 @@ def test_mark_once_keeps_the_first_value():
 
 def test_tool_result_knows_whether_it_earns_a_cycle():
     assert ToolResult("recommend_titles", {"titles": []}).earns_cycle
-    assert ToolResult("recall_memory", {"status": "error"}).earns_cycle   # a failure still needs speaking
+    assert ToolResult("recommend_titles", {"status": "error"}).earns_cycle   # a failure still needs speaking
     assert not ToolResult("search_catalog", {"status": "ok"}).earns_cycle
     assert not ToolResult("reject_title", {}).earns_cycle
     assert not ToolResult("not_a_verb", {}).earns_cycle
@@ -59,7 +59,7 @@ def test_tool_result_knows_whether_it_earns_a_cycle():
 
 def test_cycle_outcome_feedback_is_keyed_by_verb():
     outcome = CycleOutcome(raw="{}", results=(ToolResult("recommend_titles", {"titles": [1]}),
-                                              ToolResult("recall_memory", {"memory": "x"})))
+                                              ToolResult("search_catalog", {"status": "ok"})))
     assert outcome.needs_another_cycle
-    assert outcome.feedback() == '{"recommend_titles": {"titles": [1]}, "recall_memory": {"memory": "x"}}'
+    assert outcome.feedback() == '{"recommend_titles": {"titles": [1]}, "search_catalog": {"status": "ok"}}'
     assert not CycleOutcome(raw="{}", results=()).needs_another_cycle

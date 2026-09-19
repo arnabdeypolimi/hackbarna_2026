@@ -8,7 +8,6 @@ from tv_avatar.agent.envelope import RecommendTitles, RejectTitle
 from tv_avatar.agent.tools import InternalTools
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.history.store import EventKind, HistoryStore
-from tv_avatar.memory.fake import FakeMemoryLane
 from tv_avatar.recs.engine import RecoItem
 
 
@@ -25,7 +24,7 @@ class FakeRecs:
 
 async def _tools(tmp_path, items):
     store = HistoryStore(str(tmp_path / "h.db"))
-    tools = InternalTools(FakeRecs(items), FakeMemoryLane(), None, recorder=HistoryRecorder(store))
+    tools = InternalTools(FakeRecs(items), None, recorder=HistoryRecorder(store))
     return tools, store
 
 

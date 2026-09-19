@@ -87,7 +87,7 @@ class SGRAgentService(LLMService):
         self._catalog = catalog
         self._session = session
         self._client = client or AsyncOpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
-        self._tools = tools or InternalTools(recs, lane, catalog, recorder=recorder,
+        self._tools = tools or InternalTools(recs, catalog, recorder=recorder,
                                              timeout_s=settings.tool_timeout_s)
         self._recorder = recorder
         self._runner = TurnRunner(self._client, settings, self)

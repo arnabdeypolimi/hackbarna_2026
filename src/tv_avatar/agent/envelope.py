@@ -45,12 +45,6 @@ class RecommendTitles(BaseModel):
     limit: int = Field(default=8, ge=1, le=12)
 
 
-class RecallMemory(BaseModel):
-    """Internal: search conversational memory for something the user told us before."""
-    verb: Literal["recall_memory"] = "recall_memory"
-    query: str
-
-
 class RejectTitle(BaseModel):
     """Internal: the viewer declined a title that was offered. Recorded in the
     viewing log so it is not recommended again or offered at the next greeting.
@@ -59,7 +53,7 @@ class RejectTitle(BaseModel):
     title_id: str
 
 
-InternalAction = RecommendTitles | RecallMemory | RejectTitle
+InternalAction = RecommendTitles | RejectTitle
 
 
 @dataclass(frozen=True)
@@ -98,9 +92,6 @@ REGISTRY: dict[str, ActionSpec] = {
     "recommend_titles": ActionSpec(
         RecommendTitles, "internal", awaits_result=True, earns_cycle=True,
         doc="INTERNAL — ask the recommendation engine; you receive titles and then speak them"),
-    "recall_memory": ActionSpec(
-        RecallMemory, "internal", awaits_result=True, earns_cycle=True,
-        doc="INTERNAL — look up something the user told you in the past"),
     "reject_title": ActionSpec(
         RejectTitle, "internal", awaits_result=False, earns_cycle=False,
         doc="INTERNAL — the user declined a title you offered; it will not be offered again"),

@@ -39,7 +39,7 @@ def build_agent(settings: Settings, runtime: Runtime, session: SessionState, bus
             from tv_avatar.agent.service import SGRAgentService
             from tv_avatar.agent.tools import InternalTools
 
-            tools = InternalTools(runtime.recs, runtime.lane, runtime.catalog,
+            tools = InternalTools(runtime.recs, runtime.catalog,
                                   recorder=runtime.recorder, timeout_s=settings.tool_timeout_s)
             return SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
                                    catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)

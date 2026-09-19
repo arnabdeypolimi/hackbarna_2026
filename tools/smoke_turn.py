@@ -89,7 +89,7 @@ async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
     ))
     bus = CommandBus()
     context = LLMContext()
-    tools = InternalTools(runtime.recs, runtime.lane, runtime.catalog, recorder=runtime.recorder,
+    tools = InternalTools(runtime.recs, runtime.catalog, recorder=runtime.recorder,
                           timeout_s=settings.tool_timeout_s)
     agent = SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
                             catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)

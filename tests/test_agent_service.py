@@ -500,7 +500,6 @@ def test_render_fallback_shapes():
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
     assert actions == [("focus", {"title_id": "1"})]
     assert render_fallback((ToolResult("recommend_titles", {"titles": []}),))[1] == []
-    assert "don't have that" in render_fallback((ToolResult("recall_memory", {"memory": "(none yet)"}),))[0]
     assert "took too long" in render_fallback((ToolResult("search_catalog", {"status": "unavailable"}),))[0]
 
 
