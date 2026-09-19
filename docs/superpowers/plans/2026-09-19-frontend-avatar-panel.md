@@ -408,13 +408,25 @@ export function languageOptions(config: BackendConfig): LanguageInfo[] {
 }
 
 /**
- * Who speaks a language. Several avatars may qualify — English has both Cara and
- * Igor today — and the catalogue's own default wins, so the host a viewer meets
- * first is the one the backend considers canonical.
+ * Who speaks a language. A specialist beats the multilingual default — Lucía's
+ * Castilian voice is the entire point of having her — so the narrowest allow-list
+ * covering the language wins. The catalogue's default avatar breaks ties, and takes
+ * the default language outright: that is the front door, and the default is the host
+ * the catalogue means a viewer to meet there.
+ *
+ * The rule cannot be "prefer the default", which is the obvious reading and is wrong:
+ * an avatar with no `languages` key in avatars.yaml is published as speaking every
+ * language, so the default would win all four and the native voices would be dead
+ * entries.
  */
 export function avatarForLanguage(config: BackendConfig, code: string): AvatarInfo | null {
   const able = config.avatars.filter((a) => a.languages.indexOf(code) >= 0);
-  return able.filter((a) => a.id === config.default_avatar)[0] ?? able[0] ?? null;
+  if (!able.length) return null;
+  const fallback = able.filter((a) => a.id === config.default_avatar)[0];
+  if (code === config.default_language && fallback) return fallback;
+  const narrowest = able.reduce((a, b) => (b.languages.length < a.languages.length ? b : a));
+  const tied = able.filter((a) => a.languages.length === narrowest.languages.length);
+  return tied.filter((a) => a.id === config.default_avatar)[0] ?? tied[0];
 }
 ```
 
@@ -448,7 +460,7 @@ const s = await c.connect({
 });
 ```
 
-Expected, in order: the language codes `['en','es','fr','ca']` and the name `Lucía`; a microphone permission prompt; a face appearing in the corner video within a few seconds; the avatar greeting you audibly; `status` logging `listening` / `thinking` / `speaking` as you speak to it.
+Expected, in order: the language codes `['en','es','fr','ca']`, and the avatar for each of `en`/`es`/`fr`/`ca` being `Cara`/`Lucía`/`Chloé`/`Pau` — all four, because the whole mapping is what is under test; a microphone permission prompt; a face appearing in the corner video within a few seconds; the avatar greeting you audibly; `status` logging `listening` / `thinking` / `speaking` as you speak to it.
 
 Then run `s.close(); v.remove();`
 Expected: the video stops, the browser's microphone indicator goes out, and the uvicorn log shows the session closing.
