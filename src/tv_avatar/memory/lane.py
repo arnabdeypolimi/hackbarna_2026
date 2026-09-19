@@ -14,9 +14,12 @@ from typing import Protocol
 from loguru import logger
 from pydantic import BaseModel
 
-PREFETCH_TTL_S = 2.0
+PREFETCH_TTL_S = 4.0
 PREFIX_CHARS = 20
 MAX_RENDER_CHARS = 1800  # ≈ 450–500 tokens
+#: A recall that is not a prefetch hit may cost at most this much of the turn;
+#: past it the agent proceeds with the last known block (stale) or none.
+RECALL_BUDGET_S = 0.35
 
 
 class MemoryBlock(BaseModel):
@@ -59,7 +62,10 @@ class MemoryLane(Protocol):
 
 
 def _prefix(text: str) -> str:
-    return " ".join(text.lower().split())[:PREFIX_CHARS]
+    """Case/punctuation-insensitive: STT partials arrive without the final's
+    punctuation ("i dont know maybe" vs "I don't know. Maybe")."""
+    cleaned = "".join(ch for ch in text.lower() if ch.isalnum() or ch.isspace())
+    return " ".join(cleaned.split())[:PREFIX_CHARS]
 
 
 @dataclass
@@ -72,9 +78,10 @@ class _Prefetched:
 class BaseMemoryLane(ABC):
     """Prefetch cache + error containment; subclasses supply `_search`/`_ingest`."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, recall_budget_s: float = RECALL_BUDGET_S) -> None:
         self._prefetched: dict[str, _Prefetched] = {}
         self._inflight: dict[str, asyncio.Task[MemoryBlock]] = {}
+        self._recall_budget_s = recall_budget_s
 
     @abstractmethod
     async def _search(self, user_id: str, text: str) -> MemoryBlock: ...
@@ -117,22 +124,34 @@ class BaseMemoryLane(ABC):
     async def recall(self, user_id: str, final: str) -> MemoryBlock:
         log = logger.bind(user_id=user_id)
         prefix = _prefix(final)
+        t0 = time.perf_counter()
         pending = self._inflight.get(user_id)
         if pending is not None and not pending.done():
-            with contextlib.suppress(asyncio.CancelledError, Exception):  # logged by the prefetch task
-                await asyncio.shield(pending)
+            with contextlib.suppress(asyncio.CancelledError, Exception, TimeoutError):  # logged by the task
+                await asyncio.wait_for(asyncio.shield(pending), timeout=self._recall_budget_s)
         cached = self._prefetched.get(user_id)
         if cached is not None:
             age = time.monotonic() - cached.done_at
             if age < PREFETCH_TTL_S and (prefix.startswith(cached.prefix) or cached.prefix.startswith(prefix)):
                 log.debug("memory prefetch hit", age_ms=round(age * 1000))
                 return cached.block
-        log.debug("memory prefetch miss")
+        remaining = self._recall_budget_s - (time.perf_counter() - t0)
+        log.debug("memory prefetch miss", budget_ms=round(max(remaining, 0) * 1000))
+        if remaining <= 0.02:
+            return self._stale_or_empty(user_id, log, "budget spent waiting for prefetch")
         try:
-            return await self._search(user_id, final)
+            return await asyncio.wait_for(self._search(user_id, final), timeout=remaining)
+        except TimeoutError:
+            return self._stale_or_empty(user_id, log, "search over budget")
         except Exception as err:  # noqa: BLE001
             log.warning("memory recall failed", error=type(err).__name__)
             return MemoryBlock(stale=True)
+
+    def _stale_or_empty(self, user_id: str, log, reason: str) -> MemoryBlock:
+        cached = self._prefetched.get(user_id)
+        block = cached.block.model_copy(update={"stale": True}) if cached else MemoryBlock(stale=True)
+        log.debug("memory recall degraded", reason=reason, has_stale=cached is not None)
+        return block
 
     async def ingest_turn(self, user_id: str, user_text: str, assistant_text: str) -> None:
         log = logger.bind(user_id=user_id)

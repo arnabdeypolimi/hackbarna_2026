@@ -64,3 +64,32 @@ async def test_prefetch_is_not_serialised_behind_a_slow_ingest(tmp_path):
     await asyncio.wait_for(lane.prefetch("u1", "what should I"), timeout=1.0)
     assert time.perf_counter() - t0 < 0.7
     await ingest
+
+
+async def test_prefix_match_ignores_punctuation_and_case():
+    """Reson8 partials arrive unpunctuated; the final is punctuated. Still a hit."""
+    lane = FakeMemoryLane({"u1": MemoryBlock.from_lines(["likes batman"], [])})
+    await lane.prefetch("u1", "i dont know maybe")
+    block = await lane.recall("u1", "I don't know. Maybe something about Batman.")
+    assert "batman" in block.render_for_prompt()
+    assert len(lane.searches) == 1
+
+
+async def test_recall_never_exceeds_its_budget():
+    lane = FakeMemoryLane({"u1": MemoryBlock.from_lines(["old fact"], [])}, search_delay_s=0.5)
+    await lane.prefetch("u1", "warm this")                 # slow, but completes: cached block exists
+    t0 = time.perf_counter()
+    block = await lane.recall("u1", "something completely different")
+    assert time.perf_counter() - t0 < 0.45                 # 0.35 s budget, not 0.5 s search
+    assert block.stale and "old fact" in block.render_for_prompt()
+
+
+async def test_recall_waits_on_inflight_prefetch_only_within_budget():
+    lane = FakeMemoryLane(search_delay_s=0.6)
+    task = asyncio.create_task(lane.prefetch("u1", "slow prefetch"))
+    await asyncio.sleep(0.01)
+    t0 = time.perf_counter()
+    block = await lane.recall("u1", "slow prefetch please")
+    assert time.perf_counter() - t0 < 0.45
+    assert block.stale
+    await task

@@ -108,8 +108,10 @@ class VoiceMemLane(BaseMemoryLane):
         result = await asyncio.to_thread(vm.search, text)
         left = list(getattr(result, "result_leftbrain", []) or [])
         right = list(getattr(result, "result_rightbrain", []) or [])
-        directive = getattr(result, "rb_directive", "") or ""
-        if directive:
+        directive = (getattr(result, "rb_directive", "") or "").strip()
+        # VoiceMem appends a "Note: the memory system found no specific evidence…"
+        # directive when it has nothing; that is not a memory and costs ~50 tokens.
+        if directive and (left or right) and not directive.lower().startswith("note:"):
             right.append(directive)
         return MemoryBlock.from_lines(left, right)
 

@@ -106,6 +106,7 @@ class TurnLatencyObserver(_DedupObserver):
         self._t_first_text: float | None = None
         self._t_interrupt: float | None = None
         self._metrics: dict[str, float] = {}
+        self._emitted = False
         self.last_marks: dict | None = None
 
     async def on_push_frame(self, data: FramePushed) -> None:
@@ -116,7 +117,9 @@ class TurnLatencyObserver(_DedupObserver):
             self._reset()
         elif isinstance(frame, InterimTranscriptionFrame) and self._t_interim is None:
             self._t_interim = now
-        elif isinstance(frame, LLMContextFrame):
+        elif isinstance(frame, LLMContextFrame) and self._t_context is None:
+            # The assistant aggregator re-pushes a context frame after the reply;
+            # only the first one per turn marks the start of inference.
             self._t_context = now
         elif isinstance(frame, LLMTextFrame) and self._t_first_text is None:
             self._t_first_text = now
@@ -129,7 +132,16 @@ class TurnLatencyObserver(_DedupObserver):
                 elif isinstance(m, ProcessingMetricsData):
                     self._metrics["pipecat_processing_ms"] = round(m.value * 1000)
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._emit(now)
+            if self._t_interrupt is not None and self._t_first_text is None:
+                # The bot stopped because the user barged in: this is the stop
+                # latency of the interrupted utterance, not the end of a turn.
+                logger.bind(session_id=self._session.session_id, user_id=self._session.user_id,
+                            turn_id=self._session.current_turn_id or "-").info(
+                    "interrupt stop", interrupt_stop_ms=round((now - self._t_interrupt) * 1000))
+                self._t_interrupt = None
+            elif not self._emitted:
+                self._emitted = True
+                self._emit(now)
 
     def _emit(self, now: float) -> None:
         marks: dict = dict(self._metrics)
@@ -137,8 +149,6 @@ class TurnLatencyObserver(_DedupObserver):
             marks["interim_to_context_ms"] = round((self._t_context - self._t_interim) * 1000)
         if self._t_context and self._t_first_text:
             marks["ttft_ms"] = round((self._t_first_text - self._t_context) * 1000)
-        if self._t_interrupt:
-            marks["interrupt_stop_ms"] = round((now - self._t_interrupt) * 1000)
         if self._t_context:
             marks["turn_total_ms"] = round((now - self._t_context) * 1000)
         self.last_marks = marks
