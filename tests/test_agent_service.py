@@ -185,7 +185,7 @@ def test_search_fallback_names_the_hits():
     from tv_avatar.agent.service import render_fallback
     text, actions = render_fallback([("search_catalog", TV_HITS)])
     assert text == "I found Gravity, or Moon."
-    assert actions == [("focus", {"title_id": "49047"})]
+    assert actions == [("show_titles", {"title_ids": ["49047", "17431"], "label": "Search results"})]
     assert "couldn't find" in render_fallback([("search_catalog", {"titles": []})])[0]
 
 
@@ -369,7 +369,7 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     said = _spoken(sink)
     assert said[0] == "Let me look."
     assert "How about Heat, or Inception?" in said            # from FakeTools' two titles
-    assert (await bus.next_outbound()).verb == "focus"        # first title focused
+    assert (await bus.next_outbound()).verb == "show_titles"  # the picks go on screen
     assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
     await asyncio.sleep(0.02)
@@ -384,7 +384,8 @@ def test_render_fallback_shapes():
         {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
         {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]})])
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
-    assert actions == [("focus", {"title_id": "1"})]
+    # Every returned title goes on the rail, even the ones not spoken.
+    assert actions == [("show_titles", {"title_ids": ["1", "2", "3", "4"], "label": "For you"})]
     assert render_fallback([("recommend_titles", {"titles": []})])[1] == []
     assert "don't have that" in render_fallback([("recall_memory", {"memory": "(none yet)"})])[0]
     assert "took too long" in render_fallback([("search_catalog", {"status": "unavailable"})])[0]

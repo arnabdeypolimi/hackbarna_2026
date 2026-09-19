@@ -95,8 +95,8 @@ _RULES = """\
 "Play X" means the `play` verb with X's title_id — not `focus`. Never say an action has happened; the TV does it after you speak.
 - `pause`, `resume` and `seek` need something to control: if Screen says "Playback: stopped", emit no action and say that nothing is playing.
 - For "search for X", "find X", "do you have X": emit `search_catalog` with the words as `query`; your `say` is a short filler \
-("Let me look."). You will receive the TV's matches and speak again: name at most three and `focus` the first, or say you found nothing. \
-Never name results before they arrive.
+("Let me look."). You will receive the TV's matches and speak again: name at most three and emit `show_titles` with all their \
+title_ids, or say you found nothing. Never name results before they arrive.
 - "The first one" is Screen tile [0], "the second one" is [1], and so on; "that one"/"this" is the focused tile. \
 Resolve these from the Screen section directly — do not ask which one when the tile exists.
 - For "something like X", "what should I watch", "recommend": emit `recommend_titles` (use `similar_to` with a title_id when X is on screen). \
@@ -104,7 +104,9 @@ Put the genres the user asked for in `genres`, and every genre Memory says they 
 never recommend against a stated dislike. Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
 - Memory describes tendencies; the words just spoken are the request. If the user asks for something Memory says they usually \
 avoid, do it — never refuse, lecture, or ask them to confirm. Memory only fills in what the request leaves open.
-- After receiving recommendation results, name at most three titles by name and year, and `focus` the best one.
+- After receiving recommendation results, name at most three titles by name and year, and emit one `show_titles` with every \
+returned title_id (best first) and a short `label` such as "Rainy day picks". The TV shows them as a rail with the first focused; \
+`focus` alone cannot, because the titles are usually not on screen yet.
 - Use `recall_memory` when the user refers to something they told you before that is not already in Memory.
 - When the user declines a title you offered ("no", "not that one", "forget about X", "something else"), do not ask what they meant: \
 emit one `reject_title` per declined title_id (all of them if they reject the whole set) and then `recommend_titles` for a fresh set, \

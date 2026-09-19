@@ -23,6 +23,7 @@ class Verb(StrEnum):
     HOME = "home"
     SHOW_PRODUCTS = "show_products"
     SEARCH_CATALOG = "search_catalog"
+    SHOW_TITLES = "show_titles"
 
 
 class Play(BaseModel):
@@ -91,9 +92,18 @@ class SearchCatalog(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class ShowTitles(BaseModel):
+    """Put a rail of the agent's picks on screen. `focus` can only highlight a
+    title already showing; recommendations usually are not, so without this the
+    agent could only describe them."""
+    verb: Literal[Verb.SHOW_TITLES] = Verb.SHOW_TITLES
+    title_ids: list[str] = Field(min_length=1, max_length=20)
+    label: str = Field(default="For you", min_length=1, max_length=60)
+
+
 CommandArgs = Annotated[
     Play | Pause | Resume | Seek | Navigate | Focus
-    | OpenDetails | Close | Back | Home | ShowProducts | SearchCatalog,
+    | OpenDetails | Close | Back | Home | ShowProducts | SearchCatalog | ShowTitles,
     Field(discriminator="verb"),
 ]
 
@@ -110,6 +120,7 @@ COMMAND_MODELS: dict[Verb, type[BaseModel]] = {
     Verb.HOME: Home,
     Verb.SHOW_PRODUCTS: ShowProducts,
     Verb.SEARCH_CATALOG: SearchCatalog,
+    Verb.SHOW_TITLES: ShowTitles,
 }
 
 #: Only these block the LLM turn awaiting a client response (spec §8).

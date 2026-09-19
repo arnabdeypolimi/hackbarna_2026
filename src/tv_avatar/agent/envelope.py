@@ -120,6 +120,7 @@ _VERB_DOCS: dict[str, str] = {
     Verb.HOME: "return to the home grid",
     Verb.SHOW_PRODUCTS: "show products visible in a scene",
     Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
+    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
     "recommend_titles": "INTERNAL — ask the recommendation engine; you receive titles and then speak them",
     "recall_memory": "INTERNAL — look up something the user told you in the past",
     "reject_title": "INTERNAL — the user declined a title you offered; it will not be offered again",

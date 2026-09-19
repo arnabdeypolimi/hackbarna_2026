@@ -79,8 +79,9 @@ def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[st
             names = [f"{t['name']} from {t['year']}" if t.get("year") else t["name"] for t in titles[:3]]
             spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f", or {names[-1]}"
             lead = "How about" if verb == "recommend_titles" else "I found"
+            label = "For you" if verb == "recommend_titles" else "Search results"
             return (f"{lead} {spoken}{'?' if verb == 'recommend_titles' else '.'}",
-                    [("focus", {"title_id": titles[0]["title_id"]})])
+                    [("show_titles", {"title_ids": [t["title_id"] for t in titles], "label": label})])
         if verb == "recall_memory":
             memory = (result.get("memory") or "").strip()
             if memory and memory != "(none yet)":

@@ -3,7 +3,7 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Verb = "back" | "close" | "focus" | "home" | "navigate" | "open_details" | "pause" | "play" | "resume" | "search_catalog" | "seek" | "show_products";
+export type Verb = "back" | "close" | "focus" | "home" | "navigate" | "open_details" | "pause" | "play" | "resume" | "search_catalog" | "seek" | "show_products" | "show_titles";
 
 /** Verbs whose handler awaits a `result` message from the TV app. */
 export type AwaitsResult = "search_catalog";
@@ -52,6 +52,11 @@ export interface ShowProductsArgs {
   scene_at?: number | null;
 }
 
+export interface ShowTitlesArgs {
+  title_ids: Array<string>;
+  label?: string;
+}
+
 export interface CommandArgsByVerb {
   "back": BackArgs;
   "close": CloseArgs;
@@ -65,6 +70,7 @@ export interface CommandArgsByVerb {
   "search_catalog": SearchCatalogArgs;
   "seek": SeekArgs;
   "show_products": ShowProductsArgs;
+  "show_titles": ShowTitlesArgs;
 }
 
 // ---- client -> server ----
