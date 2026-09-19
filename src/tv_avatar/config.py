@@ -57,8 +57,10 @@ class Settings(BaseSettings):
     video_height: int = 1152
     target_fps: int = 25
 
-    # Turn-taking — silence after the last word before the LLM runs
+    # Turn-taking — silence after the last word before the LLM runs, and how
+    # many transcribed words a barge-in needs before it cuts the avatar off
     turn_silence_s: float = 0.5
+    barge_in_min_words: int = 2
 
     control_token_ttl_s: int = 3600
 
@@ -112,6 +114,24 @@ class Settings(BaseSettings):
     cycle_first_byte_s: float = Field(
         default=1.2, validation_alias=AliasChoices("CYCLE_FIRST_BYTE_S", "CYCLE2_FIRST_BYTE_S"))
     log_level: str = "INFO"
+
+    # Tracing — OpenTelemetry → Langfuse as an OTLP/HTTP sink (observability
+    # plan D13, D17). Off by default; nothing is exported and nothing in the
+    # pipeline changes until enabled *and* a sink is configured.
+    tracing_enabled: bool = False
+    #: False strips prompts, transcripts, envelopes and spoken text from every span.
+    trace_content: bool = True
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # LANGFUSE_BASE_URL is what the langfuse-cli reads, so one .env serves both.
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL"))
+    #: Any OTLP/HTTP collector instead of Langfuse; wins over the keys when set.
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers: str = ""
+    otel_console_export: bool = False
+    otel_service_name: str = "tv-avatar"
 
 
 @lru_cache
