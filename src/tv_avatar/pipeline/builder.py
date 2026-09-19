@@ -90,11 +90,13 @@ def build_pipeline(
     stages += [agent, build_tts(settings)]
     if with_avatar:
         stages.append(build_anam(settings))
-    stages += [
-        transport.output(),
-        assistant_agg,
-        MemoryIngestTap(runtime.lane, session, context),
-    ]
+    stages += [transport.output(), assistant_agg]
+    if settings.agent_impl != "sgr":
+        # The SGR agent ingests at turn end / interruption itself (it knows the
+        # user text and what was actually said); the frame tap serves the other
+        # implementations. Frames reach this point only after playback, so an
+        # interrupted reply would otherwise never be remembered.
+        stages.append(MemoryIngestTap(runtime.lane, session, context))
 
     task = PipelineTask(
         Pipeline(stages),

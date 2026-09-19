@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # Turn behaviour
     mem_prefetch_min_chars: int = 6
     tool_timeout_s: float = 0.4
+    #: Speak a short filler if the LLM has said nothing this long after the turn
+    #: opened (0 disables). Measured Nebius TTFT is 350–500 ms; jitter goes past 1 s.
+    filler_after_ms: int = 800
     log_level: str = "INFO"
 
 

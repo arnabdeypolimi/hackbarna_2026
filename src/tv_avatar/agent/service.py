@@ -11,6 +11,7 @@ so TTS and the avatar stop together.
 import asyncio
 import contextlib
 import json
+import random
 import time
 from typing import Any
 
@@ -23,13 +24,18 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    TTSSpeakFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService, LLMSettings
 
 from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, turn_plan_schema
-from tv_avatar.agent.prompt import build_system_prompt, volatile_sections
+from tv_avatar.agent.prompt import (
+    GREETING_INSTRUCTION,
+    build_system_prompt,
+    volatile_sections,
+)
 from tv_avatar.agent.stream_parse import (
     ActionReady,
     Done,
@@ -49,6 +55,9 @@ from tv_avatar.session.state import SessionState
 MAX_CYCLES = 2
 MAX_TOKENS = 400
 TEMPERATURE = 0.2
+#: Spoken via TTSSpeakFrame when the LLM has produced no `say` byte after
+#: `filler_after_ms` — masks a slow first token without talking over the reply.
+SLOW_FILLERS = ("One moment.", "Let me think.", "Hmm, one sec.")
 
 
 def _last_user_text(messages: list[dict]) -> str:
@@ -86,6 +95,11 @@ class SGRAgentService(LLMService):
         self._turn_task: asyncio.Task | None = None
         self._turn_id: str | None = None
         self._interrupted = False
+        # What the current turn heard and has said so far — ingested into memory
+        # at turn end, or on interruption with the partial reply (D6: the user's
+        # words are a memory even when the answer was cut off).
+        self._turn_user_text = ""
+        self._turn_said: list[str] = []
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -106,10 +120,22 @@ class SGRAgentService(LLMService):
         self._interrupted = True
         if self._turn_task is not None and not self._turn_task.done():
             self._turn_task.cancel()
+            self._schedule_ingest(interrupted=True)
         if self._turn_id is not None:
             dropped = self._bus.cancel_turn(self._turn_id)
             logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
                 "turn interrupted", dropped_commands=dropped)
+
+    def _schedule_ingest(self, *, interrupted: bool) -> None:
+        """Off the turn: never awaited by the pipeline."""
+        user_text, said = self._turn_user_text, "".join(self._turn_said)
+        self._turn_user_text, self._turn_said = "", []
+        if not user_text.strip() or user_text == GREETING_INSTRUCTION:
+            return
+        user_id = self._session.user_id or self._session.session_id
+        logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=self._turn_id).debug(
+            "memory ingest scheduled", step="ingest", interrupted=interrupted, said_chars=len(said))
+        asyncio.create_task(self._lane.ingest_turn(user_id, user_text, said))
 
     # --- the turn -----------------------------------------------------------
 
@@ -121,6 +147,11 @@ class SGRAgentService(LLMService):
         try:
             await self._turn_task
         except asyncio.CancelledError:
+            # Pipecat cancels the processor's frame task *before* it delivers the
+            # InterruptionFrame; without this the inner turn kept streaming.
+            if not self._turn_task.done():
+                self._turn_task.cancel()
+            self._schedule_ingest(interrupted=True)
             if not self._interrupted:
                 raise
         finally:
@@ -135,6 +166,7 @@ class SGRAgentService(LLMService):
         await self.start_processing_metrics()
         messages = list(context.get_messages())
         user_text = _last_user_text(messages)
+        self._turn_user_text, self._turn_said = user_text, []
         log.debug("turn open", step="start", user_text=user_text, history_msgs=len(messages),
                   screen=self._session.screen is not None)
 
@@ -176,6 +208,7 @@ class SGRAgentService(LLMService):
         marks["total_ms"] = round((time.perf_counter() - t0) * 1000)
         log.debug("turn close", step="end", **marks)
         log.info("turn", **marks)
+        self._schedule_ingest(interrupted=False)
 
     async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
                      cycle: int, marks: dict, t0: float) -> tuple[str, list[tuple[str, dict]]]:
@@ -187,6 +220,8 @@ class SGRAgentService(LLMService):
         fire: list[asyncio.Task] = []
         first_say = True
         t_req = time.perf_counter()
+        filler = (asyncio.create_task(self._slow_filler(t0, log))
+                  if cycle == 1 and self._cfg.filler_after_ms > 0 else None)
 
         await self.start_ttfb_metrics()
         stream = await self._client.chat.completions.create(
@@ -210,8 +245,11 @@ class SGRAgentService(LLMService):
                                       ms=round((time.perf_counter() - t_req) * 1000))
                         case SayDelta(text=text):
                             said.append(text)
+                            self._turn_said.append(text)
                             if first_say:
                                 first_say = False
+                                if filler is not None:
+                                    filler.cancel()
                                 await self.stop_ttfb_metrics()
                                 marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
                                 log.debug("first say byte -> TTS", step="say", cycle=cycle,
@@ -240,6 +278,8 @@ class SGRAgentService(LLMService):
                 if streamer.finished:
                     break
         finally:
+            if filler is not None:
+                filler.cancel()
             close = getattr(stream, "close", None)
             if close is not None:
                 await close()
@@ -260,6 +300,15 @@ class SGRAgentService(LLMService):
             with contextlib.suppress(Exception):  # failures are logged in dispatch_action
                 await task
         return "".join(raw), results
+
+    async def _slow_filler(self, t0: float, log) -> None:
+        delay = self._cfg.filler_after_ms / 1000 - (time.perf_counter() - t0)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        text = random.choice(SLOW_FILLERS)
+        log.debug("slow filler spoken", step="say", text=text,
+                  ms=round((time.perf_counter() - t0) * 1000))
+        await self.push_frame(TTSSpeakFrame(text))
 
     # --- pieces the tests call directly -------------------------------------
 

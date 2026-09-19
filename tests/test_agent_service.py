@@ -190,3 +190,58 @@ async def test_invalid_verb_args_are_rejected_not_raised():
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("seek"))])
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(bus.next_outbound(), timeout=0.05)
+
+
+async def test_turn_end_ingests_user_text_and_full_reply():
+    lane = FakeMemoryLane()
+    agent = _agent(FakeOpenAI([PLAY]), RecordingBus(), lane=lane)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one"))])
+    await asyncio.sleep(0.02)
+    assert lane.ingests == [("u1", "play the first one", "On it.")]
+
+
+async def test_interrupted_turn_still_ingests_user_text_with_partial_reply():
+    lane = FakeMemoryLane()
+    slow = FakeOpenAI(['{"intent":"chitchat","say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
+                      delay_s=0.05)  # 7-char chunks: say starts ~0.2 s in, ends ~0.6 s in
+    agent = _agent(slow, RecordingBus(), lane=lane)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.4), InterruptionFrame()])
+    await asyncio.sleep(0.02)
+    assert len(lane.ingests) == 1
+    user_id, user_text, said = lane.ingests[0]
+    assert (user_id, user_text) == ("u1", "I love sci-fi")
+    assert 0 < len(said) < len("I love that you love sci-fi, let me think about it some more.")
+
+
+async def test_greeting_instruction_is_never_ingested():
+    from tv_avatar.agent.prompt import GREETING_INSTRUCTION
+    lane = FakeMemoryLane()
+    agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Hi!","actions":[]}']), RecordingBus(), lane=lane)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(GREETING_INSTRUCTION))])
+    await asyncio.sleep(0.02)
+    assert lane.ingests == []
+
+
+async def test_slow_llm_gets_a_spoken_filler():
+    settings = _settings().model_copy(update={"filler_after_ms": 100})
+    session = SessionState("sess_t", "tok", 0, user_id="u1")
+    # First content chunk only after ~0.35 s: filler must fire, then the real say.
+    slow = FakeOpenAI(['{"intent":"chitchat","say":"Here you go.","actions":[]}'], delay_s=0.35)
+    sink = TimingSink()
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None, session,
+                            client=slow, tools=FakeTools())
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("hello"))])
+    kinds = [type(f).__name__ for f in sink.frames]
+    assert "TTSSpeakFrame" in kinds
+    assert kinds.index("TTSSpeakFrame") < kinds.index("LLMTextFrame")
+    assert "".join(f.text for f in sink.frames if isinstance(f, LLMTextFrame)) == "Here you go."
+
+
+async def test_fast_llm_gets_no_filler():
+    settings = _settings().model_copy(update={"filler_after_ms": 500})
+    session = SessionState("sess_t", "tok", 0, user_id="u1")
+    sink = TimingSink()
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None, session,
+                            client=FakeOpenAI([PLAY]), tools=FakeTools())
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("play"))])
+    assert not any(type(f).__name__ == "TTSSpeakFrame" for f in sink.frames)
