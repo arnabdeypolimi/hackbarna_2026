@@ -43,14 +43,18 @@ def build_anam(settings: Settings) -> AnamVideoService:
     # PersonaConfig field (verified against the installed signatures).
     # `api_version` must be given explicitly: the plugin forwards its None
     # default over the SDK's "v1", yielding ".../None/engine/session" (404).
-    return AnamVideoService(
-        api_key=settings.anam_api_key,
-        api_version="v1",
-        persona_config=PersonaConfig(
+    if settings.anam_persona_id:
+        persona = PersonaConfig(persona_id=settings.anam_persona_id, enable_audio_passthrough=True)
+    else:
+        persona = PersonaConfig(
             avatar_id=settings.anam_avatar_id,
             avatar_model=settings.anam_avatar_model,
             enable_audio_passthrough=True,
-        ),
+        )
+    return AnamVideoService(
+        api_key=settings.anam_api_key,
+        api_version="v1",
+        persona_config=persona,
         enable_session_replay=False,
         video_width=settings.video_width,
         video_height=settings.video_height,

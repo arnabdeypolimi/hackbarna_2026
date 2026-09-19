@@ -52,5 +52,19 @@ def setup_logging(level: str = "INFO") -> None:
     root.setLevel(logging.DEBUG if level.upper() == "DEBUG" else logging.INFO)
     # Third-party DEBUG chatter that would bury the agent trace.
     for noisy in ("httpx", "httpx2", "httpcore", "openai._base_client", "urllib3", "huggingface_hub",
-                  "filelock", "sentence_transformers", "aiortc", "aioice", "asyncio"):
+                  "filelock", "sentence_transformers", "aiortc", "aioice", "asyncio",
+                  "websockets", "websockets.client", "websockets.protocol", "aiosqlite", "anam"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Pipecat and the SLNG plugin log through loguru directly; their per-frame
+    # DEBUG lines (audio chunks, metrics, worker bookkeeping) are filtered by
+    # module so our own DEBUG trace stays readable. LOG_LEVEL=TRACE shows all.
+    if level.upper() == "DEBUG":
+        logger.remove()
+        logger.add(sys.stderr, level="DEBUG", format=_FORMAT, enqueue=False, filter=_quiet_pipecat)
+
+
+def _quiet_pipecat(record: dict) -> bool:
+    name = record["name"] or ""
+    if record["level"].no > logger.level("DEBUG").no:
+        return True
+    return not name.startswith(("pipecat.", "pipecat_slng", "pipecat_anam", "anam"))

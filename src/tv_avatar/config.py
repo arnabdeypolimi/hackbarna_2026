@@ -2,7 +2,7 @@
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # A blank line in .env ("KEY=") reads as "", which str alone would accept.
@@ -39,10 +39,19 @@ class Settings(BaseSettings):
     slng_tts_encoding: str = "linear16"
     slng_tts_sample_rate: int = 24000
 
-    # Anam
+    # Anam — either a raw avatar (avatar_id + avatar_model) or a saved Persona
+    # from Anam Lab. Persona ids are what the Lab shows first; passing one as an
+    # avatar id is rejected by the API ("is a persona ID … pass it as personaId").
     anam_api_key: Secret
-    anam_avatar_id: Secret
+    anam_avatar_id: str = ""
     anam_avatar_model: str = "cara-4"
+    anam_persona_id: str = ""
+
+    @model_validator(mode="after")
+    def _anam_identity(self) -> "Settings":
+        if not self.anam_avatar_id and not self.anam_persona_id:
+            raise ValueError("set ANAM_AVATAR_ID (with ANAM_AVATAR_MODEL) or ANAM_PERSONA_ID")
+        return self
 
     # Media — cara-4 portrait; width and height must be supplied together
     video_width: int = 768

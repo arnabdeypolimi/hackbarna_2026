@@ -67,3 +67,9 @@ def test_anam_enables_audio_passthrough_and_disables_replay():
     assert (anam._video_width, anam._video_height) == (640, 960)
     # Regression: leaving this None produced https://api.anam.ai/None/engine/session.
     assert anam._api_version == "v1"
+
+
+def test_anam_persona_id_is_passed_as_persona_not_avatar():
+    anam = build_anam(_settings(anam_avatar_id="", anam_persona_id="persona-1"))
+    assert anam._persona_config.persona_id == "persona-1"
+    assert anam._persona_config.avatar_id is None
