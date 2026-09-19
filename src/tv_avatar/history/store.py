@@ -3,6 +3,7 @@
 
 Callers fire-and-forget via asyncio.create_task — recording must never
 stall a turn (same rule as the command bus)."""
+import asyncio
 import json
 import time
 from enum import StrEnum
@@ -51,15 +52,22 @@ class HistoryStore:
     def __init__(self, db_path: str | Path) -> None:
         self._path = str(db_path)
         self._db: aiosqlite.Connection | None = None
+        self._lock: asyncio.Lock | None = None
 
     async def _conn(self) -> aiosqlite.Connection:
-        if self._db is None:
-            if self._path != ":memory:":
-                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-            self._db = await aiosqlite.connect(self._path)
-            await self._db.execute("PRAGMA journal_mode=WAL")
-            await self._db.executescript(_SCHEMA)
-            await self._db.commit()
+        if self._db is not None:
+            return self._db
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._db is None:
+                if self._path != ":memory:":
+                    Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+                db = await aiosqlite.connect(self._path)
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.executescript(_SCHEMA)
+                await db.commit()
+                self._db = db
         return self._db
 
     async def close(self) -> None:
