@@ -8,10 +8,16 @@ export const TAB_TITLES: Record<Tab, string> = {
   list: 'My List',
 };
 
-/** The search bar's matcher. The agent's `search_catalog` uses it too, so a spoken and a typed search agree. */
+/**
+ * The search bar's matcher. The agent's `search_catalog` uses it too, so a spoken and a
+ * typed search agree. Every word must appear somewhere in the title or genres, but not as
+ * one phrase: speech arrives without punctuation, so "2001 space odyssey" has to find
+ * "2001: A Space Odyssey".
+ */
 export function matches(x: Title, query: string): boolean {
-  const q = query.toLowerCase();
-  return x.title.toLowerCase().includes(q) || x.genres.some((g) => g.toLowerCase().includes(q));
+  const hay = `${x.title} ${x.genres.join(' ')}`.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => hay.includes(w));
 }
 
 export function buildRow(items: Title[], tab: Tab, query: string, myList: string[]): Title[] {
