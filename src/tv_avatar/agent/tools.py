@@ -51,13 +51,16 @@ class InternalTools:
             genres_any=set(req.genres) - disliked, genres_none=disliked,
             year_min=req.year_min, year_max=req.year_max,
         )
+        # The memory profile may name titles the viewer declined; embedding it as a
+        # retrieval channel would pull exactly those back. Memory reaches the
+        # recommender the typed way instead: the model fills genres/exclude_genres.
         ctx = RecsContext(user_id=user_id, query_text=req.query, constraints=constraints,
-                          memory_text=memory_text, limit=req.limit)
+                          memory_text=None, limit=req.limit)
         log = logger.bind(user_id=user_id)
         log.debug("recommend_titles", step="tool", query=req.query,
                   genres=sorted(constraints.genres_any), excluded_genres=sorted(disliked),
                   year_min=req.year_min, year_max=req.year_max,
-                  similar_to=req.similar_to, limit=req.limit, has_memory=memory_text is not None)
+                  similar_to=req.similar_to, limit=req.limit)
         if req.similar_to:
             recs = await self._recs.similar(req.similar_to, ctx)
         else:

@@ -87,7 +87,8 @@ async def test_profile_is_reread_when_the_file_changes(tmp_path):
     assert "v2" in (await lane.recall("u1", "b")).render_for_prompt()
 
 
-def test_summary_prompt_forbids_titles_and_assistant_sourced_facts():
+def test_summary_prompt_allows_signal_titles_but_not_assistant_sourced_facts():
     prompt = SUMMARY_SYSTEM.format(max_words=200)
-    assert "the profile contains no titles" in prompt
+    assert "Titles are welcome when they carry a signal" in prompt
+    assert "never write down a title the assistant merely suggested" in prompt
     assert "Nothing the assistant suggested is a fact" in prompt

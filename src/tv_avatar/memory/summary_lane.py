@@ -6,10 +6,11 @@ runner) one LLM call rewrites `profile.md` from the previous profile plus the
 transcript; the next session reads that file once. A transcript left behind by
 a crash is folded in at the next `warmup()`.
 
-The profile is durable preference only — genres, moods, pacing, how the viewer
-likes to be talked to. Titles are deliberately excluded: the viewing log in
-history.db is the source of truth for what was watched, offered or declined,
-so a stray line here can shade the tone but never pick the film.
+The profile is about the viewer — genres, moods, pacing, how they like to be
+talked to, and titles when they carry a signal (enjoyed, declined and why).
+The viewing log in history.db stays the source of truth for what was watched,
+offered or declined: the greeting and the recommender take titles from it,
+never from here, so a stray line can shade the tone but not pick the film.
 """
 import asyncio
 import json
@@ -34,19 +35,21 @@ You maintain a short profile of one TV viewer for a voice assistant that lives o
 You receive the previous profile and the transcript of the session that just ended.
 Rewrite the profile so it is the best possible briefing for the assistant's next session.
 
-HARD RULE: the profile contains no titles. Never write the name of a film, show, actor or
-director, even one the viewer declined or praised — the TV keeps its own log of what was
-watched, offered and declined. Describe the kind of thing instead ("declined a jump-scare
-horror", "enjoyed a slow animated drama"). A profile that names a title is wrong.
-
 Write at most {max_words} words, plain Markdown, exactly these sections (omit a section
 if it would be empty):
 ## Preferences — genres, moods, pacing, eras, languages, what they enjoy
-## Dislikes — kinds of things to avoid and why, when they said so
+## Dislikes — what to avoid and why, when they said so
 ## How to talk to them — tone, length, humour, how they correct you, what annoyed them
 ## Open threads — unfinished decisions or promises worth picking up next time
 
 Rules:
+- Titles are welcome when they carry a signal about the viewer: what they enjoyed, what they
+  declined and why ("declined The Nun II — too jump-scary", "loved the pacing of Suzume").
+  The TV keeps its own exact log of what was watched, offered and declined, so do not list
+  titles for their own sake, and never write down a title the assistant merely suggested as
+  something the viewer wants. Attribute a like or dislike to a title only when the viewer
+  named or pointed at that specific title ("not the first one" = the first title offered);
+  the other titles in the same list were neither accepted nor declined — do not infer.
 - Only what the viewer said or clearly meant. Nothing the assistant suggested is a fact
   about the viewer; a request made once ("something funny tonight") is not a preference
   unless it repeats or they say it is.
@@ -163,7 +166,7 @@ class SummaryMemoryLane(BaseMemoryLane):
         user_content = (
             f"# Previous profile\n{previous or '(nothing yet)'}\n\n"
             f"# Session transcript\n{_render_transcript(turns)}\n\n"
-            "Now write the new profile. No titles, no names — kinds of things only."
+            "Now write the new profile."
         )
         resp = await self._client.chat.completions.create(
             model=self._model, temperature=0.1, max_tokens=self._max_words * 3,
