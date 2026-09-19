@@ -12,6 +12,45 @@ npm install
 npm run dev        # http://localhost:5173, use the arrow keys, Enter and Esc
 ```
 
+## The avatar panel
+
+The right-hand panel is a live conversational avatar, so the app needs the Python
+backend in this repository running alongside it:
+
+```bash
+# repository root, its own terminal
+uv run uvicorn tv_avatar.app:app --reload --port 8000
+
+# frontend/
+npm run dev
+```
+
+Vite proxies `/config` and `/sessions` (including the control WebSocket) to
+`localhost:8000`, which keeps the app same-origin — see `vite.config.ts`. Without
+the backend the panel reads "Backend not running" and the rest of the app browses
+normally. Without provider keys in the backend's `.env` it reads "Avatar
+unavailable" and names what is missing. Both are fixed outside the browser, so the
+panel's button re-checks rather than reloads: start the backend, press OK, and the
+panel catches up in place.
+
+Two things worth knowing:
+
+- **The app connects on load.** Every reload, including a hot reload, opens a paid
+  Anam and Cartesia session. Stop the dev server when you are not using it.
+- **On a real television it needs https.** `getUserMedia` is blocked on an insecure
+  origin, so a plain `http://` LAN address cannot reach the microphone at all.
+  Desktop development on `localhost` is exempt from that rule.
+
+The language chips pick the spoken language *and* the avatar who speaks it — one
+avatar per language, taken from the backend's `avatars.yaml`. Changing language
+opens a new session, because a session pins its voice and persona at creation. The
+choice is remembered in `localStorage` for the whole television, not per profile.
+
+Wire types come from `contracts/protocol.d.ts`, which is **generated** from
+`src/tv_avatar/agent/commands.py` — import them, never hand-write them. The agent
+does not emit commands yet (phase 2 / M3); `useAvatar` logs them and there is a
+`TODO(M3)` marking where they will be dispatched.
+
 ## Add the dataset
 
 The app reads **`public/data/titles.csv`** on startup. That folder only holds a placeholder README for now. Until the file is there, the app shows a "No titles yet" screen with a Load titles button.
