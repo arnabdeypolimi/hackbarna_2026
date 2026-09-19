@@ -84,9 +84,17 @@ def test_offer_rejects_bad_token():
         assert r.status_code == 401
 
 
-def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
-    """AGENT_IMPL=stub still runs through taps/injector/observers (no keys needed)."""
+def _processor_names(settings) -> list[str]:
+    from pipecat.processors.frame_processor import FrameProcessor
+
+    from tv_avatar.control.bus import CommandBus
     from tv_avatar.pipeline.builder import build_pipeline
+    from tv_avatar.session.state import SessionState
+
+    class _Passthrough(FrameProcessor):
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
 
     class T:
         def input(self): return _Passthrough()
@@ -94,19 +102,10 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
         def event_handler(self, _name):
             return lambda fn: fn
 
-    from pipecat.processors.frame_processor import FrameProcessor
-
-    class _Passthrough(FrameProcessor):
-        async def process_frame(self, frame, direction):
-            await super().process_frame(frame, direction)
-            await self.push_frame(frame, direction)
-
-    from tv_avatar.control.bus import CommandBus
-    from tv_avatar.session.state import SessionState
-    settings = _settings(tmp_path)
     runtime = build_runtime(settings)
     task = build_pipeline(T(), SessionState("s", "t", 0, user_id="u1"), CommandBus(),
                           with_avatar=False, runtime=runtime, settings=settings)
+
     def flatten(pipeline):
         for p in pipeline.processors:
             if isinstance(p, Pipeline):
@@ -114,10 +113,23 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
             else:
                 yield p
 
-    names = [type(p).__name__ for p in flatten(task.pipeline)]
+    return [type(p).__name__ for p in flatten(task.pipeline)]
+
+
+def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
+    """AGENT_IMPL=stub still runs through taps/injector/observers (no keys needed)."""
+    names = _processor_names(_settings(tmp_path))
     for expected in ("MemoryPrefetchTap", "ScreenContextInjector", "StubLLMService", "MemoryIngestTap"):
         assert expected in names, names
     assert EventKind.PLAY_STARTED  # module import sanity for the recorder wiring
+
+
+def test_sgr_pipeline_has_no_injector(tmp_path):
+    """The SGR agent writes its own system prompt; a second writer upstream
+    would stamp Recent activity twice (as it did) and fetch history twice."""
+    names = _processor_names(_settings(tmp_path).model_copy(update={"agent_impl": "sgr"}))
+    assert "SGRAgentService" in names and "ScreenContextInjector" not in names, names
+    assert "MemoryIngestTap" not in names  # the agent ingests at turn end itself
 
 
 def test_new_offer_for_same_user_stops_that_users_other_pipelines(tmp_path, monkeypatch):

@@ -37,6 +37,7 @@ from tv_avatar.agent.prompt import (
     build_system_prompt,
     greeting_brief,
     is_greeting,
+    render_screen,
     volatile_sections,
 )
 from tv_avatar.agent.stream_parse import (
@@ -420,15 +421,12 @@ class SGRAgentService(LLMService):
     # --- pieces the tests call directly -------------------------------------
 
     def build_messages(self, messages: list[dict], memory: MemoryBlock, history_summary: str) -> list[dict]:
+        """The agent is the only writer of the system prompt: whatever arrived in
+        the system slot is replaced, never inspected (D9 — stamp, never store)."""
         rest = [m for m in messages if m.get("role") != "system"][-MAX_HISTORY_MESSAGES:]
-        existing = next((m for m in messages if m.get("role") == "system"), None)
-        if existing is not None and isinstance(existing.get("content"), str) and "# Screen" in existing["content"]:
-            static = existing["content"]
-            volatile = "\n\n".join([f"# Memory\n{memory.render_for_prompt()}", f"# Recent activity\n{history_summary}"])
-        else:
-            static = build_system_prompt(self._session.persona.language)
-            volatile = volatile_sections(self._session.render_for_prompt(), memory.render_for_prompt(), history_summary)
-        return [{"role": "system", "content": static + "\n\n" + volatile}, *rest]
+        system = build_system_prompt(self._session.persona.language) + "\n\n" + volatile_sections(
+            render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary)
+        return [{"role": "system", "content": system}, *rest]
 
     async def dispatch_action(self, verb: str, args: dict, turn_id: str, user_id: str = "",
                               memory_text: str | None = None) -> dict:

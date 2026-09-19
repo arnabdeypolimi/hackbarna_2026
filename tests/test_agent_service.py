@@ -213,6 +213,45 @@ async def test_system_prompt_carries_screen_memory_and_history():
     assert client.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+def _sections(system: str) -> list[str]:
+    return [line for line in system.splitlines() if line.startswith("# ")]
+
+
+@pytest.mark.parametrize("incoming_system", [
+    None,
+    "whatever",
+    "stale persona\n\n# Screen\nView: old\n\n# Recent activity\nRecently watched: Old Film (id=1)",
+])
+async def test_agent_is_the_only_writer_of_the_system_prompt(incoming_system):
+    """No sniffing of what arrived: the system message is rebuilt from scratch every
+    turn, so every section appears exactly once whether or not something upstream
+    (an injector, a stale persona, a previous turn) already stamped one."""
+    from tv_avatar.control.protocol import Playback, ScreenState, Tile
+
+    lane = FakeMemoryLane({"u1": MemoryBlock.from_lines(["hates horror"], [])})
+    client = FakeOpenAI([PLAY])
+    agent = _agent(client, RecordingBus(), lane=lane)
+    agent._session.update_screen(ScreenState(
+        view="grid", focus_index=0, tiles=[Tile(title_id="27205", name="Inception", position=0)],
+        playback=Playback(state="stopped")))
+    ctx = LLMContext()
+    if incoming_system is not None:
+        ctx.add_message({"role": "system", "content": incoming_system})
+    ctx.add_message({"role": "user", "content": "play the first one"})
+    await _run(agent, TimingSink(), [LLMContextFrame(context=ctx)])
+
+    messages = client.calls[0]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user"]
+    system = messages[0]["content"]
+    assert "whatever" not in system and "stale" not in system and "Old Film" not in system
+    heads = _sections(system)
+    for section in ("# Capabilities", "# Screen", "# Memory", "# Recent activity"):
+        assert heads.count(section) == 1, heads
+    assert heads.index("# Screen") < heads.index("# Memory") < heads.index("# Recent activity")
+    assert "Inception (id=27205) <- focused" in system   # the live SessionState, not the incoming text
+    assert "hates horror" in system
+
+
 async def test_invalid_verb_args_are_rejected_not_raised():
     bus = RecordingBus()
     agent = _agent(FakeOpenAI(['{"intent":"control","say":"ok","actions":[{"verb":"seek","to_seconds":1,"delta_seconds":2}]}']), bus)

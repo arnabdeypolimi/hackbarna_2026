@@ -12,8 +12,12 @@ The prompts themselves stay in English (instruct models follow English
 instructions most reliably); only the *reply* language is parameterised,
 from the session's LanguageProfile.
 """
+from typing import Protocol
+
 from tv_avatar.agent.envelope import describe_capabilities
 from tv_avatar.catalog import LanguageProfile
+from tv_avatar.control.protocol import ScreenState
+from tv_avatar.session.state import SessionState
 
 SYSTEM_PROMPT = """\
 You are the on-screen voice assistant of a television. You appear as a small \
@@ -132,6 +136,33 @@ def build_system_prompt(language: LanguageProfile) -> str:
         _RULES,
         _CONTRACT,
     ])
+
+
+class _Catalog(Protocol):
+    def lookup(self, title_id: str): ...
+
+
+def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
+    """Phase-1 render enriched per tile: `Sicario (2015) — Crime, Thriller (id=273481) <- focused`."""
+    screen: ScreenState | None = session.screen
+    if screen is None:
+        return session.render_for_prompt()
+    lines = [f"View: {screen.view}"]
+    if screen.rail_id:
+        lines.append(f"Rail: {screen.rail_id}")
+    for tile in screen.tiles:
+        item = catalog.lookup(tile.title_id) if catalog is not None else None
+        label = item.label() if item is not None else tile.name
+        marker = " <- focused" if tile.position == screen.focus_index else ""
+        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){marker}")
+    pb = screen.playback
+    if pb.state == "stopped":
+        lines.append("Playback: stopped")
+    else:
+        item = catalog.lookup(pb.title_id) if catalog is not None and pb.title_id else None
+        name = f" ({item.name})" if item is not None else ""
+        lines.append(f"Playback: {pb.state} {pb.title_id}{name} at {pb.position_s:.0f}s")
+    return "\n".join(lines)
 
 
 def volatile_sections(screen: str, memory: str, history: str) -> str:

@@ -2,7 +2,7 @@
 
 Each scripted user utterance is synthesised with SLNG TTS (a different
 voice), streamed in real time as microphone audio into the *real* pipeline
-(Reson8 STT → prefetch tap → user aggregator → injector → SGR agent →
+(Reson8 STT → prefetch tap → user aggregator → SGR agent →
 Cartesia TTS), and the agent's spoken reply, TV commands and per-stage
 latencies are printed. Anam and WebRTC are left out; everything else is
 the production path.
@@ -43,7 +43,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import SleepFrame, run_test
 
-from tv_avatar.agent.injector import ScreenContextInjector
 from tv_avatar.agent.prompt import initial_messages
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
@@ -205,7 +204,6 @@ async def main(user_id: str, turns: list[str]) -> int:
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
         user_agg,
         Tap(reply),                      # LLMContextFrame (turn opens)
-        ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history),
         build_agent(settings, runtime, session, bus),
         Tap(reply),                      # first say sentence (AggregatedTextFrame)
         build_tts(settings, persona.avatar.voice, persona.language.pipecat_tts),

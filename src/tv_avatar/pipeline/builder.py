@@ -4,8 +4,11 @@ Pipecat is the only orchestrator; SLNG owns speech I/O (D12). Library
 services are wired from configuration; everything of ours is a
 FrameProcessor or an observer inserted at a fixed position:
 
-    input → STT → MemoryPrefetchTap → user_agg → ScreenContextInjector →
-    agent → TTS → [Anam] → output → assistant_agg → MemoryIngestTap
+    input → STT → MemoryPrefetchTap → user_agg → [ScreenContextInjector, stub only] →
+    agent → TTS → [Anam] → output → assistant_agg → [MemoryIngestTap, non-sgr only]
+
+The SGR agent writes its own system prompt and ingests memory itself, so
+neither bracketed processor is in its graph.
 """
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -83,10 +86,10 @@ def build_pipeline(
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
         user_agg,
     ]
-    if settings.agent_impl != "chat":
-        # The plain chat LLM keeps SYSTEM_PROMPT as-is; the SGR agent (and the
-        # stub, which exercises the same graph in tests) get the capability
-        # manifest + screen/memory/history sections stamped per turn.
+    if settings.agent_impl == "stub":
+        # The SGR agent writes its own system prompt each turn; the plain chat
+        # LLM keeps SYSTEM_PROMPT as-is. Only the stub, which exercises the same
+        # graph in tests without an agent, needs the sections stamped for it.
         stages.append(ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history))
     stages += [agent, build_tts(settings, avatar.voice, language.pipecat_tts)]
     if with_avatar:

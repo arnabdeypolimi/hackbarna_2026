@@ -24,7 +24,6 @@ from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.tests.utils import run_test
 from pydantic_settings import SettingsConfigDict
 
-from tv_avatar.agent.injector import ScreenContextInjector
 from tv_avatar.agent.service import SGRAgentService
 from tv_avatar.agent.tools import InternalTools
 from tv_avatar.config import Settings
@@ -92,7 +91,6 @@ async def main(user_id: str, turns: list[str]) -> int:
                           timeout_s=settings.tool_timeout_s)
     agent = SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
                             catalog=runtime.catalog, tools=tools)
-    injector = ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history)
 
     print(f"\nuser_id={user_id}  screen: " + " | ".join(t.label() for t in tiles) + "\n")
     for text in turns:
@@ -104,7 +102,7 @@ async def main(user_id: str, turns: list[str]) -> int:
             runtime.recs.prefetch_query(user_id, text)
         await runtime.lane.prefetch(user_id, partial)
         t0 = time.perf_counter()
-        await run_test(Pipeline([injector, agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
+        await run_test(Pipeline([agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
                        expected_down_frames=None, start_timeout=5)
         elapsed = round((time.perf_counter() - t0) * 1000)
         said = " ".join(sink.said)
