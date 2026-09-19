@@ -70,7 +70,7 @@ class TurnTrace:
     referenced_ids: set[str] = field(default_factory=set)
 
     def spoken(self) -> str:
-        return "".join(self.said)
+        return "".join(self.said).strip()
 
     def add_results(self, results: tuple["ToolResult", ...]) -> None:
         for r in results:

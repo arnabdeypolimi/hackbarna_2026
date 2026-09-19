@@ -129,6 +129,8 @@ class TurnRunner:
                      trace: TurnTrace, first_say: asyncio.Event | None = None) -> CycleOutcome:
         log, host = ctx.log, self._host
         metrics.cycles = max(metrics.cycles, cycle)  # attempted, even if cancelled over budget
+        if cycle > 1 and trace.said:
+            trace.said.append(" ")  # the memory transcript reads "Let me look. I found…", not "look.I found"
         streamer = EnvelopeStreamer()
         sentences = SimpleTextAggregator()  # same splitter the TTS would use, but we own the flush
         raw: list[str] = []

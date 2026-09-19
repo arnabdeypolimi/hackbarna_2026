@@ -178,6 +178,14 @@ async def test_awaited_action_triggers_second_cycle():
     assert (await bus.next_outbound()).verb == "focus"
 
 
+async def test_two_cycle_turn_is_ingested_once_with_a_space_between_cycles():
+    lane = FakeMemoryLane()
+    agent = _agent(FakeOpenAI([RECO_1, RECO_2]), RecordingBus(), lane=lane)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
+    await asyncio.sleep(0.02)
+    assert lane.ingests == [("u1", "recommend me a heist movie", "Let me look. Try Heat or Inception.")]
+
+
 @pytest.mark.parametrize("max_cycles", [1, 2, 3])
 async def test_cycles_are_capped_at_setting(max_cycles):
     """The model asks for a tool on every cycle; the loop still ends at AGENT_MAX_CYCLES

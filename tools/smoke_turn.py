@@ -7,6 +7,7 @@ the per-turn marks. Reads OPENAI_API_KEY / OPENAI_BASE_URL from .env.
 
     uv run python tools/smoke_turn.py
     uv run python tools/smoke_turn.py --user couch_1 "something like Sicario but newer" "play the first one"
+    uv run python tools/smoke_turn.py --user couch_1 --greet "yes, play it"   # returning viewer: greeting first
 """
 import argparse
 import asyncio
@@ -24,6 +25,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.tests.utils import run_test
 from pydantic_settings import SettingsConfigDict
 
+from tv_avatar.agent.prompt import greeting_instruction
 from tv_avatar.agent.service import SGRAgentService
 from tv_avatar.agent.tools import InternalTools
 from tv_avatar.config import Settings
@@ -66,7 +68,7 @@ class Sink(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-async def main(user_id: str, turns: list[str]) -> int:
+async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
     settings = SmokeSettings()
     setup_logging(settings.log_level)
     runtime = build_runtime(settings)
@@ -93,6 +95,8 @@ async def main(user_id: str, turns: list[str]) -> int:
                             catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)
 
     print(f"\nuser_id={user_id}  screen: " + " | ".join(t.label() for t in tiles) + "\n")
+    if greet:
+        turns = [greeting_instruction(session.persona.language), *turns]
     for text in turns:
         sink = Sink()
         context.add_message({"role": "user", "content": text})
@@ -122,7 +126,7 @@ async def main(user_id: str, turns: list[str]) -> int:
         print(f"> {text}")
         print(f"  said: {said!r}")
         print(f"  commands: {[(c.verb, c.args) for c in commands]}   ({elapsed} ms)\n")
-        await runtime.lane.ingest_turn(user_id, text, said)
+        # The agent ingests the turn itself at turn end (or on interruption).
     # What the pipeline runner does when the session ends: consolidate the transcript.
     await runtime.lane.finish_session(user_id)
     profile = getattr(runtime.lane, "read_profile", lambda _u: "")(user_id)
@@ -135,6 +139,8 @@ async def main(user_id: str, turns: list[str]) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--user", default="couch_smoke")
+    parser.add_argument("--greet", action="store_true",
+                        help="open with the synthetic greeting turn, as the pipeline does on connect")
     parser.add_argument("turns", nargs="*", default=DEFAULT_TURNS)
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(args.user, args.turns)))
+    raise SystemExit(asyncio.run(main(args.user, args.turns, greet=args.greet)))
