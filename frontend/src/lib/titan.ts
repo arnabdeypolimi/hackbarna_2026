@@ -8,6 +8,9 @@ export const KEY = {
 // Back is 8 on Philips/Sharp and 461 on JVC; Escape covers desktop testing.
 export const BACK_KEYS = [8, 461, 27];
 
+// Green opens the theme picker. G stands in on a desktop keyboard, which has no colour keys.
+export const THEME_KEYS: number[] = [KEY.GREEN, 71];
+
 let ttsEnabled = false;
 
 export async function initTTS(): Promise<void> {

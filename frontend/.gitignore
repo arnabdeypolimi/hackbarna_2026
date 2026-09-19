@@ -16,3 +16,7 @@ public/data/TMDB_movie_dataset_v11.csv
 .claude/settings.local.json
 .codex/hooks.json
 .impeccable/config.local.json
+
+# Source footage for the sky loops stays local: 4K clips of 20-35 MB each. scripts/render_sky.py
+# cuts them down to public/sky/<id>.mp4 (a few MB in all), and those are the files the app plays.
+src/videos/
