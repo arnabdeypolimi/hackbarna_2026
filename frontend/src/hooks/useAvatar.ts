@@ -73,6 +73,12 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
           // <video> keeps playing audio, and the session keeps billing.
           session.current?.close();
           session.current = null;
+          // Retire this generation too. The error can arrive while connect() is still
+          // negotiating, when there is no session to close yet — without this, that
+          // connect() resolves afterwards, passes mineStill(), and overwrites the
+          // error with `live`. Failing the check instead routes it to the branch that
+          // closes the late session.
+          gen.current++;
           setPhase('error');
           setMessage(e.message);
         },
