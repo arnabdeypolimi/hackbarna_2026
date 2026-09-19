@@ -11,11 +11,15 @@ in-flight turn and its unsent commands, then keeps flowing so TTS and the
 avatar stop together; the partial reply is still ingested into memory.
 """
 import asyncio
+import contextlib
+import json
 import time
 from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI
+from opentelemetry import trace
+from opentelemetry.trace import Span, StatusCode
 from pipecat.frames.frames import (
     AggregatedTextFrame,
     Frame,
@@ -28,6 +32,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
+from pipecat.utils.tracing.service_decorators import traced_llm
 from pydantic import BaseModel
 
 from tv_avatar.agent.envelope import REGISTRY
@@ -49,6 +54,33 @@ from tv_avatar.memory.lane import MemoryBlock, MemoryLane
 from tv_avatar.recs.catalog import CatalogStore
 from tv_avatar.recs.engine import RecsEngine
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import (
+    ATTR_ACTION_AWAITS_RESULT,
+    ATTR_ACTION_EARNS_CYCLE,
+    ATTR_ACTION_MS,
+    ATTR_HISTORY_CHARS,
+    ATTR_MEMORY_EMPTY,
+    ATTR_MEMORY_STALE,
+    ATTR_MEMORY_TOKEN_EST,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    ATTR_OBS_STATUS_MESSAGE,
+    ATTR_TRACE_INPUT,
+    ATTR_TRACE_OUTPUT,
+    ATTR_TURN_DROPPED_COMMANDS,
+    ATTR_TURN_ID,
+    ATTR_TURN_OFFERED_IDS,
+    META_GREETING,
+    META_INTERRUPTED,
+    META_KIND,
+    META_SOURCE,
+    META_STATUS,
+    META_VERB,
+    OBS_TYPE_RETRIEVER,
+    OBS_TYPE_TOOL,
+    observation,
+    set_attributes,
+)
 
 #: Conversation history kept in the prompt (non-system messages). TTFT grows
 #: with context on the shared endpoint: 20 messages measured 2.3 s vs ~0.4 s.
@@ -95,6 +127,10 @@ class SGRAgentService(LLMService):
         self._turn_task: asyncio.Task | None = None
         self._turn_id: str | None = None
         self._interrupted = False
+        # The decorator's `llm` span, captured at turn open: `_cancel_turn` runs
+        # from the InterruptionFrame's context, where get_current_span() is not it.
+        self._turn_span: Span = trace.INVALID_SPAN
+        self._trace_input_set = False
         # What the current turn heard, said and pointed at — ingested into memory
         # at turn end, or on interruption with the partial reply (D6: the user's
         # words are a memory even when the answer was cut off).
@@ -120,10 +156,20 @@ class SGRAgentService(LLMService):
         if self._turn_task is not None and not self._turn_task.done():
             self._turn_task.cancel()
             self._schedule_ingest(interrupted=True)
-        if self._turn_id is not None:
-            dropped = self._bus.cancel_turn(self._turn_id)
-            logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
-                "turn interrupted", dropped_commands=dropped)
+        self._drop_turn_commands()
+
+    def _drop_turn_commands(self) -> None:
+        """Barge-in: drop the turn's queued-but-unsent commands (spec §9), once.
+
+        Reached from `_run_turn`'s cancellation handler first (see there); the
+        InterruptionFrame's `_cancel_turn` then finds nothing left to drop."""
+        if self._turn_id is None:
+            return
+        dropped = self._bus.cancel_turn(self._turn_id)
+        logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
+            "turn interrupted", dropped_commands=dropped)
+        self._turn_span.set_attributes({META_INTERRUPTED: True, ATTR_TURN_DROPPED_COMMANDS: dropped})
+        self._turn_id = None
 
     def _schedule_ingest(self, *, interrupted: bool) -> None:
         """Off the turn: never awaited by the pipeline."""
@@ -138,6 +184,12 @@ class SGRAgentService(LLMService):
 
     # --- the turn -----------------------------------------------------------
 
+    # `traced_llm` opens the `llm` span under Pipecat's turn span (D15): it captures
+    # the context messages and the model, and every span the loop opens inside the
+    # decorated coroutine nests under it via contextvars. Its own `output` stays
+    # empty because `speak` pushes AggregatedTextFrames, so `_turn` sets the
+    # Langfuse output from TurnTrace.spoken(). Engages only when `_tracing_enabled`.
+    @traced_llm
     async def _run_turn(self, context: LLMContext) -> None:
         turn_id = self._session.new_turn()
         self._turn_id = turn_id
@@ -147,9 +199,15 @@ class SGRAgentService(LLMService):
             await self._turn_task
         except asyncio.CancelledError:
             # Pipecat cancels the processor's frame task *before* it delivers the
-            # InterruptionFrame; without this the inner turn kept streaming.
+            # InterruptionFrame; without this the inner turn kept streaming. The
+            # cancelled turn is awaited so its `finally` stamps the span before
+            # the decorator closes it — which is also why the interruption is
+            # recorded here and not in `_cancel_turn`.
             if not self._turn_task.done():
                 self._turn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._turn_task
+            self._drop_turn_commands()
             self._schedule_ingest(interrupted=True)
             if not self._interrupted:
                 raise
@@ -161,39 +219,64 @@ class SGRAgentService(LLMService):
         ctx = TurnContext(turn_id, user_id, time.perf_counter(),
                           logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id))
         log, metrics = ctx.log, TurnMetrics()
+        span = self._turn_span = trace.get_current_span()
 
         await self.start_processing_metrics()
         messages = list(context.get_messages())
         user_text = _last_user_text(messages)
-        self._trace = TurnTrace(user_text=user_text)
+        greeting = is_greeting(user_text)
+        # Kept locally too: on interruption `_cancel_turn` swaps `self._trace` out
+        # for ingest before this coroutine's `finally` gets to run.
+        turn_trace = self._trace = TurnTrace(user_text=user_text)
+        span.set_attributes({ATTR_TURN_ID: turn_id, META_GREETING: greeting, ATTR_OBS_INPUT: user_text})
+        if not greeting and not self._trace_input_set:
+            self._trace_input_set = True
+            span.set_attribute(ATTR_TRACE_INPUT, user_text)
         log.debug("turn open", step="start", user_text=user_text, history_msgs=len(messages),
                   screen=self._session.screen is not None)
 
-        memory = await self._lane.recall(user_id, user_text)
-        history_text = (await self._history.render_for_prompt(user_id, self._catalog)
-                        if self._history is not None else "Recently watched: (none yet)")
-        metrics.recall_ms = ctx.elapsed_ms()
-        log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
-                  memory_tokens=memory.token_est, ms=metrics.recall_ms)
-        log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
+        try:
+            with observation("agent.recall", type=OBS_TYPE_RETRIEVER, **{ATTR_OBS_INPUT: user_text}) as recall:
+                memory = await self._lane.recall(user_id, user_text)
+                history_text = (await self._history.render_for_prompt(user_id, self._catalog)
+                                if self._history is not None else "Recently watched: (none yet)")
+                metrics.recall_ms = ctx.elapsed_ms()
+                recall.set_attributes({
+                    META_SOURCE: "stale" if memory.stale else "empty" if memory.empty else "hit",
+                    ATTR_MEMORY_EMPTY: memory.empty, ATTR_MEMORY_STALE: memory.stale,
+                    ATTR_MEMORY_TOKEN_EST: memory.token_est, ATTR_HISTORY_CHARS: len(history_text),
+                    ATTR_OBS_OUTPUT: memory.render_for_prompt(),
+                })
+            log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
+                      memory_tokens=memory.token_est, ms=metrics.recall_ms)
+            log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
 
-        messages = self.build_messages(messages, memory, history_text)
-        if is_greeting(user_text):
-            messages[-1] = {"role": "user", "content": greeting_brief(
-                history_text, memory.render_for_prompt(), self._session.persona.language)}
-        log.debug("turn prompt", step="prompt", n_messages=len(messages),
-                  system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
-        log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
+            messages = self.build_messages(messages, memory, history_text)
+            if greeting:
+                messages[-1] = {"role": "user", "content": greeting_brief(
+                    history_text, memory.render_for_prompt(), self._session.persona.language)}
+            log.debug("turn prompt", step="prompt", n_messages=len(messages),
+                      system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
+            log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
 
-        await self.push_frame(LLMFullResponseStartFrame())
-        fallback_text = await self._runner.run(messages, ctx, metrics, self._trace)
-        await self.push_frame(LLMFullResponseEndFrame())
-        await self.stop_processing_metrics()
-        self._record_offered(ctx, fallback_text)
-        metrics.total_ms = ctx.elapsed_ms()
-        log.debug("turn close", step="end", **metrics.as_log_fields())
-        log.info("turn", **metrics.as_log_fields())
-        self._schedule_ingest(interrupted=False)
+            await self.push_frame(LLMFullResponseStartFrame())
+            fallback_text = await self._runner.run(messages, ctx, metrics, turn_trace)
+            await self.push_frame(LLMFullResponseEndFrame())
+            await self.stop_processing_metrics()
+            self._record_offered(ctx, fallback_text)
+            metrics.total_ms = ctx.elapsed_ms()
+            log.debug("turn close", step="end", **metrics.as_log_fields())
+            log.info("turn", **metrics.as_log_fields())
+            self._schedule_ingest(interrupted=False)
+        finally:
+            # One producer, two sinks (D16): the `turn` log line above and the span.
+            # Runs on interruption too, with what the turn had by then.
+            spoken = turn_trace.spoken()
+            set_attributes(span, {
+                **metrics.as_span_attributes(),
+                ATTR_TURN_OFFERED_IDS: turn_trace.offered_ids() or None,
+                ATTR_OBS_OUTPUT: spoken, ATTR_TRACE_OUTPUT: spoken,
+            })
 
     def _record_offered(self, ctx: TurnContext, fallback_text: str) -> None:
         """Viewing log: the recommendation candidates the agent actually named or
@@ -240,21 +323,34 @@ class SGRAgentService(LLMService):
         log, turn_id, user_id = ctx.log, ctx.turn_id, ctx.user_id
         t0 = time.perf_counter()
         verb = str(action.verb)
+        spec = REGISTRY[verb]
         args = action.model_dump(exclude={"verb"}, exclude_none=True)
-        if REGISTRY[verb].kind == "internal":
-            log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
-            result = await self._tools.run(action, user_id)
-            ms = round((time.perf_counter() - t0) * 1000)
-            log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
-            log.info("internal tool", verb=verb, status=result.get("status", "ok"),
-                     n=len(result.get("titles", [])), ms=ms)
+        # A TV command is an action with a side effect, so both kinds are `tool` (D19).
+        with observation("agent.action", type=OBS_TYPE_TOOL, **{
+            META_VERB: verb, META_KIND: spec.kind, ATTR_ACTION_AWAITS_RESULT: spec.awaits_result,
+            ATTR_ACTION_EARNS_CYCLE: spec.earns_cycle, ATTR_OBS_INPUT: json.dumps(args, ensure_ascii=False),
+        }) as span:
+            if spec.kind == "internal":
+                log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
+                result = await self._tools.run(action, user_id)
+                ms = round((time.perf_counter() - t0) * 1000)
+                log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
+                log.info("internal tool", verb=verb, status=result.get("status", "ok"),
+                         n=len(result.get("titles", [])), ms=ms)
+            else:
+                log.debug("dispatch tv", step="dispatch", verb=verb, args=args)
+                try:
+                    result = await self._bus.dispatch(verb, args, turn_id=turn_id)
+                except ValueError as err:
+                    log.warning("rejected action", verb=verb, reason=str(err))
+                    span.set_status(StatusCode.ERROR, str(err))
+                    span.set_attribute(ATTR_OBS_STATUS_MESSAGE, str(err))
+                    result = {"status": "invalid", "reason": str(err)}
+                else:
+                    log.info("tv command", verb=verb, status=result.get("status"),
+                             ms=round((time.perf_counter() - t0) * 1000))
+            span.set_attributes({
+                META_STATUS: str(result.get("status", "ok")), ATTR_ACTION_MS: round((time.perf_counter() - t0) * 1000),
+                ATTR_OBS_OUTPUT: json.dumps(result, ensure_ascii=False, default=str),
+            })
             return result
-        log.debug("dispatch tv", step="dispatch", verb=verb, args=args)
-        try:
-            result = await self._bus.dispatch(verb, args, turn_id=turn_id)
-        except ValueError as err:
-            log.warning("rejected action", verb=verb, reason=str(err))
-            return {"status": "invalid", "reason": str(err)}
-        log.info("tv command", verb=verb, status=result.get("status"),
-                 ms=round((time.perf_counter() - t0) * 1000))
-        return result

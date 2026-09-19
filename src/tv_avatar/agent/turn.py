@@ -8,9 +8,15 @@ loop passes around instead of positional parameters, a `marks` dict and
 import json
 import time
 from dataclasses import dataclass, field, fields
-from typing import Any
+from typing import Any, ClassVar
 
 from tv_avatar.agent.envelope import REGISTRY
+from tv_avatar.tracing import (
+    ATTR_TURN_PREFIX,
+    META_CYCLES,
+    META_FALLBACK,
+    META_INTENT,
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,19 @@ class TurnMetrics:
                     out[f.name] = True
             elif value is not None or f.name in ("cycles", "n_actions", "intent"):
                 out[f.name] = value
+        return out
+
+    #: The same fields, split for Langfuse (D16, D20): what you filter turns by
+    #: goes under observation metadata, the timings are `tv.turn.*` details.
+    _FILTERABLE: ClassVar[dict[str, str]] = {
+        "intent": META_INTENT, "cycles": META_CYCLES, "fallback": META_FALLBACK}
+
+    def as_span_attributes(self) -> dict[str, int | str | bool]:
+        """`None` is dropped (OTel rejects it); `fallback` only when true."""
+        out: dict[str, int | str | bool] = {}
+        for name, value in self.as_log_fields().items():
+            if value is not None:
+                out[self._FILTERABLE.get(name, ATTR_TURN_PREFIX + name)] = value
         return out
 
 

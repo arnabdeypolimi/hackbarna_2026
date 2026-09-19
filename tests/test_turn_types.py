@@ -94,3 +94,14 @@ def test_cycle_outcome_feedback_is_keyed_by_verb():
     assert outcome.needs_another_cycle
     assert outcome.feedback() == '{"recommend_titles": {"titles": [1]}, "search_catalog": {"status": "ok"}}'
     assert not CycleOutcome(raw="{}", results=()).needs_another_cycle
+
+
+def test_turn_metrics_span_attributes_drop_none_and_prefix():
+    """Filter keys under Langfuse observation metadata, timings as tv.turn.* (D16/D20)."""
+    m = TurnMetrics(cycles=1, n_actions=1, intent="control", ttft_ms=420)
+    attrs = m.as_span_attributes()
+    assert attrs["langfuse.observation.metadata.cycles"] == 1 and attrs["tv.turn.ttft_ms"] == 420
+    assert attrs["langfuse.observation.metadata.intent"] == "control" and attrs["tv.turn.n_actions"] == 1
+    assert "tv.turn.recall_ms" not in attrs and "langfuse.observation.metadata.fallback" not in attrs
+    assert None not in TurnMetrics().as_span_attributes().values()
+    assert TurnMetrics(fallback=True).as_span_attributes()["langfuse.observation.metadata.fallback"] is True

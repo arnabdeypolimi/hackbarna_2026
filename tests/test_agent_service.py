@@ -589,3 +589,142 @@ async def test_history_is_trimmed_to_recent_messages():
     sent = client.calls[0]["messages"]
     assert sent[0]["role"] == "system" and len(sent) == 11   # system + last 10
     assert sent[-1]["content"] == "play the first one"
+
+
+# --- spans (observability plan, Task 3) -----------------------------------------
+# `_tracing_enabled` engages Pipecat's @traced_llm; AIService.setup() resets it from
+# the StartFrame, so it is re-applied after setup. With no turn context the `llm`
+# span is a root, which is fine for asserting the subtree.
+
+
+def _traced(agent):
+    original_setup = agent.setup
+
+    async def setup(cfg):
+        await original_setup(cfg)
+        agent._tracing_enabled = True
+
+    agent.setup = setup
+    return agent
+
+
+async def test_turn_produces_llm_recall_cycle_action_spans(otel):
+    agent = _agent(FakeOpenAI([PLAY]), RecordingBus(), tools=FakeTools())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one"))])
+    spans = otel.spans()
+    llm, = spans["llm"]
+    assert llm.attributes["langfuse.observation.metadata.intent"] == "control"
+    assert llm.attributes["langfuse.observation.metadata.cycles"] == 1
+    assert llm.attributes["langfuse.observation.metadata.greeting"] is False
+    assert llm.attributes["langfuse.observation.input"] == "play the first one"
+    assert llm.attributes["langfuse.trace.input"] == "play the first one"
+    assert llm.attributes["langfuse.observation.output"] == "On it." == llm.attributes["langfuse.trace.output"]
+    assert llm.attributes["tv.turn_id"].startswith("turn_") and "tv.turn.total_ms" in llm.attributes
+    assert llm.attributes["gen_ai.request.model"] == _settings().llm_model   # Pipecat's own attribute
+    recall, = spans["agent.recall"]
+    assert recall.parent.span_id == llm.context.span_id
+    assert recall.attributes["langfuse.observation.type"] == "retriever"
+    assert recall.attributes["langfuse.observation.metadata.source"] == "empty"
+    cycle, = spans["agent.cycle"]
+    assert cycle.parent.span_id == llm.context.span_id and cycle.attributes["tv.cycle.max"] == 2
+    assert cycle.attributes["langfuse.observation.type"] == "generation"
+    assert cycle.attributes["gen_ai.request.model"] == _settings().llm_model
+    assert cycle.attributes["langfuse.observation.output"] == PLAY
+    assert cycle.attributes["tv.cycle.n_actions"] == 1 and "tv.cycle.ttft_ms" in cycle.attributes
+    assert '"role": "system"' in cycle.attributes["langfuse.observation.input"]
+    action, = spans["agent.action"]
+    assert action.attributes["langfuse.observation.type"] == "tool"
+    assert action.attributes["langfuse.observation.metadata.verb"] == "play"
+    assert action.attributes["langfuse.observation.metadata.kind"] == "tv"
+    assert action.attributes["langfuse.observation.metadata.status"] == "dispatched"
+    assert action.attributes["tv.action.earns_cycle"] is False
+    assert action.parent.span_id == cycle.context.span_id
+
+
+async def test_two_cycle_turn_records_both_cycles_and_offered_ids(otel):
+    agent = _agent(FakeOpenAI([RECO_1, RECO_2]), RecordingBus(), tools=FakeTools())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
+    spans = otel.spans()
+    cycles = sorted(spans["agent.cycle"], key=lambda s: s.attributes["langfuse.observation.metadata.cycle"])
+    assert [c.attributes["langfuse.observation.metadata.cycle"] for c in cycles] == [1, 2]
+    recommend = next(a for a in spans["agent.action"]
+                     if a.attributes["langfuse.observation.metadata.verb"] == "recommend_titles")
+    assert recommend.attributes["langfuse.observation.metadata.kind"] == "internal"
+    assert recommend.attributes["tv.action.awaits_result"] is True
+    assert '"Heat"' in recommend.attributes["langfuse.observation.output"]
+    llm, = spans["llm"]
+    assert llm.attributes["langfuse.observation.metadata.cycles"] == 2
+    assert set(llm.attributes["tv.turn.offered_ids"]) == {"949", "27205"}   # Heat, Inception — both named
+    assert llm.attributes["langfuse.observation.output"] == "Let me look. Try Heat or Inception."
+
+
+async def test_slow_follow_up_cycle_records_over_budget_and_fallback(otel):
+    class TwoSpeeds(FakeOpenAI):
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeStream(self.scripts.pop(0), delay_s=0.0 if len(self.calls) == 1 else 0.3)
+
+    settings = _settings().model_copy(update={"cycle_first_byte_s": 0.15})
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"),
+                            client=TwoSpeeds([RECO_1, RECO_2]), tools=FakeTools())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend me a heist movie"))])
+    spans = otel.spans()
+    cycle2 = next(c for c in spans["agent.cycle"] if c.attributes["langfuse.observation.metadata.cycle"] == 2)
+    assert cycle2.attributes["langfuse.observation.metadata.over_budget"] is True
+    assert cycle2.attributes["tv.cycle.budget_ms"] == 150
+    fallback, = spans["agent.fallback"]
+    assert fallback.attributes["langfuse.observation.metadata.cycle"] == 2
+    assert fallback.attributes["langfuse.observation.level"] == "WARNING"
+    assert fallback.attributes["langfuse.observation.output"].startswith("How about Heat")
+    assert fallback.attributes["tv.fallback.n_actions"] == 1
+    assert spans["llm"][0].attributes["langfuse.observation.metadata.fallback"] is True
+
+
+async def test_cycle_cap_refusal_and_parse_rejection_are_counted(otel):
+    """agent_max_cycles=1: recommend_titles is refused (cap), seek is rejected
+    (ValidationError), reject_title runs."""
+    envelope = ('{"intent":"control","say":"ok","actions":['
+                '{"verb":"seek","to_seconds":1,"delta_seconds":2},'
+                '{"verb":"reject_title","title_id":"7"},'
+                '{"verb":"recommend_titles","query":"heist"}]}')
+    settings = _settings().model_copy(update={"agent_max_cycles": 1})
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"),
+                            client=FakeOpenAI([envelope]), tools=FakeTools())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("seek"))])
+    spans = otel.spans()
+    cycle, = spans["agent.cycle"]
+    assert cycle.attributes["tv.cycle.n_skipped"] == 1 and cycle.attributes["tv.cycle.n_rejected"] == 1
+    assert cycle.attributes["tv.cycle.n_actions"] == 1
+    assert [e.name for e in cycle.events] == ["tv.action.rejected"]
+    assert cycle.events[0].attributes["verb"] == "seek"
+    assert [a.attributes["langfuse.observation.metadata.verb"] for a in spans["agent.action"]] == ["reject_title"]
+
+
+async def test_interruption_records_partial_turn(otel):
+    slow = FakeOpenAI(['{"intent":"chitchat","say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
+                      delay_s=0.05)
+    agent = _agent(slow, RecordingBus())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.4), InterruptionFrame()])
+    spans = otel.spans()
+    llm, = spans["llm"]
+    assert llm.attributes["langfuse.observation.metadata.interrupted"] is True
+    assert llm.attributes["tv.turn.dropped_commands"] == 0
+    assert 0 < len(llm.attributes["langfuse.observation.output"]) < len("I love that you love sci-fi, let me think about it some more.")
+    cycle, = spans["agent.cycle"]
+    assert cycle.attributes["langfuse.observation.output"].startswith('{"intent":"chitchat"')   # partial envelope kept
+
+
+async def test_tracing_off_opens_no_spans(otel):
+    """The default: no `_tracing_enabled`, no provider branch in business code —
+    observation() still runs, but its spans are the no-op kind Pipecat's turn
+    would have parented; nothing of ours is recorded."""
+    agent = _agent(FakeOpenAI([PLAY]), RecordingBus())
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one"))])
+    assert "llm" not in otel.spans()

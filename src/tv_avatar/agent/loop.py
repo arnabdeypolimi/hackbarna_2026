@@ -9,9 +9,13 @@ the `TurnHost` protocol, which the Pipecat service implements.
 """
 import asyncio
 import contextlib
+import json
 import time
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import Span
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 from pydantic import BaseModel, ValidationError
 
@@ -34,9 +38,41 @@ from tv_avatar.agent.turn import (
     TurnTrace,
 )
 from tv_avatar.config import Settings
+from tv_avatar.tracing import (
+    ATTR_CYCLE_BUDGET_MS,
+    ATTR_CYCLE_MAX,
+    ATTR_CYCLE_N_ACTIONS,
+    ATTR_CYCLE_N_REJECTED,
+    ATTR_CYCLE_N_SKIPPED,
+    ATTR_CYCLE_TTFT_MS,
+    ATTR_FALLBACK_N_ACTIONS,
+    ATTR_GENAI_INPUT_TOKENS,
+    ATTR_GENAI_MAX_TOKENS,
+    ATTR_GENAI_MODEL,
+    ATTR_GENAI_OUTPUT_TOKENS,
+    ATTR_GENAI_TEMPERATURE,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_LEVEL,
+    ATTR_OBS_OUTPUT,
+    EVENT_ACTION_REJECTED,
+    LEVEL_WARNING,
+    META_CYCLE,
+    META_OVER_BUDGET,
+    OBS_TYPE_GENERATION,
+    OBS_TYPE_SPAN,
+    observation,
+)
 
 MAX_TOKENS = 220           # say is 1–2 spoken sentences; actions are small
 TEMPERATURE = 0.2
+
+
+@dataclass
+class CycleWatch:
+    """What `_cycle_with_budget` watches from outside the cycle's task: the first
+    `say` byte, and the cycle's span so a blown budget is recorded on it."""
+    first_say: asyncio.Event = field(default_factory=asyncio.Event)
+    span: Span = otel_trace.INVALID_SPAN
 
 
 class TurnHost(Protocol):
@@ -80,7 +116,7 @@ class TurnRunner:
             budgeted = await self._cycle_with_budget(messages, ctx, cycle, metrics, trace)
             if budgeted is None:
                 metrics.fallback = True
-                fallback_text = await self._speak_fallback(outcome.results, ctx, trace)
+                fallback_text = await self._speak_fallback(outcome.results, ctx, metrics, trace)
                 break
             outcome = budgeted
             trace.add_results(outcome.results)
@@ -92,16 +128,17 @@ class TurnRunner:
                                  metrics: TurnMetrics, trace: TurnTrace) -> CycleOutcome | None:
         """Run a follow-up cycle; None if it produced no speech within `cycle_first_byte_s`."""
         budget_s = self._cfg.cycle_first_byte_s
-        first_say = asyncio.Event()
+        watch = CycleWatch()
         ctx.log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages),
                       budget_ms=round(budget_s * 1000))
-        task = asyncio.create_task(self._cycle(messages, ctx, cycle, metrics, trace, first_say=first_say))
-        waiter = asyncio.create_task(first_say.wait())
+        task = asyncio.create_task(self._cycle(messages, ctx, cycle, metrics, trace, watch=watch))
+        waiter = asyncio.create_task(watch.first_say.wait())
         try:
             done, _ = await asyncio.wait({task, waiter}, timeout=budget_s, return_when=asyncio.FIRST_COMPLETED)
         finally:
             waiter.cancel()
         if not done:
+            watch.span.set_attributes({META_OVER_BUDGET: True, ATTR_CYCLE_BUDGET_MS: round(budget_s * 1000)})
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
@@ -112,31 +149,53 @@ class TurnRunner:
         ctx.log.debug("cycle envelope", step="cycle", cycle=cycle, raw=outcome.raw)
         return outcome
 
-    async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext, trace: TurnTrace) -> str:
+    async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext,
+                              metrics: TurnMetrics, trace: TurnTrace) -> str:
         """Speak the templated answer; returns its text for the offered-titles log."""
         text, actions = render_fallback(results)
         ctx.log.debug("fallback", step="say", text=text, actions=actions)
         # Deliberately not added to `trace.said`: a template built from substitute
         # results is not the agent's reply, and the memory profile must not learn
         # the viewer "wanted" whatever the popular channel happened to return.
-        await self._host.speak(text)
-        for verb, args in actions:
-            trace.add_action(verb, args, after_results=True)
-            await self._host.dispatch_action(parse_action({"verb": verb, **args}), ctx)
+        with observation("agent.fallback", type=OBS_TYPE_SPAN, **{
+            META_CYCLE: metrics.cycles, ATTR_OBS_LEVEL: LEVEL_WARNING,
+            ATTR_FALLBACK_N_ACTIONS: len(actions), ATTR_OBS_OUTPUT: text,
+        }):
+            await self._host.speak(text)
+            for verb, args in actions:
+                trace.add_action(verb, args, after_results=True)
+                await self._host.dispatch_action(parse_action({"verb": verb, **args}), ctx)
         return text
 
     async def _cycle(self, messages: list[dict], ctx: TurnContext, cycle: int, metrics: TurnMetrics,
-                     trace: TurnTrace, first_say: asyncio.Event | None = None) -> CycleOutcome:
+                     trace: TurnTrace, watch: CycleWatch | None = None) -> CycleOutcome:
+        # One LLM call = one `generation` (D19). The raw envelope is recorded in
+        # the `finally` so a budget-cancelled cycle still shows what it streamed.
+        raw: list[str] = []
+        with observation("agent.cycle", type=OBS_TYPE_GENERATION, **{
+            META_CYCLE: cycle, ATTR_CYCLE_MAX: self._cfg.agent_max_cycles,
+            ATTR_GENAI_MODEL: self._cfg.llm_model, ATTR_GENAI_TEMPERATURE: TEMPERATURE,
+            ATTR_GENAI_MAX_TOKENS: MAX_TOKENS, ATTR_OBS_INPUT: json.dumps(messages, ensure_ascii=False),
+        }) as span:
+            if watch is not None:
+                watch.span = span
+            try:
+                return await self._stream_cycle(messages, ctx, cycle, metrics, trace, raw, span, watch)
+            finally:
+                span.set_attribute(ATTR_OBS_OUTPUT, "".join(raw))
+
+    async def _stream_cycle(self, messages: list[dict], ctx: TurnContext, cycle: int, metrics: TurnMetrics,
+                            trace: TurnTrace, raw: list[str], span: Span, watch: CycleWatch | None) -> CycleOutcome:
         log, host = ctx.log, self._host
         metrics.cycles = max(metrics.cycles, cycle)  # attempted, even if cancelled over budget
         if cycle > 1 and trace.said:
             trace.said.append(" ")  # the memory transcript reads "Let me look. I found…", not "look.I found"
         streamer = EnvelopeStreamer()
         sentences = SimpleTextAggregator()  # same splitter the TTS would use, but we own the flush
-        raw: list[str] = []
         said: list[str] = []
         awaited: list[tuple[str, asyncio.Task]] = []
         fire: list[asyncio.Task] = []
+        n_rejected = n_skipped = 0
         first_say_pending = True
         t_req = time.perf_counter()
         stream = None
@@ -153,6 +212,11 @@ class TurnRunner:
                 extra_body=self._cfg.llm_extra_body or None,
             )
             async for chunk in stream:
+                # Usage rides on a trailing chunk when the endpoint sends one
+                # (D21: not requested via stream_options until verified live).
+                if (usage := getattr(chunk, "usage", None)) is not None:
+                    span.set_attributes({ATTR_GENAI_INPUT_TOKENS: usage.prompt_tokens,
+                                         ATTR_GENAI_OUTPUT_TOKENS: usage.completion_tokens})
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta.content if choice and choice.delta else None
                 if not delta:
@@ -168,10 +232,11 @@ class TurnRunner:
                             trace.said.append(text)
                             if first_say_pending:
                                 first_say_pending = False
-                                if first_say is not None:
-                                    first_say.set()
+                                if watch is not None:
+                                    watch.first_say.set()
                                 await host.stop_ttfb_metrics()
                                 metrics.mark_once("ttft_ms", ctx.elapsed_ms())
+                                span.set_attribute(ATTR_CYCLE_TTFT_MS, ms())
                                 log.debug("first say byte", step="say", cycle=cycle, ms=ms())
                             async for sentence in sentences.aggregate(text):
                                 log.debug("sentence -> TTS", step="say", cycle=cycle, text=sentence.text, ms=ms())
@@ -187,13 +252,17 @@ class TurnRunner:
                             try:
                                 action = parse_action(raw_action)
                             except ValidationError as err:
-                                log.warning("rejected action", verb=raw_action.get("verb"),
-                                            reason=str(err).splitlines()[0])
+                                reason = str(err).splitlines()[0]
+                                log.warning("rejected action", verb=raw_action.get("verb"), reason=reason)
+                                n_rejected += 1
+                                span.add_event(EVENT_ACTION_REJECTED,
+                                               {"verb": str(raw_action.get("verb")), "reason": reason})
                                 continue
                             verb, spec = str(action.verb), REGISTRY[str(action.verb)]
                             if spec.earns_cycle and cycle >= self._cfg.agent_max_cycles:
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
+                                n_skipped += 1
                                 continue  # no open-ended loops on a voice interface
                             args = action.model_dump(exclude={"verb"}, exclude_none=True)
                             log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
@@ -219,6 +288,8 @@ class TurnRunner:
             await host.stop_ttfb_metrics()
         log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
                   awaited=len(awaited), fire_and_forget=len(fire), ms=ms())
+        span.set_attributes({ATTR_CYCLE_N_ACTIONS: len(awaited) + len(fire),
+                             ATTR_CYCLE_N_REJECTED: n_rejected, ATTR_CYCLE_N_SKIPPED: n_skipped})
 
         results: list[ToolResult] = []
         for verb, task in awaited:

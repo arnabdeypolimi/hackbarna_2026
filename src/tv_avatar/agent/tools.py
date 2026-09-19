@@ -8,6 +8,7 @@ import asyncio
 from typing import Any
 
 from loguru import logger
+from opentelemetry import trace
 from pydantic import BaseModel
 
 from tv_avatar.agent.envelope import (
@@ -18,6 +19,7 @@ from tv_avatar.agent.envelope import (
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
+from tv_avatar.tracing import ATTR_ACTION_MATCHED, ATTR_ACTION_N_TITLES
 
 
 class InternalTools:
@@ -88,6 +90,9 @@ class InternalTools:
         substitute = bool(req.query) and not req.similar_to
         matched = [t for t in titles if not (substitute and t["why"] == ["popular"])]
         result: dict[str, Any] = {"titles": titles, "matched": bool(matched)}
+        # Called inside the `agent.action` span; the engine opens its own below it.
+        trace.get_current_span().set_attributes(
+            {ATTR_ACTION_N_TITLES: len(titles), ATTR_ACTION_MATCHED: bool(matched)})
         if titles and not matched:
             result["note"] = ("nothing in the catalog matched the request; these are popular fill-ins — "
                               "tell the viewer you could not find a match before offering them")
