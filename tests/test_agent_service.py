@@ -484,7 +484,7 @@ async def test_a_turn_without_recommendations_records_nothing():
 
 
 def test_render_fallback_shapes():
-    from tv_avatar.agent.service import render_fallback
+    from tv_avatar.agent.fallback import render_fallback
     from tv_avatar.agent.turn import ToolResult
     text, actions = render_fallback((ToolResult("recommend_titles", {"titles": [
         {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
