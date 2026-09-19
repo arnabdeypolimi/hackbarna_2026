@@ -1,6 +1,6 @@
 import pytest
-
 from conftest import PERSONA
+
 from tv_avatar.control.protocol import Playback, ScreenState, Tile
 from tv_avatar.session.state import SessionStore
 

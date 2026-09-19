@@ -113,12 +113,16 @@ class ControlChannel:
 
     async def _write_loop(self) -> None:
         while True:
-            message = await self._bus.next_outbound()
+            # Peek, send, then pop: a socket that dies mid-send keeps the message
+            # queued for the reconnect (spec §6) instead of losing the one command
+            # that was in flight. The delivery marks are telemetry only.
+            message = await self._bus.peek_outbound()
             try:
                 await self._ws.send_text(message.model_dump_json())
             except (Exception, asyncio.CancelledError):
                 if isinstance(message, CommandMsg):
                     self._bus.mark_send_failed(message.id)
                 raise
+            self._bus.pop_outbound()
             if isinstance(message, CommandMsg):
                 self._bus.mark_sent(message.id)

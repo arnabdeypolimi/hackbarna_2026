@@ -88,7 +88,11 @@ def test_full_duplex_is_the_default():
 
 def test_vad_is_stricter_than_pipecat_defaults():
     """Every VAD start cancels TTS; room noise must not qualify (2026-09-19 field log)."""
-    from pipecat.audio.vad.vad_analyzer import VAD_CONFIDENCE, VAD_MIN_VOLUME, VAD_START_SECS
+    from pipecat.audio.vad.vad_analyzer import (
+        VAD_CONFIDENCE,
+        VAD_MIN_VOLUME,
+        VAD_START_SECS,
+    )
     vad = user_aggregator_params().vad_analyzer.params
     assert vad.confidence > VAD_CONFIDENCE
     assert vad.start_secs > VAD_START_SECS

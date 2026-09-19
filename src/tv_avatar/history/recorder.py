@@ -53,8 +53,7 @@ class HistoryRecorder:
 
     async def on_screen_transition(self, user_id: str, old: ScreenState | None, new: ScreenState) -> None:
         active = old.playback.title_id if old else None
-        for event in transition_events(old, new, self._runtime_s(active), user_id=user_id):
-            await self._store.record(event)
+        await self._store.record_many(transition_events(old, new, self._runtime_s(active), user_id=user_id))
 
     async def on_user_event(self, user_id: str, event: str, detail: dict[str, Any]) -> None:
         title_id = detail.get("title_id")
@@ -63,8 +62,8 @@ class HistoryRecorder:
                                        detail={"event": event, **detail}))
 
     async def on_rec_shown(self, user_id: str, ids: list[str]) -> None:
-        for title_id in ids:
-            await self._store.record(Event(user_id=user_id, kind=EventKind.REC_SHOWN, title_id=title_id))
+        await self._store.record_many(
+            [Event(user_id=user_id, kind=EventKind.REC_SHOWN, title_id=title_id) for title_id in ids])
 
     async def on_rec_rejected(self, user_id: str, title_id: str) -> None:
         await self._store.record(Event(user_id=user_id, kind=EventKind.REC_REJECTED, title_id=title_id))

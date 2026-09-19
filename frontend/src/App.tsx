@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent
 import type { Profile, Rect, Tab, Title } from './types/title';
 import { DATA_URL, MAX_FILE_BYTES } from './config';
 import { toTitles } from './lib/csv';
-import { buildRow, TAB_TITLES } from './lib/rows';
+import { buildRow, rankForTab, TAB_TITLES } from './lib/rows';
 import { readJSON, writeJSON } from './lib/storage';
 import { catalogFor } from './lib/maturity';
 import {
@@ -128,9 +128,11 @@ export default function App() {
   const catalog = useMemo(() => catalogFor(items, profile), [items, profile]);
   // A typed search outranks the agent's rail; clearing the search brings the rail back.
   const rail = query ? null : agentRail;
+  // The sort is the expensive half and depends on nothing a keystroke or a save changes.
+  const ranked = useMemo(() => rankForTab(catalog, tab), [catalog, tab]);
   const row = useMemo(
-    () => (rail ? rail.items : buildRow(catalog, tab, query, myList)),
-    [catalog, tab, query, myList, rail],
+    () => (rail ? rail.items : buildRow(catalog, ranked, tab, query, myList)),
+    [catalog, ranked, tab, query, myList, rail],
   );
   const selIdx = Math.min(sel, Math.max(0, row.length - 1));
   const current: Title | undefined = row[selIdx];
@@ -194,6 +196,14 @@ export default function App() {
   useEffect(flushRowFocus);
 
   const selectPoster = (n: number) => { setSel(n); focusRow(); };
+
+  // Every overlay (player, profiles, themes, exit dialog) takes focus from the stage and
+  // must hand it back to the same control on close — or to the row if that control is gone.
+  const rememberFocus = () => { prevFocus.current = document.activeElement as HTMLElement; };
+  const restoreFocus = () => {
+    const back = prevFocus.current;
+    requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
+  };
 
   // With no dataset yet, start on the import button so the remote has somewhere to go —
   // unless an overlay has it. The app now opens on "Who's watching?", and a missing dataset
@@ -271,10 +281,11 @@ export default function App() {
    * product has, so the player labels it a trailer rather than pretending to be the film.
    */
   const watch = (item: Title) => {
+    // Nothing plays without a trailer, so nothing is recorded or reported as watched either.
+    if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
     setHistory((h) => { const next = { ...h, [item.id]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
     avatar.send({ type: 'user_event', event: 'watch', detail: { title_id: toWireId(item) } });
-    if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
-    prevFocus.current = document.activeElement as HTMLElement;
+    rememberFocus();
     // It grows out of the browse panel, so the film opens from where the viewer was looking.
     const stage = stageRef.current;
     const panel = stage?.querySelector<HTMLElement>('.main');
@@ -303,13 +314,8 @@ export default function App() {
   const selectTab = (t: Tab) => { setTab(t); setQuery(''); setAgentRail(null); setSel(0); };
 
   // ---------- profiles ----------
-  const openProfiles = () => { prevFocus.current = document.activeElement as HTMLElement; setProfilesOpen(true); };
-  const closeProfiles = () => {
-    setProfilesOpen(false);
-    setViewerChosen(true);
-    const back = prevFocus.current;
-    requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
-  };
+  const openProfiles = () => { rememberFocus(); setProfilesOpen(true); };
+  const closeProfiles = () => { setProfilesOpen(false); setViewerChosen(true); restoreFocus(); };
 
   /**
    * Hands the TV to one profile: its own lists swap in, and browsing starts over on
@@ -351,16 +357,12 @@ export default function App() {
 
   const pickTheme = (choice: ThemeChoice) => { setThemeChoice(choice); saveChoice(choice); };
   const tuneTheme = (tune: Tune) => { const next = { ...tunes, [theme.id]: tune }; setTunes(next); saveTunes(next); };
-  const openThemes = () => { prevFocus.current = document.activeElement as HTMLElement; setThemeOpen(true); };
-  const closeThemes = () => {
-    setThemeOpen(false);
-    const back = prevFocus.current;
-    requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
-  };
+  const openThemes = () => { rememberFocus(); setThemeOpen(true); };
+  const closeThemes = () => { setThemeOpen(false); restoreFocus(); };
 
   const openTrailer = (item: Title) => {
     if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
-    prevFocus.current = document.activeElement as HTMLElement;
+    rememberFocus();
     // Offsets, not getBoundingClientRect: the stage is scaled, these stay in stage units.
     // Stored as insets so every edge animates to 0 and the box is pulled open by its
     // top-left corner, the bottom-right barely moving from where the tile already sat.
@@ -377,19 +379,10 @@ export default function App() {
       } : null,
     });
   };
-  const closePlayer = () => {
-    setPlayer(null);
-    setPlayback(STOPPED);
-    const prev = prevFocus.current;
-    requestAnimationFrame(() => (prev && document.contains(prev) ? prev.focus() : focusRow()));
-  };
+  const closePlayer = () => { setPlayer(null); setPlayback(STOPPED); restoreFocus(); };
 
-  const openDialog = () => { prevFocus.current = document.activeElement as HTMLElement; setDialogOpen(true); };
-  const closeDialog = () => {
-    setDialogOpen(false);
-    const back = prevFocus.current;
-    requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
-  };
+  const openDialog = () => { rememberFocus(); setDialogOpen(true); };
+  const closeDialog = () => { setDialogOpen(false); restoreFocus(); };
   const exit = () => { if (!exitApp()) { closeDialog(); toast.show('Exit closes the app on the TV', 'alert'); } };
 
   const back = (inSearch: boolean) => {
@@ -479,7 +472,7 @@ export default function App() {
     // The search rail keeps catalogue order, so a title whose name is a prefix of others
     // ("Moon" → Moonfall) need not land at 0: focus where the new row will actually put it.
     setQuery(t.title);
-    selectPoster(Math.max(0, buildRow(catalog, tab, t.title, myList).indexOf(t)));
+    selectPoster(Math.max(0, buildRow(catalog, ranked, tab, t.title, myList).indexOf(t)));
   };
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.
