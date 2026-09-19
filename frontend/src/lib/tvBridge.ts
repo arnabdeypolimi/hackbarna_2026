@@ -48,7 +48,13 @@ export function deriveScreenState(args: {
     focus_index: row.length ? selIdx : null,
     tiles,
     playback: playing
-      ? { state: playback.state, title_id: toWireId(playing), position_s: playback.position_s }
+      ? {
+        // A mounted player that has not reported yet is loading, not stopped: "stopped
+        // with a title" would be a contradiction the prompt cannot render.
+        state: playback.state === 'stopped' ? 'paused' : playback.state,
+        title_id: toWireId(playing),
+        position_s: playback.position_s,
+      }
       : { state: 'stopped', title_id: null, position_s: 0 },
   };
 }

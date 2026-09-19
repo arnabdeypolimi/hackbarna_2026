@@ -366,10 +366,13 @@ class SGRAgentService(LLMService):
                             verb = str(action.get("verb", ""))
                             args = {k: v for k, v in action.items() if k != "verb" and v is not None}
                             marks["n_actions"] += 1
-                            if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
+                            # No open-ended loops on a voice interface — and no waiting
+                            # on a result there is no cycle left to speak: an awaited TV
+                            # verb in the last cycle would block 400 ms for nothing.
+                            if verb in AWAITED_VERBS and cycle >= MAX_CYCLES:
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
-                                continue  # no open-ended loops on a voice interface
+                                continue
                             log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
                                       awaited=verb in AWAITED_VERBS,
                                       ms=round((time.perf_counter() - t_req) * 1000))

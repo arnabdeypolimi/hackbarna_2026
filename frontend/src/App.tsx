@@ -432,8 +432,17 @@ export default function App() {
       else if (delta_seconds != null) trailer.current?.seekBy(delta_seconds);
     },
     navigate: ({ direction, count }) => {
-      // move() is synchronous DOM focus, so repeating it advances one step each time.
-      for (let i = 0; i < (count ?? 1); i++) move(direction, document.activeElement as HTMLElement | null);
+      const n = count ?? 1;
+      const active = document.activeElement as HTMLElement | null;
+      // Along the row the target is computed once: move() reads selIdx from this render's
+      // closure, so calling it n times would step to the same neighbour n times.
+      if (active?.classList.contains('poster') && (direction === 'left' || direction === 'right')) {
+        const target = Math.max(0, Math.min(row.length - 1, selIdx + (direction === 'right' ? n : -n)));
+        if (target === selIdx) return `already at the ${direction === 'right' ? 'end' : 'start'} of the row`;
+        return selectPoster(target);
+      }
+      // Elsewhere each step is a synchronous DOM focus change, so repeating works.
+      for (let i = 0; i < n; i++) move(direction, document.activeElement as HTMLElement | null);
     },
     focus: ({ title_id }) => reveal(title_id),
     open_details: ({ title_id }) => reveal(title_id),

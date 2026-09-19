@@ -26,6 +26,13 @@ def test_session_round_trips_user_id_and_defaults_to_anon():
         assert anon["user_id"].startswith("anon_sess_")
 
 
+def test_session_rejects_a_user_id_that_could_walk_the_memory_root():
+    with TestClient(create_app()) as c:
+        assert c.post("/sessions", json={"user_id": "../../etc"}).status_code == 422
+        assert c.post("/sessions", json={"user_id": "a" * 65}).status_code == 422
+        assert c.post("/sessions", json={"user_id": "usr_mfdzvhxjxrg6"}).status_code == 200
+
+
 def test_catalog_sample_is_empty_without_a_built_catalog():
     with TestClient(create_app()) as c:
         assert c.get("/catalog/sample").json() == {"titles": []}

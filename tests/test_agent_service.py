@@ -158,7 +158,12 @@ TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17
 class AnsweringBus(RecordingBus):
     """A TV that answers search_catalog straight away, like the frontend does."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.dispatched: list[str] = []
+
     async def dispatch(self, verb, args, turn_id):
+        self.dispatched.append(verb)
         if verb == "search_catalog":
             async def answer():
                 msg = await self.next_outbound()
@@ -179,6 +184,17 @@ async def test_search_catalog_result_is_fed_back_for_a_second_cycle():
     assert "Gravity" in client.calls[1]["messages"][-1]["content"]
     assert _spoken(sink) == ["Let me look.", "I found Gravity and Moon."]
     assert (await bus.next_outbound()).verb == "focus"
+
+
+async def test_second_cycle_search_is_skipped_not_awaited():
+    """Cycle 2 has no cycle 3 to speak a result, so a search there must not block the turn."""
+    again = '{"intent":"search","say":"Let me check once more.","actions":[{"verb":"search_catalog","query":"moon"}]}'
+    bus, sink = AnsweringBus(), TimingSink()
+    agent = _agent(FakeOpenAI([SEARCH_1, again]), bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert _spoken(sink) == ["Let me look.", "Let me check once more."]
+    assert bus.dispatched == ["search_catalog"]
 
 
 def test_search_fallback_names_the_hits():

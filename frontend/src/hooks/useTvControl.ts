@@ -27,8 +27,14 @@ export type Send = (msg: Outbound) => void;
 export function dispatchCommand(cmd: CommandMsg, handler: CommandHandler, send: Send): void {
   if (cmd.verb === 'search_catalog') {
     // The one verb the backend awaits (400 ms). Pure in-memory filtering, so the budget
-    // is not in play, but it must be answered with a `result`, never an `ack`.
-    const titles = handler.search_catalog(cmd.args);
+    // is not in play, but it must be answered with a `result`, never an `ack` — and
+    // answered even when the handler throws, or the turn sits out the whole budget.
+    let titles: Array<{ title_id: string; name: string }> = [];
+    try {
+      titles = handler.search_catalog(cmd.args);
+    } catch (e) {
+      console.warn('[avatar] search_catalog failed', e);
+    }
     send({ type: 'result', command_id: cmd.id, data: { titles } });
     console.debug('[avatar] command', cmd.verb, cmd.args, `${titles.length} titles`);
     return;
