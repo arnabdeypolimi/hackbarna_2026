@@ -4,7 +4,8 @@ Pipecat is the only orchestrator; SLNG owns speech I/O (D12). Library
 services are wired from configuration; everything of ours is a
 FrameProcessor or an observer inserted at a fixed position:
 
-    input → STT → MemoryPrefetchTap → user_agg → [ScreenContextInjector, stub only] →
+    input → STT → EchoTranscriptFilter → MemoryPrefetchTap → user_agg →
+    [ScreenContextInjector, stub only] →
     agent → TTS → [Anam] → output → assistant_agg → [MemoryIngestTap, non-sgr only]
 
 The SGR agent writes its own system prompt and ingests memory itself, so
@@ -25,11 +26,17 @@ from tv_avatar.agent.prompt import initial_messages
 from tv_avatar.config import Settings, get_settings
 from tv_avatar.control.bus import CommandBus
 from tv_avatar.memory.taps import MemoryIngestTap, MemoryPrefetchTap
+from tv_avatar.pipeline.echo import (
+    BotSpeechObserver,
+    EchoTranscriptFilter,
+    SpokenWindow,
+)
 from tv_avatar.pipeline.observers import SessionEventsObserver, TurnLatencyObserver
 from tv_avatar.pipeline.services import build_anam, build_stt, build_tts
 from tv_avatar.pipeline.turns import user_aggregator_params
 from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import session_attributes, tracing_wanted
 
 
 def build_agent(settings: Settings, runtime: Runtime, session: SessionState, bus: CommandBus) -> LLMService:
@@ -75,14 +82,17 @@ def build_pipeline(
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
         user_params=user_aggregator_params(
-            turn_silence_s=settings.turn_silence_s, half_duplex=half_duplex,
+            turn_silence_s=settings.turn_silence_s,
+            barge_in_min_words=settings.barge_in_min_words, half_duplex=half_duplex,
         ),
     )
     agent = llm or build_agent(settings, runtime, session, bus)
+    spoken = SpokenWindow()
 
     stages = [
         transport.input(),
         build_stt(settings, language.pipecat),
+        EchoTranscriptFilter(spoken),
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
         user_agg,
     ]
@@ -102,10 +112,17 @@ def build_pipeline(
         # interrupted reply would otherwise never be remembered.
         stages.append(MemoryIngestTap(runtime.lane, session, context))
 
+    # Pipecat's tracing names the trace after the conversation and starts it on
+    # turn 1 (observability plan D14). The identity attributes also travel as
+    # baggage from `run_session`; passing them here as well guarantees the
+    # trace-level view even if the conversation span is created outside it.
     task = PipelineTask(
         Pipeline(stages),
         params=PipelineParams(enable_metrics=True),
-        observers=[SessionEventsObserver(bus), TurnLatencyObserver(session)],
+        observers=[SessionEventsObserver(bus), TurnLatencyObserver(session), BotSpeechObserver(spoken)],
+        enable_tracing=tracing_wanted(settings),
+        conversation_id=session.session_id,
+        additional_span_attributes=session_attributes(session, settings, half_duplex=half_duplex),
     )
 
     if greet:

@@ -84,7 +84,7 @@ def test_offer_rejects_bad_token():
         assert r.status_code == 401
 
 
-def _processor_names(settings) -> list[str]:
+def _build_task(settings):
     from pipecat.processors.frame_processor import FrameProcessor
 
     from tv_avatar.control.bus import CommandBus
@@ -103,8 +103,12 @@ def _processor_names(settings) -> list[str]:
             return lambda fn: fn
 
     runtime = build_runtime(settings)
-    task = build_pipeline(T(), SessionState("s", "t", 0, user_id="u1"), CommandBus(),
+    return build_pipeline(T(), SessionState("s", "t", 0, user_id="u1"), CommandBus(),
                           with_avatar=False, runtime=runtime, settings=settings)
+
+
+def _processor_names(settings) -> list[str]:
+    task = _build_task(settings)
 
     def flatten(pipeline):
         for p in pipeline.processors:
@@ -130,6 +134,19 @@ def test_sgr_pipeline_has_no_injector(tmp_path):
     names = _processor_names(_settings(tmp_path).model_copy(update={"agent_impl": "sgr"}))
     assert "SGRAgentService" in names and "ScreenContextInjector" not in names, names
     assert "MemoryIngestTap" not in names  # the agent ingests at turn end itself
+
+
+def test_task_carries_tracing_flags_from_settings(tmp_path):
+    """Pipecat's own tracing is switched per task (D14/D17); the private names
+    are the PipelineTask attributes on 1.11.0 — a rename is the signal we want."""
+    on = _settings(tmp_path).model_copy(update={
+        "tracing_enabled": True, "langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
+    task = _build_task(on)
+    assert task._enable_tracing is True
+    assert task._conversation_id == "s"
+    assert task._additional_span_attributes["langfuse.session.id"] == "s"
+    assert task._additional_span_attributes["langfuse.user.id"] == "u1"
+    assert _build_task(_settings(tmp_path))._enable_tracing is False
 
 
 def test_new_offer_for_same_user_stops_that_users_other_pipelines(tmp_path, monkeypatch):

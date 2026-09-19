@@ -26,6 +26,7 @@ from tv_avatar.pipeline.transport import build_transport
 from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionState, SessionStore
+from tv_avatar.tracing import setup_tracing, shutdown_tracing
 
 #: How often expired sessions (and their command buses) are reaped.
 SWEEP_INTERVAL_S = 60.0
@@ -52,6 +53,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         settings = None if _missing_settings() else get_settings()
         setup_logging(settings.log_level if settings else "INFO")
+        traced = settings is not None and setup_tracing(settings)
         if app.state.runtime is None and settings is not None:
             app.state.runtime = build_runtime(settings)
         if app.state.runtime is not None and settings is not None and settings.agent_impl == "sgr":
@@ -67,6 +69,10 @@ def create_app(
             await webrtc.close()
             if app.state.runtime is not None:
                 await app.state.runtime.close()
+            # Flushes the last batch; without it the final turn's spans are lost
+            # on every Ctrl-C / reload.
+            if traced:
+                shutdown_tracing()
 
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
@@ -162,7 +168,8 @@ def create_app(
             app.state.manager.start_pipeline(
                 session_id,
                 run_session(session, bus, transport, with_avatar=avatar,
-                            half_duplex=halfduplex, runtime=app.state.runtime),
+                            half_duplex=halfduplex, runtime=app.state.runtime,
+                            settings=settings),
             )
 
         answer = await webrtc.handle_web_request(request, on_connection)
