@@ -1,16 +1,22 @@
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from tv_avatar.agent.commands import Verb
 from tv_avatar.agent.envelope import (
-    ALL_MODELS,
-    AWAITED_VERBS,
+    REGISTRY,
+    RecallMemory,
+    RecommendTitles,
+    RejectTitle,
     TurnPlan,
     describe_capabilities,
+    parse_action,
     turn_plan_schema,
 )
+
+SNAPSHOT = Path(__file__).parent / "fixtures" / "turn_plan_schema.json"
 
 
 def test_action_union_covers_tv_and_internal_verbs():
@@ -21,10 +27,38 @@ def test_action_union_covers_tv_and_internal_verbs():
     assert [a.verb for a in plan.actions] == ["recommend_titles", "focus"]
 
 
-def test_every_tv_verb_is_in_the_union():
-    assert {v.value for v in Verb} <= set(ALL_MODELS)
-    assert "search_catalog" in AWAITED_VERBS and "recommend_titles" in AWAITED_VERBS
-    assert "play" not in AWAITED_VERBS
+def test_registry_covers_every_union_member():
+    """One entry per action model, keyed by the model's own `verb` literal."""
+    assert {v.value for v in Verb} <= set(REGISTRY)
+    for verb, spec in REGISTRY.items():
+        assert spec.model.model_fields["verb"].default == verb
+    items = turn_plan_schema()["schema"]["properties"]["actions"]["items"]
+    assert len(items["anyOf"]) == len(REGISTRY)
+
+
+def test_registry_classification():
+    tv = REGISTRY["search_catalog"]
+    assert tv.kind == "tv" and tv.awaits_result and not tv.earns_cycle
+    assert REGISTRY["play"].kind == "tv" and not REGISTRY["play"].awaits_result
+    rec = REGISTRY["recommend_titles"]
+    assert rec.kind == "internal" and rec.awaits_result and rec.earns_cycle
+    assert REGISTRY["recall_memory"].earns_cycle
+    rej = REGISTRY["reject_title"]
+    assert rej.kind == "internal" and not rej.awaits_result and not rej.earns_cycle
+    # A result can only earn a cycle if the turn waited for it.
+    assert all(spec.awaits_result for spec in REGISTRY.values() if spec.earns_cycle)
+    assert {v for v, s in REGISTRY.items() if s.kind == "tv"} == {v.value for v in Verb}
+
+
+def test_parse_action_returns_typed_model():
+    assert isinstance(parse_action({"verb": "recommend_titles", "query": "heist"}), RecommendTitles)
+    assert isinstance(parse_action({"verb": "recall_memory", "query": "x"}), RecallMemory)
+    assert isinstance(parse_action({"verb": "reject_title", "title_id": "1"}), RejectTitle)
+    assert parse_action({"verb": "focus", "title_id": "27205"}).verb == Verb.FOCUS
+    with pytest.raises(ValidationError):
+        parse_action({"verb": "reboot"})
+    with pytest.raises(ValidationError):
+        parse_action({"verb": "seek"})  # neither target
 
 
 def test_unknown_verb_is_unrepresentable():
@@ -41,23 +75,32 @@ def test_schema_is_strict_and_ordered():
     assert schema["required"] == ["intent", "say", "actions"]
     text = json.dumps(schema)
     assert '"oneOf"' not in text and '"discriminator"' not in text and '"default"' not in text
-    items = schema["properties"]["actions"]["items"]
-    assert "anyOf" in items and len(items["anyOf"]) == len(ALL_MODELS)
     for definition in schema["$defs"].values():
         if definition.get("type") == "object":
             assert definition["additionalProperties"] is False
             assert set(definition["required"]) == set(definition["properties"])
 
 
-def test_capabilities_manifest_lists_every_verb():
+def test_turn_plan_schema_unchanged():
+    """The constrained-decoding contract sent to Nebius. Changing it is a
+    re-bench of every model in the findings table, not a refactor — regenerate
+    the fixture deliberately (see tests/fixtures/) if that is what you mean."""
+    expected = json.loads(SNAPSHOT.read_text())
+    assert json.loads(json.dumps(turn_plan_schema(), sort_keys=True)) == expected
+
+
+def test_capabilities_manifest_from_registry():
     text = describe_capabilities()
-    for verb in ALL_MODELS:
-        assert f"- {verb}" in text
-    assert "INTERNAL" in text and "[awaits result]" in text
+    lines = [line for line in text.splitlines() if line.startswith("- ")]
+    assert len(lines) == len(REGISTRY)
+    for verb, spec in REGISTRY.items():
+        line = next(line for line in lines if line.startswith(f"- {verb}"))
+        assert spec.doc in line
+        assert ("[awaits result]" in line) == spec.awaits_result
+        assert ("INTERNAL" in line) == (spec.kind == "internal")
 
 
 def test_recommend_titles_genres_are_constrained_to_tmdb_enum():
-    from tv_avatar.agent.envelope import RecommendTitles
     ok = RecommendTitles(genres=["Crime", "Thriller"], exclude_genres=["Horror"])
     assert ok.exclude_genres == ["Horror"]
     with pytest.raises(ValidationError):

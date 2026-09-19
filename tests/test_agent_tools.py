@@ -59,7 +59,7 @@ async def test_genre_only_request_treats_popular_within_filters_as_a_real_answer
 
 
 async def test_reject_title_records_history_without_awaiting_a_second_cycle(tmp_path):
-    from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT
+    from tv_avatar.agent.envelope import REGISTRY
 
     tools, store = await _tools(tmp_path, [])
     result = await tools.run("reject_title", {"title_id": "346698"}, "u1", None)
@@ -68,5 +68,5 @@ async def test_reject_title_records_history_without_awaiting_a_second_cycle(tmp_
     events = await store.recent_events("u1", EventKind.REC_REJECTED)
     assert [e.title_id for e in events] == ["346698"]
     assert await store.rejected_ids("u1") == {"346698"}
-    assert "reject_title" not in INTERNAL_AWAIT and "reject_title" not in AWAITED_VERBS
+    assert not REGISTRY["reject_title"].awaits_result and not REGISTRY["reject_title"].earns_cycle
     await store.close()

@@ -32,7 +32,7 @@ from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 
-from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, INTERNAL_MODELS, turn_plan_schema
+from tv_avatar.agent.envelope import REGISTRY, turn_plan_schema
 from tv_avatar.agent.prompt import (
     build_system_prompt,
     greeting_brief,
@@ -361,16 +361,17 @@ class SGRAgentService(LLMService):
                             verb = str(action.get("verb", ""))
                             args = {k: v for k, v in action.items() if k != "verb" and v is not None}
                             marks["n_actions"] += 1
-                            if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
+                            spec = REGISTRY.get(verb)
+                            if spec is not None and spec.earns_cycle and cycle >= MAX_CYCLES:
                                 log.debug("action skipped", step="action", cycle=cycle, verb=verb,
                                           reason="cycle cap")
                                 continue  # no open-ended loops on a voice interface
+                            awaits = spec is not None and spec.awaits_result
                             log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
-                                      awaited=verb in AWAITED_VERBS,
-                                      ms=round((time.perf_counter() - t_req) * 1000))
+                                      awaited=awaits, ms=round((time.perf_counter() - t_req) * 1000))
                             task = asyncio.create_task(
                                 self.dispatch_action(verb, args, turn_id, user_id, memory_text))
-                            if verb in AWAITED_VERBS:
+                            if awaits:
                                 awaited.append((verb, task))
                             else:
                                 fire.append(task)
@@ -433,7 +434,8 @@ class SGRAgentService(LLMService):
                               memory_text: str | None = None) -> dict:
         log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
         t0 = time.perf_counter()
-        if verb in INTERNAL_MODELS:
+        spec = REGISTRY.get(verb)
+        if spec is not None and spec.kind == "internal":
             log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
             result = await self._tools.run(verb, args, user_id, memory_text)
             ms = round((time.perf_counter() - t0) * 1000)
@@ -455,4 +457,4 @@ class SGRAgentService(LLMService):
     def needs_second_cycle(results: list[tuple[str, dict]]) -> bool:
         """Any internal tool call earns a second cycle — including a failed one,
         so the agent speaks the fallback instead of stopping at the filler."""
-        return any(verb in INTERNAL_AWAIT for verb, _ in results)
+        return any(verb in REGISTRY and REGISTRY[verb].earns_cycle for verb, _ in results)
