@@ -520,7 +520,7 @@ git commit -m "feat: add command vocabulary as single source of truth"
 - Test: `tests/test_protocol.py`
 
 **Interfaces:**
-- Consumes: `tv_avatar.agent.commands.CommandArgs`, `Verb`.
+- Consumes: **nothing from this project.** `CommandMsg` deliberately carries `verb: str` and `args: dict` rather than the typed union from `commands.py` — the wire format is validated on the way *in* to the bus (Task 6), not on the way out. This keeps Task 3 independent of Task 2 so the two can be built in parallel.
 - Produces: `PROTOCOL_VERSION: int = 1`; client→server models `ScreenStateMsg`, `AckMsg`, `ResultMsg`, `UserEventMsg` unioned as `ClientMessage`; server→client models `CommandMsg`, `AgentStatusMsg`, `TranscriptMsg`, `ErrorMsg` unioned as `ServerMessage`; supporting models `Tile`, `Playback`, `ScreenState`; `parse_client_message(raw: str) -> ClientMessage` raising `ProtocolError`; `ProtocolError(Exception)` with `.code`.
 
 - [ ] **Step 1: Write the failing test**
