@@ -1,0 +1,18 @@
+node_modules
+dist
+
+# Secrets: scripts/.env holds a TMDB API key.
+.env
+
+# The 630 MB TMDB source export stays local — it is six times GitHub's per-file limit.
+# scripts/trim_tmdb.py regenerates public/data/titles.csv (284 KB) from it, and that is
+# the file the app actually reads.
+public/data/TMDB_movie_dataset_v11.csv
+
+# Vite's on-disk cache
+.vite
+
+# Per-machine tool settings
+.claude/settings.local.json
+.codex/hooks.json
+.impeccable/config.local.json
