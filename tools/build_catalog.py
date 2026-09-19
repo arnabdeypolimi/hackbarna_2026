@@ -1,7 +1,7 @@
 """Offline catalog indexing: TMDB CSV → data/catalog.parquet + data/qdrant_db.
 
 Run once per dataset version. Resumable — an interrupted run skips titles
-already in the index. Reads OPENAI_API_KEY / OPENAI_BASE_URL (+ EMBEDDING_*)
+already in the index. Reads NEBIUS_API_KEY / NEBIUS_BASE_URL (+ EMBEDDING_*)
 from the environment or .env; never prints them.
 
     uv run python tools/build_catalog.py --limit 1000   # smoke slice first
@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from loguru import logger
 from openai import OpenAI
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from tv_avatar.logging import setup_logging
@@ -26,8 +27,9 @@ class BuildSettings(BaseSettings):
     """Subset of tv_avatar.config.Settings — an offline job needs no SLNG/Anam keys."""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    openai_api_key: str
-    openai_base_url: str = "https://api.tokenfactory.nebius.com/v1/"
+    nebius_api_key: str = Field(validation_alias=AliasChoices("NEBIUS_API_KEY", "OPENAI_API_KEY"))
+    nebius_base_url: str = Field(default="https://api.tokenfactory.nebius.com/v1/",
+                                 validation_alias=AliasChoices("NEBIUS_BASE_URL", "OPENAI_BASE_URL"))
     embedding_model: str = "Qwen/Qwen3-Embedding-8B"
     embedding_dimensions: int = 1024
     catalog_path: str = "data/catalog.parquet"
@@ -45,7 +47,7 @@ def main() -> int:
 
     settings = BuildSettings()
     setup_logging(settings.log_level)
-    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+    client = OpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
 
     def embed(texts: list[str]) -> list[list[float]]:
         for attempt in range(4):

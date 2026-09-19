@@ -1,23 +1,25 @@
-"""Pipecat observers: derive TV-facing status and per-turn latency from frames.
+"""Pipecat observers: publish session events to the control channel (spec §7)
+and derive per-turn latency from frames.
 
-Nobody tracks state by hand — every status transition and every latency mark
-is a frame observation. Observers see each push between each pair of
-processors, so frames are de-duplicated by id.
+Observers rather than processors: they watch every frame without sitting in
+the media path, so they cannot add latency to speech. A frame is pushed once
+per hop; each observer reports it once.
 """
 import time
+from collections import deque
 
 from loguru import logger
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    Frame,
     InterimTranscriptionFrame,
     InterruptionFrame,
     LLMContextFrame,
-    LLMFullResponseEndFrame,
-    LLMFullResponseStartFrame,
     LLMTextFrame,
     MetricsFrame,
     TranscriptionFrame,
+    TTSTextFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
@@ -28,66 +30,70 @@ from tv_avatar.control.bus import CommandBus
 from tv_avatar.control.protocol import AgentStatusMsg, TranscriptMsg
 from tv_avatar.session.state import SessionState
 
-_STATUS_BY_FRAME = (
-    (UserStartedSpeakingFrame, "listening"),
-    (UserStoppedSpeakingFrame, "thinking"),
-    (LLMFullResponseStartFrame, "thinking"),
-    (BotStartedSpeakingFrame, "speaking"),
-    (BotStoppedSpeakingFrame, "idle"),
-)
 
-
-class _Dedup(BaseObserver):
-    def __init__(self) -> None:
+class _DedupObserver(BaseObserver):
+    def __init__(self, *, dedupe_window: int = 512) -> None:
         super().__init__()
-        self._seen: set[int] = set()
+        # Bounded so a long session cannot grow the set without limit.
+        self._seen: deque[int] = deque(maxlen=dedupe_window)
+        self._seen_set: set[int] = set()
 
-    def _first_time(self, data: FramePushed) -> bool:
-        if data.frame.id in self._seen:
+    def _first_time(self, frame: Frame) -> bool:
+        if frame.id in self._seen_set:
             return False
-        self._seen.add(data.frame.id)
-        if len(self._seen) > 5000:
-            self._seen = set(list(self._seen)[-1000:])
+        if len(self._seen) == self._seen.maxlen:
+            self._seen_set.discard(self._seen[0])
+        self._seen.append(frame.id)
+        self._seen_set.add(frame.id)
         return True
 
 
-class AgentStatusObserver(_Dedup):
-    def __init__(self, bus: CommandBus, *, transcripts: bool = True) -> None:
-        super().__init__()
+class SessionEventsObserver(_DedupObserver):
+    """Translate pipeline frames into protocol events on the session's bus."""
+
+    def __init__(self, bus: CommandBus, *, dedupe_window: int = 512) -> None:
+        super().__init__(dedupe_window=dedupe_window)
         self._bus = bus
-        self._transcripts = transcripts
-        self._say: list[str] = []
-        self.state = "idle"
 
     async def on_push_frame(self, data: FramePushed) -> None:
-        if not self._first_time(data):
+        if not self._first_time(data.frame):
             return
-        frame = data.frame
-        for kind, state in _STATUS_BY_FRAME:
-            if isinstance(frame, kind):
-                self._set(state)
-                break
-        if not self._transcripts:
+        msg = translate(data.frame)
+        if msg is None:
             return
-        if isinstance(frame, TranscriptionFrame):
-            self._bus.push_server_message(TranscriptMsg(role="user", text=frame.text, final=True))
-        elif isinstance(frame, LLMFullResponseStartFrame):
-            self._say = []
-        elif isinstance(frame, LLMTextFrame):
-            self._say.append(frame.text)
-        elif isinstance(frame, LLMFullResponseEndFrame) and self._say:
-            self._bus.push_server_message(TranscriptMsg(role="assistant", text="".join(self._say), final=True))
-            self._say = []
-
-    def _set(self, state: str) -> None:
-        if state == self.state:
-            return
-        self.state = state
-        self._bus.push_server_message(AgentStatusMsg(state=state))
+        if isinstance(msg, TranscriptMsg) and msg.final:
+            logger.info("{}: {}", msg.role, msg.text)
+        self._bus.publish(msg)
 
 
-class TurnLatencyObserver(_Dedup):
-    """One structured log line per turn — M4's data source."""
+def translate(frame: Frame) -> AgentStatusMsg | TranscriptMsg | None:
+    """Pure mapping from a frame to a protocol event, or None if irrelevant."""
+    match frame:
+        case UserStartedSpeakingFrame():
+            return AgentStatusMsg(state="listening")
+        case UserStoppedSpeakingFrame():
+            return AgentStatusMsg(state="thinking")
+        case BotStartedSpeakingFrame():
+            return AgentStatusMsg(state="speaking")
+        case BotStoppedSpeakingFrame():
+            return AgentStatusMsg(state="idle")
+        case InterimTranscriptionFrame(text=text):
+            return TranscriptMsg(role="user", text=text, final=False)
+        case TranscriptionFrame(text=text):
+            return TranscriptMsg(role="user", text=text, final=True)
+        case TTSTextFrame(text=text):
+            return TranscriptMsg(role="assistant", text=text, final=True)
+        case _:
+            return None
+
+
+class TurnLatencyObserver(_DedupObserver):
+    """One structured log line per turn — M4's data source (phase 2, Task 8).
+
+    Marks: first interim → LLMContextFrame, LLMContextFrame → first
+    LLMTextFrame (TTFT), InterruptionFrame → bot stopped, plus Pipecat's own
+    TTFB/processing metrics. Emitted on BotStoppedSpeakingFrame.
+    """
 
     def __init__(self, session: SessionState) -> None:
         super().__init__()
@@ -103,7 +109,7 @@ class TurnLatencyObserver(_Dedup):
         self.last_marks: dict | None = None
 
     async def on_push_frame(self, data: FramePushed) -> None:
-        if not self._first_time(data):
+        if not self._first_time(data.frame):
             return
         frame, now = data.frame, time.perf_counter()
         if isinstance(frame, UserStartedSpeakingFrame):

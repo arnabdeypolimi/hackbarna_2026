@@ -48,7 +48,7 @@ def build_runtime(settings: Settings, *, lane: MemoryLane | None = None) -> Runt
     recs: RecsEngine | None = None
     if Path(settings.catalog_path).exists() and Path(settings.qdrant_path).exists():
         catalog = CatalogStore(settings.catalog_path, settings.qdrant_path)
-        embedder = OpenAIEmbedder(settings.openai_base_url, settings.openai_api_key,
+        embedder = OpenAIEmbedder(settings.nebius_base_url, settings.nebius_api_key,
                                   settings.embedding_model, settings.embedding_dimensions)
         recs = RecsEngine(catalog, history, embedder, tool_timeout_s=settings.tool_timeout_s)
     else:
@@ -56,7 +56,7 @@ def build_runtime(settings: Settings, *, lane: MemoryLane | None = None) -> Runt
                        catalog_path=settings.catalog_path)
 
     if lane is None:
-        if settings.agent_impl == "sgr" and settings.openai_api_key:
+        if settings.agent_impl == "sgr" and settings.nebius_api_key:
             from tv_avatar.memory.voicemem_lane import VoiceMemLane
             lane = VoiceMemLane(settings)
         else:

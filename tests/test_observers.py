@@ -1,72 +1,82 @@
-import asyncio
-
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
-    LLMFullResponseEndFrame,
-    LLMFullResponseStartFrame,
+    InterimTranscriptionFrame,
+    LLMContextFrame,
     LLMTextFrame,
     TranscriptionFrame,
+    TTSTextFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
-from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.observers.base_observer import FramePushed
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import run_test
 
 from tv_avatar.control.bus import CommandBus
-from tv_avatar.control.protocol import AgentStatusMsg, CommandMsg, TranscriptMsg
-from tv_avatar.pipeline.observers import AgentStatusObserver, TurnLatencyObserver
+from tv_avatar.pipeline.observers import (
+    SessionEventsObserver,
+    TurnLatencyObserver,
+    translate,
+)
 from tv_avatar.session.state import SessionState
 
 
-class Passthrough(FrameProcessor):
+def test_status_frames_map_to_agent_status():
+    assert translate(UserStartedSpeakingFrame()).state == "listening"
+    assert translate(UserStoppedSpeakingFrame()).state == "thinking"
+    assert translate(BotStartedSpeakingFrame()).state == "speaking"
+    assert translate(BotStoppedSpeakingFrame()).state == "idle"
+
+
+def test_transcription_frames_map_to_transcripts():
+    partial = translate(InterimTranscriptionFrame(text="hel", user_id="u", timestamp="t"))
+    final = translate(TranscriptionFrame(text="hello", user_id="u", timestamp="t"))
+    spoken = translate(TTSTextFrame(text="Hi there.", aggregated_by="sentence"))
+    assert (partial.role, partial.final) == ("user", False)
+    assert (final.role, final.final, final.text) == ("user", True, "hello")
+    assert (spoken.role, spoken.text) == ("assistant", "Hi there.")
+
+
+def test_unrelated_frames_are_ignored():
+    from pipecat.frames.frames import StartFrame
+    assert translate(StartFrame()) is None
+
+
+async def test_observer_reports_each_frame_once_across_hops():
+    """A frame is pushed once per pipeline hop; the client must see one event."""
+    bus = CommandBus()
+    observer = SessionEventsObserver(bus)
+    frame = UserStartedSpeakingFrame()
+    for _hop in range(4):
+        await observer.on_push_frame(FramePushed(
+            source=None, destination=None, frame=frame,
+            direction=FrameDirection.DOWNSTREAM, timestamp=0,
+        ))
+    first = await bus.next_outbound()
+    assert first.type == "agent_status" and first.state == "listening"
+    assert not bus._outbound
+
+
+async def test_bus_events_survive_turn_cancellation():
+    bus = CommandBus()
+    await bus.dispatch("home", {}, turn_id="turn_1")
+    bus.publish(translate(BotStoppedSpeakingFrame()))
+    assert bus.cancel_turn("turn_1") == 1
+    assert (await bus.next_outbound()).type == "agent_status"
+
+
+class _Passthrough(FrameProcessor):
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
 
 
-async def _drain(bus: CommandBus) -> list:
-    out = []
-    while True:
-        try:
-            out.append(await asyncio.wait_for(bus.next_outbound(), timeout=0.02))
-        except TimeoutError:
-            return out
-
-
-async def test_status_observer_emits_states_in_order_and_transcripts():
-    bus = CommandBus()
-    observer = AgentStatusObserver(bus)
-    await run_test(Passthrough(), observers=[observer], frames_to_send=[
-        UserStartedSpeakingFrame(),
-        TranscriptionFrame(text="play heat", user_id="u1", timestamp="0"),
-        UserStoppedSpeakingFrame(),
-        LLMFullResponseStartFrame(), LLMTextFrame("On "), LLMTextFrame("it."), LLMFullResponseEndFrame(),
-        BotStartedSpeakingFrame(), BotStoppedSpeakingFrame(),
-    ], expected_down_frames=None)
-    msgs = await _drain(bus)
-    states = [m.state for m in msgs if isinstance(m, AgentStatusMsg)]
-    assert states == ["listening", "thinking", "speaking", "idle"]
-    transcripts = [(m.role, m.text) for m in msgs if isinstance(m, TranscriptMsg)]
-    assert transcripts == [("user", "play heat"), ("assistant", "On it.")]
-
-
-async def test_cancel_turn_never_drops_status_messages():
-    bus = CommandBus()
-    await bus.dispatch("home", {}, turn_id="t1")
-    bus.push_server_message(AgentStatusMsg(state="thinking"))
-    assert bus.cancel_turn("t1") == 1
-    remaining = await _drain(bus)
-    assert len(remaining) == 1 and isinstance(remaining[0], AgentStatusMsg)
-    assert not any(isinstance(m, CommandMsg) for m in remaining)
-
-
 async def test_latency_observer_logs_one_line_per_turn():
     session = SessionState("sess", "tok", 0, user_id="u1")
     observer = TurnLatencyObserver(session)
-    from pipecat.frames.frames import LLMContextFrame
-    from pipecat.processors.aggregators.llm_context import LLMContext
-    await run_test(Passthrough(), observers=[observer], frames_to_send=[
+    await run_test(_Passthrough(), observers=[observer], frames_to_send=[
         UserStartedSpeakingFrame(),
         LLMContextFrame(context=LLMContext()),
         LLMTextFrame("hi"),

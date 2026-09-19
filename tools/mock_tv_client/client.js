@@ -15,6 +15,7 @@ let session = null;
 let focus = 0;
 let playback = { state: "stopped", title_id: null, position_s: 0 };
 let ticker = null;
+let turnCaption = "";
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => {
@@ -135,8 +136,10 @@ async function start() {
     if (msg.type === "command") { log(`< ${ev.data}`); apply(msg); }
     else if (msg.type === "agent_status") $("status").textContent = msg.state;
     else if (msg.type === "transcript") {
+      // Assistant captions arrive per TTS sentence; accumulate within a turn.
       const el = $(msg.role === "user" ? "you" : "avatar");
-      el.textContent = msg.text;
+      if (msg.role === "assistant") el.textContent = (turnCaption += " " + msg.text).trim();
+      else { el.textContent = msg.text; if (msg.final) turnCaption = ""; }
     } else log(`< ${ev.data}`);
   };
   ticker = setInterval(() => {
@@ -165,13 +168,14 @@ async function talk() {
     pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && resolve();
     setTimeout(resolve, 1500);
   });
-  const res = await fetch(session.offer_url, {
+  const url = `${session.offer_url}?token=${session.control_token}&avatar=${$("avatar-on").checked}`;
+  const res = await fetch(url, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type,
-                           token: session.control_token, avatar: $("avatar-on").checked }),
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
   });
   if (!res.ok) { log(`offer failed: ${res.status} ${await res.text()}`); pc.close(); pc = null; $("talk").disabled = false; return; }
-  await pc.setRemoteDescription(await res.json());
+  const answer = await res.json();
+  await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
   log("media plane connected — speak");
 }
 

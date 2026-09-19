@@ -81,7 +81,7 @@ class SGRAgentService(LLMService):
         self._history = history
         self._catalog = catalog
         self._session = session
-        self._client = client or AsyncOpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+        self._client = client or AsyncOpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
         self._tools = tools or InternalTools(recs, lane, catalog, timeout_s=settings.tool_timeout_s)
         self._turn_task: asyncio.Task | None = None
         self._turn_id: str | None = None

@@ -131,3 +131,27 @@ with the full embed sub-budget → two timeouts blew the 400 ms tool budget; now
 (6) Nemotron emits `genre="crime thriller"`; TMDB genres are atomic (`Crime`, `Thriller`), so the
 hard filter matched nothing → `parse_genres()` maps free text to ANY-of TMDB genres.
 (7) Prompt: "play X" occasionally became `focus`; rule tightened.
+
+## Alignment with dev's voice pipe (merge of `37ca12c`)
+
+Dev landed a measured end-to-end voice demo while phase 2 was built. The merge keeps **dev's
+pipe as the base** and re-attaches the agentic layer through `AGENT_IMPL`:
+
+| Area | Taken from dev | Kept from phase 2 |
+|---|---|---|
+| Providers | Reson8 STT, Cartesia Sonic-3 TTS @ 24 kHz, `X-World-Part-Override` routing, Anam `api_version="v1"` | — |
+| LLM config | `NEBIUS_API_KEY`/`NEBIUS_BASE_URL`, default `Qwen/Qwen3-30B-A3B-Instruct-2507` | `OPENAI_*` accepted as aliases (VoiceMem/OpenAI-SDK style `.env` keeps working); `LLM_EXTRA_BODY` for Nemotron's thinking-off switch |
+| Turn-taking | silence-timer stop strategy, phantom-turn timeout, half-duplex diagnostic | — |
+| Signalling | `SmallWebRTCRequestHandler` offer/PATCH, `SessionManager.start_pipeline`, greeting `LLMRunFrame`, `/config`, `/demo` console | `POST /sessions {user_id}`, `GET /catalog/sample`, runtime + E5 warmup in lifespan, history recorder on the control channel |
+| Observers | `SessionEventsObserver` (status + interim/final captions via `TTSTextFrame`) | `TurnLatencyObserver` |
+| Bus | `publish()` name, pending-search release on cancel | `ServerMessage` queue semantics (identical) |
+| Prompt | `SYSTEM_PROMPT` + greeting for `chat` | SGR sections for `sgr`/`stub` (injector stamps them per turn; greeting instruction works under SGR — say hello, no actions) |
+
+`AGENT_IMPL`: `sgr` (default — memory + recs + TV commands), `chat` (dev's plain
+`OpenAILLMService`, no injector), `stub` (tests; conftest pins it).
+
+Post-merge text-mode run on Qwen3-30B: "something like Sicario but newer" → 3 titles + `focus`
+(TTFT 1.6 s cold, 470–490 ms warm); "play the second one" → `play 980489` (Gran Turismo, tile
+[1]); "what do I hate?" → "You hate horror films." For the SGR envelope Nemotron-3_5-Lightning
+measured ~130 ms faster TTFT and ~2× faster totals (Task 1 Step 6); switch with
+`LLM_MODEL=nvidia/Nemotron-3_5-Lightning LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}`.

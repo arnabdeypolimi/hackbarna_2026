@@ -66,8 +66,8 @@ class VoiceMemLane(BaseMemoryLane):
         root = Path(self._settings.memory_root) / user_id
         root.mkdir(parents=True, exist_ok=True)
         return VoiceMem.from_config({
-            "api_key": self._settings.openai_api_key,
-            "base_url": self._settings.openai_base_url,
+            "api_key": self._settings.nebius_api_key,
+            "base_url": self._settings.nebius_base_url,
             "mode": "text",
             "user_id": user_id,
             "memory_root": str(root),
@@ -80,8 +80,8 @@ class VoiceMemLane(BaseMemoryLane):
             # not exported into the process environment.
             "llm": {"provider": "openai",
                     "config": {"model": self._settings.voicemem_chat_model,
-                               "api_key": self._settings.openai_api_key,
-                               "base_url": self._settings.openai_base_url}},
+                               "api_key": self._settings.nebius_api_key,
+                               "base_url": self._settings.nebius_base_url}},
         })
 
     async def _vm_for(self, user_id: str):

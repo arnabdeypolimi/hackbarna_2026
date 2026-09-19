@@ -12,7 +12,7 @@ from tv_avatar.runtime import build_runtime
 
 
 def _settings(tmp_path) -> Settings:
-    return Settings(slng_api_key="-", anam_api_key="-", anam_avatar_id="-", _env_file=None,
+    return Settings(nebius_api_key="-", slng_api_key="-", anam_api_key="-", anam_avatar_id="-", _env_file=None,
                     history_db_path=str(tmp_path / "h.db"), catalog_path=str(tmp_path / "none.parquet"),
                     qdrant_path=str(tmp_path / "none_qdrant"))
 
@@ -58,7 +58,7 @@ def test_screen_transition_over_the_socket_records_history(tmp_path):
 def test_offer_rejects_bad_token():
     with TestClient(create_app()) as c:
         sid = c.post("/sessions").json()["session_id"]
-        r = c.post(f"/sessions/{sid}/offer", json={"sdp": "x", "type": "offer", "token": "bad"})
+        r = c.post(f"/sessions/{sid}/offer?token=bad", json={"sdp": "v=0", "type": "offer"})
         assert r.status_code == 401
 
 
@@ -69,6 +69,8 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
     class T:
         def input(self): return _Passthrough()
         def output(self): return _Passthrough()
+        def event_handler(self, _name):
+            return lambda fn: fn
 
     from pipecat.processors.frame_processor import FrameProcessor
 

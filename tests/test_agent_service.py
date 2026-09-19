@@ -90,7 +90,7 @@ class FakeTools(InternalTools):
 
 
 def _settings() -> Settings:
-    return Settings(slng_api_key="-", anam_api_key="-", anam_avatar_id="-", openai_api_key="x", _env_file=None)
+    return Settings(slng_api_key="-", anam_api_key="-", anam_avatar_id="-", nebius_api_key="x", _env_file=None)
 
 
 def _ctx(text: str) -> LLMContext:
@@ -106,7 +106,8 @@ def _agent(client, bus, lane=None, tools=None):
 
 
 async def _run(agent, sink, frames):
-    return await run_test(Pipeline([agent, sink]), frames_to_send=frames, expected_down_frames=None)
+    return await run_test(Pipeline([agent, sink]), frames_to_send=frames, expected_down_frames=None,
+                          start_timeout=5.0)
 
 
 async def test_say_streams_as_llm_text_frames_before_actions_dispatch():
@@ -180,7 +181,7 @@ async def test_system_prompt_carries_screen_memory_and_history():
     assert "# Capabilities" in system["content"] and "# Screen" in system["content"]
     assert "hates horror" in system["content"] and "Recently watched" in system["content"]
     assert client.calls[0]["response_format"]["type"] == "json_schema"
-    assert client.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert client.calls[0]["extra_body"] is None  # LLM_EXTRA_BODY={} → nothing sent
 
 
 async def test_invalid_verb_args_are_rejected_not_raised():

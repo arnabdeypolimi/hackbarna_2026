@@ -5,24 +5,18 @@ Two rules from spec §8 and §9 live here:
     would stall the LLM turn and stall speech with it;
   - the queue is turn-scoped, so barge-in drops commands the interrupted
     turn had queued but not yet sent.
-
-Phase 2 widened the outbound queue from CommandMsg to any ServerMessage so
-observers can push agent_status / transcript frames over the same socket;
-cancel_turn only ever drops CommandMsg, never status.
 """
 import asyncio
 import uuid
 from collections import deque
 
-from pydantic import BaseModel
-
 from tv_avatar.agent.commands import AWAITS_RESULT, parse_command
-from tv_avatar.control.protocol import CommandMsg
+from tv_avatar.control.protocol import CommandMsg, ServerMessage
 
 
 class CommandBus:
     def __init__(self, search_timeout_s: float = 0.4) -> None:
-        self._outbound: deque[BaseModel] = deque()
+        self._outbound: deque[ServerMessage] = deque()
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
@@ -53,15 +47,18 @@ class CommandBus:
             self._pending.pop(msg.id, None)
             self._pending_turn.pop(msg.id, None)
 
-    def push_server_message(self, msg: BaseModel) -> None:
-        """Queue a non-command ServerMessage (agent_status, transcript, error)."""
+    def publish(self, msg: ServerMessage) -> None:
+        """Queue a non-command server message (agent_status, transcript).
+
+        Shares the command queue so the client sees events and commands in
+        the order the pipeline produced them."""
         self._enqueue(msg)
 
-    def _enqueue(self, msg: BaseModel) -> None:
+    def _enqueue(self, msg: ServerMessage) -> None:
         self._outbound.append(msg)
         self._ready.set()
 
-    async def next_outbound(self) -> BaseModel:
+    async def next_outbound(self) -> ServerMessage:
         while not self._outbound:
             self._ready.clear()
             await self._ready.wait()
@@ -71,13 +68,12 @@ class CommandBus:
         """Drop queued-but-unsent commands for an interrupted turn.
 
         Commands already handed to the WebSocket are NOT rolled back
-        (spec §9, rule 4). Status/transcript messages are never dropped.
-        A ``search_catalog`` handler still awaiting its result is released
-        immediately with ``{"status": "cancelled"}`` so the interrupted turn
-        does not sit out the 400 ms timeout."""
+        (spec §9, rule 4). A ``search_catalog`` handler still awaiting its
+        result is released immediately with ``{"status": "cancelled"}`` so
+        the interrupted turn does not sit out the 400 ms timeout."""
         keep = deque(
             m for m in self._outbound
-            if not (isinstance(m, CommandMsg) and m.turn_id == turn_id)
+            if not isinstance(m, CommandMsg) or m.turn_id != turn_id
         )
         dropped = len(self._outbound) - len(keep)
         self._outbound = keep

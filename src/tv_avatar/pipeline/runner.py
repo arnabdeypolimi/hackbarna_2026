@@ -13,7 +13,11 @@ async def run_session(
     transport,
     *,
     with_avatar: bool = True,
+    half_duplex: bool = False,
     runtime: Runtime | None = None,
 ) -> None:
-    task = build_pipeline(transport, session, bus, with_avatar=with_avatar, runtime=runtime)
+    task = build_pipeline(
+        transport, session, bus, with_avatar=with_avatar, half_duplex=half_duplex,
+        runtime=runtime,
+    )
     await PipelineRunner(handle_sigint=False).run(task)
