@@ -149,8 +149,10 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     if (code === lang.current) return;
     choose(code);
     writeJSON(LANG_KEY, code);
-    // No catalogue means the last boot never got one, so go back to the top.
-    if (config) void start(config, code);
+    // Go back to the top unless there is a catalogue worth starting from. An
+    // unconfigured backend has one, but connecting against it only strands the panel
+    // in "Connecting…", where boot() says plainly what is missing.
+    if (config && config.configured) void start(config, code);
     else void boot();
   };
 
