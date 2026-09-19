@@ -150,6 +150,61 @@ async def test_say_reaches_tts_as_sentences_before_actions_dispatch():
     assert (await bus.next_outbound()).verb == "play"
 
 
+SEARCH_1 = '{"intent":"search","say":"Let me look.","actions":[{"verb":"search_catalog","query":"space"}]}'
+SEARCH_2 = '{"intent":"search","say":"I found Gravity and Moon.","actions":[{"verb":"focus","title_id":"49047"}]}'
+TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17431", "name": "Moon"}]}
+
+
+class AnsweringBus(RecordingBus):
+    """A TV that answers search_catalog straight away, like the frontend does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dispatched: list[str] = []
+
+    async def dispatch(self, verb, args, turn_id):
+        self.dispatched.append(verb)
+        if verb == "search_catalog":
+            async def answer():
+                msg = await self.next_outbound()
+                self.resolve(msg.id, TV_HITS)
+            asyncio.get_running_loop().create_task(answer())
+        return await super().dispatch(verb, args, turn_id)
+
+
+async def test_search_catalog_result_is_fed_back_for_a_second_cycle():
+    """The TV answers within the budget; its titles must reach the model and be spoken,
+    not discarded after the filler (the field bug: 'Let me look.' and silence)."""
+    bus, sink = AnsweringBus(), TimingSink()
+    client = FakeOpenAI([SEARCH_1, SEARCH_2])
+    agent = _agent(client, bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert len(client.calls) == 2
+    assert "Gravity" in client.calls[1]["messages"][-1]["content"]
+    assert _spoken(sink) == ["Let me look.", "I found Gravity and Moon."]
+    assert (await bus.next_outbound()).verb == "focus"
+
+
+async def test_second_cycle_search_is_skipped_not_awaited():
+    """Cycle 2 has no cycle 3 to speak a result, so a search there must not block the turn."""
+    again = '{"intent":"search","say":"Let me check once more.","actions":[{"verb":"search_catalog","query":"moon"}]}'
+    bus, sink = AnsweringBus(), TimingSink()
+    agent = _agent(FakeOpenAI([SEARCH_1, again]), bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert _spoken(sink) == ["Let me look.", "Let me check once more."]
+    assert bus.dispatched == ["search_catalog"]
+
+
+def test_search_fallback_names_the_hits():
+    from tv_avatar.agent.service import render_fallback
+    text, actions = render_fallback([("search_catalog", TV_HITS)])
+    assert text == "I found Gravity, or Moon."
+    assert actions == [("show_titles", {"title_ids": ["49047", "17431"], "label": "Search results"})]
+    assert "couldn't find" in render_fallback([("search_catalog", {"titles": []})])[0]
+
+
 async def test_multi_sentence_say_is_split_and_streamed_per_sentence():
     sink = TimingSink()
     agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
@@ -330,7 +385,7 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     said = _spoken(sink)
     assert said[0] == "Let me look."
     assert "How about Heat, or Inception?" in said            # from FakeTools' two titles
-    assert (await bus.next_outbound()).verb == "focus"        # first title focused
+    assert (await bus.next_outbound()).verb == "show_titles"  # the picks go on screen
     assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
     await asyncio.sleep(0.02)
@@ -345,7 +400,8 @@ def test_render_fallback_shapes():
         {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
         {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]})])
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
-    assert actions == [("focus", {"title_id": "1"})]
+    # Every returned title goes on the rail, even the ones not spoken.
+    assert actions == [("show_titles", {"title_ids": ["1", "2", "3", "4"], "label": "For you"})]
     assert render_fallback([("recommend_titles", {"titles": []})])[1] == []
     assert "don't have that" in render_fallback([("recall_memory", {"memory": "(none yet)"})])[0]
     assert "took too long" in render_fallback([("search_catalog", {"status": "unavailable"})])[0]

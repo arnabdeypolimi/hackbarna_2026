@@ -53,8 +53,7 @@ def test_shipped_avatars_are_distinguishable():
     # data decision, so the literal UUIDs are deliberately not pinned here.
     cat = load_catalog(DEFAULT_CATALOG_PATH)
     assert len({a.voice for a in cat.avatars}) == len(cat.avatars)
-    # Igor reuses Cara's video until he has his own (TODO in avatars.yaml).
-    assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars) - 1
+    assert len({a.anam_avatar_id for a in cat.avatars}) == len(cat.avatars)
 
 
 def test_shipped_single_language_avatars_resolve_to_their_own_language():
