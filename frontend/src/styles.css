@@ -1,21 +1,35 @@
 /* Layout is drawn at 1920×1080 inside #stage and scaled to the screen.
    Avoids CSS newer than Chrome 84 (no inset, aspect-ratio, :has, backdrop-filter). */
 :root {
-  /* Surfaces. The room is the light; the glass is smoked, not milky, because a living
-     room is dim in the evening and white ink needs a dark plane to sit on. */
-  --glass: rgba(26, 22, 18, 0.58);
+  /* The whole palette is set by lib/theme.ts from the sky of the season, or the one the viewer
+     picked; the values here are the winter sky's, which is what a room with no saved choice and
+     no script yet paints. Ink, chips, ring and lights never change; every tinted surface below
+     is mixed from that sky's deepest stop, so no panel is a neutral grey. */
+  --sky: linear-gradient(135deg, #919397 12.5%, #686b71 37.5%, #40444b 62.5%, #171c25 87.5%);
+  --grain: none;
+  --shade: rgba(6, 7, 9, 0.18);      /* the veil or scrim over the room, graded per sky */
+  --surround: #141820;          /* under the room, seen only if the room fails to paint */
+  --lights:
+    radial-gradient(900px 700px at 12% 18%, rgba(255, 255, 255, 0.28), transparent 70%),
+    radial-gradient(700px 500px at 92% 10%, rgba(255, 255, 255, 0.18), transparent 70%),
+    radial-gradient(1400px 420px at 35% 105%, rgba(0, 0, 0, 0.3), transparent 70%),
+    radial-gradient(600px 900px at 75% 60%, rgba(0, 0, 0, 0.12), transparent 70%);
+
+  /* Surfaces. The room is the light; the glass is smoked with the sky's own deepest stop, never a neutral black. */
+  --glass: rgba(7, 8, 11, 0.6);
   --glass-edge: rgba(255, 255, 255, 0.3);
-  --solid: #322e2a;            /* dialogs and the profile form: glass with nothing behind it */
-  --shade: rgba(20, 18, 16, 0.28);
+  --solid: #090b0f;            /* dialogs and the profile form: glass with nothing behind it */
+  --toast: rgba(9, 11, 15, 0.9);
 
   /* Two scrims, because two kinds of overlay sit on them. One dims the screen behind a panel
      that carries its own fill; the other IS the surface, so it has to put the room out. */
-  --scrim: rgba(20, 18, 16, 0.55);
-  --scrim-full: rgba(20, 18, 16, 0.96);
+  --scrim: rgba(6, 7, 9, 0.55);
+  --scrim-full: rgba(6, 7, 9, 0.96);
 
   /* One ring width for every focusable that takes a ring rather than inverting. Focus is the
      state a viewer hunts for from the sofa, so it is never thinner on one control than another. */
   --ring: 5px;
+  --ring-color: #fff;
 
   /* Controls, by rank. Value carries the hierarchy so no hue is spent on it. */
   --primary: rgba(255, 255, 255, 0.28);
@@ -27,7 +41,13 @@
   --ink-2: rgba(255, 255, 255, 0.78);
   --ink-3: rgba(255, 255, 255, 0.6);
   --focus-bg: #fff;
-  --focus-ink: #23211f;
+  --focus-ink: #0e1116;
+
+  /* The placeholder card behind a poster: three tints of the sky and a glow. */
+  --card-a: #1d1f22;
+  --card-b: #0d0f14;
+  --card-c: #16181c;
+  --card-glow: rgba(104, 107, 113, 0.45);
 
   /* The four meaning-bearing colours. Each one means exactly one thing, and two of them
      are the colours of the physical keys on the remote in the viewer's hand. */
@@ -53,38 +73,52 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 body {
-  background: #8d8a86;
+  background: var(--surround);
   color: var(--ink);
   font-family: 'Sora', system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 input { caret-color: var(--ink); }
-::selection { background: rgba(255, 255, 255, 0.26); color: var(--ink); }
+::selection { background: var(--primary); color: var(--ink); }
 
 
 #stage { position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
 
-/* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter. */
-.room {
-  position: absolute; top: 0; right: 0; bottom: 0; left: 0;
-  background:
-    radial-gradient(900px 700px at 12% 18%, rgba(255, 240, 219, 0.55), transparent 70%),
-    radial-gradient(700px 500px at 92% 10%, rgba(255, 247, 234, 0.35), transparent 70%),
-    radial-gradient(1400px 420px at 35% 105%, rgba(52, 48, 45, 0.85), transparent 70%),
-    radial-gradient(600px 900px at 75% 60%, rgba(120, 112, 104, 0.5), transparent 70%),
-    linear-gradient(180deg, #b9b5b0 0%, #9a9690 55%, #7b7771 100%);
+/* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter.
+   It fills the window, not the stage: on a desktop the window is rarely 16:9, and the sky
+   running edge to edge beats bars the colour of --surround either side of the panels. On a
+   television the window is the stage, so nothing differs.
+   Bottom to top: the still sky; the moving sky, a muted loop that fades in once it is playing
+   and is left out under reduced motion or on a set that cannot decode it; then one
+   pseudo-element holding the four lights, the grain and the scrim. The lights are white and
+   black only, so one set of them reads as the same room at dawn and at midnight, and the sky
+   carries every bit of the hue. Lights, grain and scrim share one background stack, so they
+   are one paint, and that paint never repeats: the only per-frame work is the decoder, which
+   on a television is a hardware block, and the compositor placing its frame. No filters.
+   The grain is not pixelated on purpose: at 2–4% strength, letting the stage's scale smooth
+   the tile loses nothing and avoids aliasing on a 720p set. */
+.room { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--sky); }
+.room .sky { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.2s ease; }
+.room .sky.on { opacity: 1; }
+.room::after {
+  content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  background-image:
+    linear-gradient(var(--shade), var(--shade)),
+    var(--grain),
+    var(--lights);
+  background-repeat: no-repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: auto, 128px 128px, auto, auto, auto, auto;
 }
-.room::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--shade); }
 
 .panel { position: absolute; background: var(--glass); border: 1.5px solid var(--glass-edge); border-radius: 48px; }
 .main { left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0; }
-/* Its right edge lands on the frame, so the screen has one right edge instead of two. The
-   tilt is deliberate and gives the screen depth, which is why its top is not aligned to
-   the browse panel's. */
+/* The browse panel's top and height, flat, so the two read as a pair of the same size; its
+   right edge lands on the frame, so the screen has one right edge instead of two. It used
+   to be taller and tilted in perspective for depth, but a tilted panel never looks the same
+   size as a flat one; the depth now comes from the room's lights and the glass over them. */
 .side {
-  left: 1308px; top: 74px; width: 548px; height: 900px; overflow: hidden;
+  left: 1308px; top: 110px; width: 548px; height: 830px; overflow: hidden;
   padding: var(--pad-panel) var(--pad-panel) var(--gap-section);
-  transform: perspective(2200px) rotateY(-7deg); transform-origin: 0 50%;
   display: flex; flex-direction: column;
 }
 
@@ -99,7 +133,7 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .search svg { flex: none; opacity: 0.85; }
 .search input { flex: 1; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
 .search input::placeholder { color: var(--ink-3); }
-.search:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+.search:focus-within { background: var(--primary); box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 
 
 /* Poster row */
@@ -112,9 +146,9 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   display: flex; align-items: center; gap: var(--gap-block); padding: 0 var(--pad-text);
   transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
-.poster { position: relative; flex: none; width: 214px; height: 272px; border-radius: 24px; overflow: hidden; background: #46423e; transition: transform 0.2s; }
+.poster { position: relative; flex: none; width: 214px; height: 272px; border-radius: 24px; overflow: hidden; background: var(--card-b); transition: transform 0.2s; }
 .poster.sel { width: 262px; height: 334px; border-radius: 28px; }
-.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; transform: scale(1.03); }
+.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); transform: scale(1.03); }
 
 /* Over artwork of any colour, so the mark brings its own dark ground. */
 .savemark {
@@ -127,7 +161,14 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .poster.sel .savemark { right: 16px; top: 16px; width: 46px; height: 46px; }
 .poster.sel .savemark svg { width: 25px; height: 25px; }
 
-.art { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; padding: 22px; text-align: left; }
+/* The card behind a poster that has not arrived, or never will. Its tints are the theme's, so a row
+   of them reads as one sky; the angle and the glow's place are the title's, so the row is not a wall. */
+.art {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; padding: 22px; text-align: left;
+  background:
+    radial-gradient(120% 90% at var(--art-x) var(--art-y), var(--card-glow), transparent 60%),
+    linear-gradient(var(--art-angle), var(--art-a), var(--art-b));
+}
 /* Painted after the fallback title (it comes later in the markup), so artwork covers the title
    the moment it lands. Waiting for the load event to hide it leaves both on screen for a frame.
    Order rather than z-index: the panels above this one are stacked by document order too. */
@@ -172,21 +213,21 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .btn:focus, .tab:focus, .link:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
 .btn.primary:focus { box-shadow: none; }
 /* Delete and Exit cost something. Focus makes that plain instead of looking like consent. */
-.btn.danger:focus { background: var(--alert); color: var(--ink); }
+.btn.danger:focus { background: var(--alert); color: #fff; }
 /* A filled heart is the saved state; the row carries the same mark on the poster itself. */
 .btn.saved svg { fill: var(--key-red); stroke: var(--key-red); }
 
 .trailer { position: relative; flex: none; width: 470px; height: 268px; border-radius: 30px; overflow: hidden; align-self: flex-start; }
-.trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .trailer .scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
 .trailer .bar { position: absolute; left: 18px; right: 22px; bottom: 18px; display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
 .trailer .pill { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 24px; background: rgba(255, 255, 255, 0.2); }
-.trailer:focus .pill { background: #fff; color: var(--focus-ink); }
+.trailer:focus .pill { background: #fff; color: #23211f; }
 
 /* Side panel */
 /* flex: none because the panel is a column now — the backdrop keeps its height when a long
    title fills the rest, rather than being squeezed to make room. */
-.resume-art { position: relative; flex: none; height: 250px; border-radius: 30px; overflow: hidden; }
+.resume-art { position: relative; flex: none; height: 176px; border-radius: 30px; overflow: hidden; }
 .side h3 { margin: var(--gap-group) 0 0; font-size: 38px; font-weight: 600; }
 .side .chips { margin-top: var(--gap-item); }
 .side .label { margin-top: var(--gap-group); }
@@ -194,21 +235,26 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
    about one, and the fourth line was what pushed a series past the panel's edge. */
 .side .desc { -webkit-line-clamp: 3; }
 .label { margin: var(--gap-block) 0 0; font-size: 19px; color: var(--ink-2); }
-.side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: var(--gap-group); }
+.side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: auto; padding-top: var(--gap-group); }
 .link { display: block; margin: var(--gap-tight) auto 0; padding: var(--gap-item) var(--gap-block); border-radius: 24px; font-size: 19px; color: var(--ink-2); }
 
 /* Tab bar */
 /* Centred on the browse panel, because four of its five controls filter that panel's row.
    A 16px gap to the panel against a 32px gap to the screen edge is what makes it read as
    belonging to the panel instead of floating at the bottom of the screen. */
+/* Centred on the screen, not on the browse panel: it is the bar for the whole screen. */
 .tabs {
-  left: 276px; top: 956px; width: 780px; height: 92px; border-radius: 46px;
+  left: 530px; top: 956px; width: 860px; height: 92px; border-radius: 46px;
   display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-item) 0 var(--gap-group);
 }
 .tab { height: 62px; padding: 0 26px; border-radius: 31px; font-size: 19px; color: var(--ink-2); white-space: nowrap; }
-.tab.cur { background: rgba(255, 255, 255, 0.22); color: var(--ink); }
-.avatar { position: relative; margin-left: auto; width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #3e3a36; font-weight: 600; font-size: 20px; }
-.avatar:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.tab.cur { background: var(--primary); color: var(--ink); }
+/* The theme disc and the avatar sit together at the bar's end: the two things about the viewer, not the catalogue. */
+.skyknob { margin-left: auto; width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--chip); }
+.skyknob:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
+.skydisc { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--glass-edge); }
+.avatar { position: relative; margin-left: var(--gap-tight); width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--chip); font-weight: 600; font-size: 20px; }
+.avatar:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 
 /* Kids profiles are named the same everywhere: one cool tag against the warm room. */
 .ktag, .ptag {
@@ -223,11 +269,7 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   background: var(--kids); color: var(--focus-ink); font-size: 20px; font-weight: 600; letter-spacing: 0.02em;
 }
 
-/* Footer */
 /* bottom: 32px puts its lower edge on the tab bar's, so the bottom chrome shares one line. */
-.hint { position: absolute; right: var(--frame); bottom: var(--gap-section); display: flex; gap: var(--gap-block); font-size: 17px; color: var(--ink-2); }
-.dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; }
-.dot.red { background: var(--key-red); }
 
 /* Overlays */
 /* Aligned to the browse panel's left edge, in the top band beside the search field rather than
@@ -235,10 +277,10 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
    reports on something the viewer just did to that panel. It wraps instead of running off. */
 .toast {
   position: absolute; left: var(--frame); top: var(--gap-block); transform: translateY(-30px); opacity: 0;
-  max-width: 620px; padding: 16px 30px; border-radius: 30px; background: rgba(35, 33, 31, 0.85); font-size: 20px;
+  max-width: 620px; padding: 16px 30px; border-radius: 30px; background: var(--toast); font-size: 20px;
   transition: opacity 0.25s, transform 0.25s; pointer-events: none;
 }
-.toast.alert { background: rgba(140, 49, 37, 0.92); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.24); }
+.toast.alert { background: rgba(140, 49, 37, 0.92); color: #fff; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.24); }
 .toast.show { opacity: 1; transform: translateY(0); }
 /* The player expands to fill the Recommended panel it lives in, nothing beyond it.
    The embed letterboxes itself inside the box, so the chrome sits over the black. */
@@ -322,13 +364,13 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   border: 1.5px solid var(--glass-edge);
   font-size: 64px; font-weight: 600; letter-spacing: -0.02em;
 }
-.ptile:focus .pface { box-shadow: 0 0 0 var(--ring) #fff; }
+.ptile:focus .pface { box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .pface.add { background: var(--chip); color: var(--ink-2); }
 .pface.add svg { width: 56px; height: 56px; }
 /* Manage mode dims the face and puts a pencil on it, so the tile still reads as that viewer. */
 .pmask {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 40px;
-  display: flex; align-items: center; justify-content: center; background: rgba(20, 18, 16, 0.55);
+  display: flex; align-items: center; justify-content: center; background: var(--scrim);
 }
 .pmask svg { width: 48px; height: 48px; }
 .pname {
@@ -353,17 +395,17 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 }
 .field input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
 .field input::placeholder { color: var(--ink-3); }
-.field:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+.field:focus-within { background: var(--primary); box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .swatches { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
 .swatch { width: 54px; height: 54px; border-radius: 50%; border: 1.5px solid var(--glass-edge); }
-.swatch.cur { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.5); }
-.swatch:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.swatch.cur { box-shadow: 0 0 0 3px var(--primary-edge); }
+.swatch:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .pkinds { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
 .kind {
   height: 56px; padding: 0 32px; border-radius: 28px;
   background: var(--chip); border: 1.5px solid var(--glass-edge); font-size: 20px; font-weight: 500;
 }
-.kind.cur { background: rgba(255, 255, 255, 0.3); }
+.kind.cur { background: var(--primary); }
 .kind:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
 .pnote { margin: var(--gap-group) 0 0; font-size: 19px; color: var(--ink-3); }
 .pid { margin: var(--gap-block) 0 0; font-size: 17px; color: var(--ink-3); }
@@ -375,6 +417,36 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   border: 4px dashed var(--key-yellow); border-radius: 48px; display: flex; align-items: center; justify-content: center;
   font-size: 40px; font-weight: 600; background: var(--scrim);
 }
+
+/* Theme picker. A panel over the dimmed room, not the profiles' near-opaque scrim, because
+   the point of the screen is watching the room change behind it. */
+.dialog .tpanel { width: 1120px; }
+.themes h2 { margin: 0 0 var(--gap-section); font-size: 40px; }
+.tgrid { display: flex; justify-content: center; gap: var(--gap-block); }
+.ttile { display: block; width: 220px; }
+.ttile:focus { outline: none; }
+.tsky { display: block; height: 124px; border-radius: 22px; border: 1.5px solid var(--glass-edge); }
+.ttile:focus .tsky { box-shadow: 0 0 0 var(--ring) var(--ring-color); }
+/* Names run long in German and Dutch, so they clip like a profile's instead of wrapping the tile taller. */
+.tname, .tseason { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); }
+.tname { margin-top: var(--gap-group); font-size: 20px; }
+.tseason { margin-top: 2px; font-size: 17px; }
+.ttile:focus .tname, .ttile.cur .tname { color: var(--ink); }
+/* Reserved on every tile and painted on the current one, so marking a tile never shifts its neighbours. */
+.ttile::after { content: ''; display: block; width: 28px; height: 3px; margin: var(--gap-item) auto 0; border-radius: 2px; }
+.ttile.cur::after { background: var(--ink); }
+.tauto { margin-top: var(--gap-section); }
+.tauto.cur { background: var(--primary); }
+.tauto:focus { background: var(--focus-bg); color: var(--focus-ink); }
+.themes .tnote { margin: var(--gap-group) 0 0; font-size: 19px; font-weight: 400; color: var(--ink-3); }
+/* Adjustments for the sky on screen: a label and a row of chips, one of them current. */
+.themes .tsub { margin: var(--gap-section) 0 0; font-size: 19px; font-weight: 500; color: var(--ink-3); }
+.trow { display: flex; align-items: center; justify-content: center; gap: var(--gap-item); margin-top: var(--gap-item); }
+.tkey { width: 84px; margin-right: var(--gap-tight); text-align: right; font-size: 19px; color: var(--ink-3); }
+.tchip { height: 48px; padding: 0 22px; border-radius: 24px; background: var(--chip); font-size: 18px; font-weight: 500; white-space: nowrap; }
+.tchip.cur { background: var(--primary); }
+.tchip:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+.tdone { margin-top: var(--gap-block); min-width: 200px; justify-content: center; }
 
 @media (prefers-reduced-motion: reduce) {
   /* The player's 700ms expansion is the largest movement in the app, so it is the one this

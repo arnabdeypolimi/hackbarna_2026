@@ -4,7 +4,8 @@ A 10-foot browse screen for Titan OS TVs: a "Recommended" poster row with detail
 
 ## Getting started
 
-Requires Node 20.19 or newer.
+Requires Node 20.19 or newer, and Git LFS for the sky loops in `public/sky/`: a clone made
+without it holds pointer files there instead of video, and the room simply stays still.
 
 ```bash
 npm install
@@ -62,6 +63,76 @@ onto user ids the first time this build starts, list and history with them.
 
 Lists saved by a build that filed titles by name are refiled onto ids when a dataset loads. A name shared by a remake can't say which one was meant, so every title with that name takes the entry; unsave the wrong one and the two stay apart from then on.
 
+## Theme
+
+The room behind the glass is one of four skies, one for each season, and by default it follows
+the calendar:
+
+| Months | Sky |
+| --- | --- |
+| March – May | Blossom sky (spring) |
+| June – August | Blue sky (summer) |
+| September – November | Golden hour (autumn) |
+| December – February | Ink sky (winter) |
+
+The **green** key (G on a desktop keyboard) opens the picker. Choosing a sky pins it; **Follow the
+season** hands the room back to the calendar. The choice is saved under `theme` and is shared by
+every profile, like a picture setting on the set. The seasons are whole months in the northern
+hemisphere rather than the equinoxes of wherever the set stands, because a television has no
+location to give; a viewer south of the equator pins the sky they want.
+
+The tab bar carries the same picker behind a small disc of the current sky, next to the profile
+avatar, for a mouse, a keyboard or a remote without colour keys. Under the four skies the picker
+adjusts the one on screen: **Room** (lighter, graded, darker) steps the scrim over the room,
+**Glass** (clearer, standard, smokier) steps the panels, and **Sky** (moving, still) turns the loop
+off. Adjustments are kept per sky and per device under `themeTune`. A notch below graded takes the
+sky under the contrast it was measured for, and the picker says so rather than refusing.
+Back closes the picker, as do its Done button and a click on the room outside the panel.
+
+Each sky sets the whole palette, not just the room. The glass stays translucent and dark enough
+for white ink, but it is smoked with the sky's own deepest stop rather than a neutral black, and so
+are the scrim over the room, the dialogs, the toasts and the placeholder cards behind posters
+(`tokensOf` in `src/lib/theme.ts`): spring's panels are a deep violet glass, autumn's a burnt
+umber, winter's ink. The scrim is graded per sky against the lightest patch its loop ever shows,
+so the focus ring keeps 3:1 on the room and secondary ink on the glass at least what the original
+grey room measured. A little grain is dithered over the sky so it does not
+band on an 8-bit panel; it is drawn once with a canvas at startup rather than shipped as an image.
+
+### The sky moves
+
+Each sky is also a short video loop in `public/sky/` that plays muted under the room's lights
+and fades in once it is running. It is the one thing in the app that does work on every frame,
+and it is allowed because that work happens in the set's hardware decoder, not on the CPU and
+not in a filter. Three rules keep it honest: it pauses while a trailer plays, since a set usually
+has one decoder; it is never mounted under `prefers-reduced-motion`; and if it fails to load or
+to play, the still sky is simply what stays. Only the current sky's loop is ever requested, and
+not before the titles have loaded, so its megabytes never come ahead of the data; a loop held
+still in the picker is not fetched at all. The loops are Git LFS objects, which keeps 45 MB of
+video out of the repository's history.
+
+`npm run sky` builds the loops, and the choices behind the shipped set (which band of each clip)
+are the flags on that script in `package.json`. A sky whose footage sits in `src/videos/`, named after the sky
+(`Golden hour.mp4`) or its id (`golden.mp4`), is cut from it: at 3840×2160, and its last
+second cross-faded into its first, so the clip loops without a cut. The 4K cut is a choice for
+sharpness on large screens; a 16:9 band of a 4K clip holds about 1600×900 real pixels, so it is
+an upscale at four times the bytes of 1080p, and a set has to decode 4K behind the interface.
+`--footage-size 1920x1080` is the stage's own size and the cheaper cut if a set struggles. `--frame x,y,w,h` uses only
+that part of each clip, for footage with a caption in it (`--frame golden=...` for one sky), and `--use ink="Snowfall.mp4"` gives
+a sky a clip whatever it is called. A sky with no footage is synthesised from its own four stops
+at 960×540: slow drifting bands, periodic in time so they loop the same way. The raw footage is
+4K at 20 to 35 MB a clip and stays out of git like the TMDB export does; `public/sky/` is what
+ships, at a few hundred kilobytes synthesised and some ten megabytes per loop cut from footage.
+
+Either way the script solves each sky's `shade` twice, against the still gradient's first stop
+and against the loop's lightest patch, and prints the value to set in `src/lib/theme.ts` when the
+sky has less than the lighter of the two needs. The still is what shows until the loop plays,
+under Sky: Still and under reduced motion, so it has to hold on its own. The script needs numpy
+and an ffmpeg built with libx264, or `pip install imageio-ffmpeg`.
+
+The room fills the browser window rather than the 16:9 stage, so a desktop window of any shape
+shows sky edge to edge with the panels scaled and centred inside it. A television's window is the
+stage, so it sees no difference.
+
 ## Build for the TV
 
 ```bash
@@ -78,6 +149,7 @@ The build targets Chrome 84 (Titan OS TVs from 2020–2022) and uses relative pa
 | OK / Enter | Activate. On a poster, jumps to Watch. |
 | Back (8 on Philips and Sharp, 461 on JVC; Esc on desktop) | Clears search, returns to Popular, then asks "Do you want to exit?" |
 | Red | Save or remove the selected title from My List |
+| Green (G on desktop) | Open the theme picker |
 | Yellow | Import a CSV |
 | Play / Play-Pause | Watch the selected title |
 
@@ -87,7 +159,9 @@ When the TV's text-to-speech setting is on, every focused control is read aloud 
 
 ```
 public/data/          dataset slot (titles.csv goes here)
+public/sky/           the four sky loops the room plays
 scripts/trim_tmdb.py  trims the TMDB export
+scripts/render_sky.py renders public/sky/<id>.mp4 for every sky in theme.ts
 src/config.ts         data URL, image sizes, row and file limits
 src/App.tsx           state, data loading, remote-control handling
 src/lib/csv.ts        CSV parser and column mapping
@@ -95,8 +169,9 @@ src/lib/rows.ts       what each tab shows; which title to resume
 src/lib/maturity.ts   what a kids profile is allowed to see
 src/lib/profiles.ts   profiles, user ids and their saved keys
 src/lib/spatialNav.ts picks the next focus target for each arrow key
+src/lib/theme.ts      the four skies, which season each belongs to, and the room's paint
 src/lib/titan.ts      keycodes, text-to-speech, exit
-src/components/       Stage, PosterRow, Detail, ResumePanel, TabBar, SearchBar, Profiles, ExitDialog, Toast, Art
+src/components/       Stage, PosterRow, Detail, ResumePanel, TabBar, SearchBar, Profiles, ThemePicker, SkyVideo, ExitDialog, Toast, Art
 src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 ```
 

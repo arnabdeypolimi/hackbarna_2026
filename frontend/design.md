@@ -56,8 +56,8 @@ Five surfaces:
    track slides under a fixed selection point.
 2. **Detail block** — metadata, genre chips, clamped synopsis, Watch / Save, and a
    trailer card.
-3. **Resume panel** — "You watched last time", tilted in 3D, with continue / episodes /
-   remind actions.
+3. **Resume panel** — "You watched last time", the browse panel's height and flat beside
+   it, with continue / episodes / remind actions on its floor.
 4. **Trailer player** — expands *out of the trailer card* to fill the main panel, with
    custom transport chrome over a YouTube embed.
 5. **Tab bar + search** — Popular, Top rated, New releases, My List.
@@ -338,8 +338,9 @@ treatments: buttons **invert to solid white**; images take a **5 px white ring**
 selected poster is also physically larger (262×334 vs 214×272), so the selection reads
 from across a room, even in peripheral vision.
 
-**Depth** — the resume panel is rotated `perspective(2200px) rotateY(-7deg)`, giving the
-screen a sense of physical space for the price of one composited transform.
+**Depth** — comes from the room: a moving sky, lights on it, and smoked glass over it. The
+resume panel used to be tilted in perspective for the same effect, but a tilted panel never
+reads as the same size as the flat browse panel beside it, so it stands flat and level now.
 
 **Radii** — large and consistent: 48 px panels, 24–30 px cards, full pills on buttons.
 
@@ -437,8 +438,8 @@ doesn't:
 - **My List keys on title text**, not on a stable id. Two films sharing a name collide.
 - The README documents a `SHOW_TMDB_CREDIT` flag and a TMDB credit line; neither is in
   the code yet. TMDB's terms require the attribution before this ships with their data.
-- The on-screen footer hint only advertises the red key; the yellow (import) key is
-  undocumented on screen.
+- No key is advertised on screen any more: the footer hint that named the red key was
+  removed. The red, green and yellow keys are documented only in the README's remote table.
 - **Fonts load from Google Fonts.** Self-hosting would remove a network round-trip from
   startup on a slow TV connection.
 - No automated tests. `lib/csv.ts`, `lib/rows.ts` and `lib/spatialNav.ts` are pure

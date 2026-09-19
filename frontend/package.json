@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "trim": "python3 scripts/trim_tmdb.py"
+    "trim": "python3 scripts/trim_tmdb.py",
+    "sky": "python3 scripts/render_sky.py --frame 0,0.58,1,0.42 --frame golden=0,0,1,0.40 --flip golden"
   },
   "dependencies": {
     "react": "^18.3.1",
