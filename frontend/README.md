@@ -25,6 +25,8 @@ This needs Python 3 with pandas. It keeps released, non-adult films that have a 
 
 Other CSVs work too. Only a `title` column is required, and common header names are recognised (`name`, `genre`, `overview`, `poster_url`, `vote_average`, `season`, `episode`, and so on; see `ALIAS` in `src/lib/csv.ts`). TMDB-style image paths such as `/abc.jpg` are turned into full `image.tmdb.org` URLs.
 
+My List and watch history are filed under each title's `id` column when the CSV has one (`id`, `tmdb_id`, `imdb_id`, `title_id`), and under its name and first year when it doesn't. Never the name alone: remakes share one, and the trimmed dataset has nine such pairs, from The Lion King to Wrong Turn.
+
 To load the data from a server instead of bundling it, change `DATA_URL` in `src/config.ts`.
 
 ## Profiles
@@ -57,6 +59,8 @@ Each profile is filed under a user id like `usr_7q4kx9m2tb5c`, shown at the bott
 form. Ids are random, never reused after a delete, and namespace that viewer's saved keys
 (`mylist:<id>`, `history:<id>`). Profiles saved by an older build under `p1`-style ids are moved
 onto user ids the first time this build starts, list and history with them.
+
+Lists saved by a build that filed titles by name are refiled onto ids when a dataset loads. A name shared by a remake can't say which one was meant, so every title with that name takes the entry; unsave the wrong one and the two stay apart from then on.
 
 ## Build for the TV
 

@@ -1,5 +1,6 @@
 export interface Title {
-  id: number;
+  /** Unique within a dataset and stable across reloads: what My List and watch history are filed under. Titles aren't, since remakes share them. */
+  id: string;
   title: string;
   kind: 'movie' | 'series';
   typeLabel: string;

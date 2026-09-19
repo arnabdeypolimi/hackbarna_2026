@@ -6,7 +6,7 @@ import { HeartIcon } from './Icons';
 interface Props {
   items: Title[];
   sel: number;
-  /** Titles on this profile's My List, so the row shows what is saved. */
+  /** Ids of the titles on this profile's My List, so the row shows what is saved. */
   saved: string[];
   onPick: (index: number) => void;
   empty: ReactNode;
@@ -80,16 +80,16 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
           ? empty
           : items.map((it, i) => (
               <button
-                key={`${it.id}-${it.title}`}
+                key={it.id}
                 className={`poster f${i === sel ? ' sel' : ''}`}
                 data-poster={i}
                 aria-label={`${it.title}, ${it.typeLabel}${it.years ? ', ' + it.years : ''}${
-                  saved.indexOf(it.title) >= 0 ? ', saved to My List' : ''
+                  saved.indexOf(it.id) >= 0 ? ', saved to My List' : ''
                 }`}
                 onClick={() => onPick(i)}
               >
                 <Art item={it} />
-                {saved.indexOf(it.title) >= 0 && (
+                {saved.indexOf(it.id) >= 0 && (
                   <span className="savemark" aria-hidden="true"><HeartIcon /></span>
                 )}
               </button>

@@ -1,4 +1,4 @@
-import type { Profile, ProfileKind } from '../types/title';
+import type { Profile, ProfileKind, Title } from '../types/title';
 import { readJSON, writeJSON } from './storage';
 
 /** Netflix's own cap, and the most tiles that fit the picker row at 1920 px. */
@@ -68,6 +68,45 @@ function moveProfileData(from: string, to: string): void {
   if (list) writeJSON(listKey(to), list);
   if (history) writeJSON(historyKey(to), history);
   dropProfileData(from);
+}
+
+/**
+ * My List and history used to be filed under the title, which remakes share, so saving one
+ * Lion King saved both. Moves whatever is still filed under a title onto the id of every
+ * title with that name, since an old entry can't say which one was meant. Entries that name
+ * nothing in this dataset stay put for a dataset that does. Returns the profiles it changed.
+ */
+export function refileByTitle(profileIds: string[], items: Title[]): string[] {
+  const known = new Set(items.map((t) => t.id));
+  const named = new Map<string, string[]>();
+  items.forEach((t) => named.set(t.title, [...(named.get(t.title) || []), t.id]));
+  const idsFor = (entry: string) => (known.has(entry) ? undefined : named.get(entry));
+
+  const moved: string[] = [];
+  for (const pid of profileIds) {
+    let changed = false;
+
+    const list = new Set<string>();
+    for (const entry of readJSON<string[]>(listKey(pid), [])) {
+      const ids = idsFor(entry);
+      if (ids) changed = true;
+      for (const id of ids || [entry]) list.add(id);
+    }
+
+    const stored = readJSON<Record<string, number>>(historyKey(pid), {});
+    const history: Record<string, number> = {};
+    for (const entry of Object.keys(stored)) {
+      const ids = idsFor(entry);
+      if (ids) changed = true;
+      for (const id of ids || [entry]) history[id] = Math.max(history[id] || 0, stored[entry]);
+    }
+
+    if (!changed) continue;
+    writeJSON(listKey(pid), Array.from(list));
+    writeJSON(historyKey(pid), history);
+    moved.push(pid);
+  }
+  return moved;
 }
 
 /** What sits in storage: a profile saved before kinds existed has no `kind` yet. */

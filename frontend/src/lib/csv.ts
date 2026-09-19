@@ -28,6 +28,7 @@ export function parseCSV(text: string): string[][] {
 
 /** Accepted header names per field, lower-cased with punctuation removed. */
 const ALIAS = {
+  id: ['id', 'tmdbid', 'imdbid', 'titleid'],
   title: ['title', 'name', 'showtitle', 'movietitle'],
   type: ['type', 'kind', 'category', 'format', 'contenttype'],
   start: ['yearstart', 'startyear', 'year', 'releaseyear', 'releasedate', 'firstairyear', 'firstairdate', 'released'],
@@ -79,7 +80,15 @@ export function toTitles(text: string): Title[] {
   if (col.title < 0) throw new Error('That file has no title column. Add a column named "title" and try again.');
   const get = (r: string[], k: Field) => (col[k] >= 0 ? (r[col[k]] || '').trim() : '');
 
-  let items: Title[] = rows.slice(1).map((r, i) => {
+  // Even a file that repeats an id, or a title and year, gets a key of its own for every row.
+  const seen = new Map<string, number>();
+  const uniqueId = (base: string) => {
+    const n = (seen.get(base) || 0) + 1;
+    seen.set(base, n);
+    return n > 1 ? `${base}#${n}` : base;
+  };
+
+  let items: Title[] = rows.slice(1).map((r) => {
     const typeText = get(r, 'type').toLowerCase();
     const kind: Title['kind'] =
       /movie|film/.test(typeText) ? 'movie'
@@ -90,9 +99,13 @@ export function toTitles(text: string): Title[] {
     const rating = get(r, 'rating');
     // Kept whole for the kids check; only the first three become chips.
     const genres = get(r, 'genres').split(/[|;,/]/).map((g) => g.trim()).filter(Boolean);
+    const title = get(r, 'title');
+    const own = get(r, 'id');
     return {
-      id: i,
-      title: get(r, 'title'),
+      // The dataset's own id when it has one, else name and first year, which tells remakes apart.
+      // The `id:` prefix keeps a numeric id from reading as a title like "12" in refileByTitle.
+      id: uniqueId(own ? `id:${own}` : `${title} (${s})`),
+      title,
       kind,
       typeLabel: get(r, 'type') || (kind === 'series' ? 'TV Series' : 'Movie'),
       years: kind === 'series' && s ? (e ? `${s}–${e}` : `${s}–present`) : s,

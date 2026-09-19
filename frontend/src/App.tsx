@@ -6,7 +6,7 @@ import { buildRow, pickResume, TAB_TITLES } from './lib/rows';
 import { readJSON, writeJSON } from './lib/storage';
 import { catalogFor } from './lib/maturity';
 import {
-  dropProfileData, historyKey, listKey, loadActiveId, loadProfiles, saveActiveId, saveProfiles,
+  dropProfileData, historyKey, listKey, loadActiveId, loadProfiles, refileByTitle, saveActiveId, saveProfiles,
 } from './lib/profiles';
 import { BACK_KEYS, KEY, exitApp, initTTS, speak } from './lib/titan';
 import { DIRS, findNext, isVisible, type Dir } from './lib/spatialNav';
@@ -122,6 +122,15 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // Saved lists from before titles had ids can only be matched up once a dataset is here.
+  useEffect(() => {
+    if (!items.length) return;
+    if (refileByTitle(profiles.map((p) => p.id), items).includes(activeId)) {
+      setMyList(readJSON(listKey(activeId), []));
+      setHistory(readJSON(historyKey(activeId), {}));
+    }
+  }, [items]);
+
   const readFile = (file: File | undefined) => {
     if (!file) return;
     if (file.size > MAX_FILE_BYTES) {
@@ -140,7 +149,7 @@ export default function App() {
    * product has, so the player labels it a trailer rather than pretending to be the film.
    */
   const watch = (item: Title) => {
-    setHistory((h) => { const next = { ...h, [item.title]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
+    setHistory((h) => { const next = { ...h, [item.id]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
     if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
     prevFocus.current = document.activeElement as HTMLElement;
     // It grows out of the browse panel, so the film opens from where the viewer was looking.
@@ -159,8 +168,8 @@ export default function App() {
   };
 
   const toggleSave = (item: Title) => {
-    const had = myList.includes(item.title);
-    const next = had ? myList.filter((t) => t !== item.title) : [...myList, item.title];
+    const had = myList.includes(item.id);
+    const next = had ? myList.filter((k) => k !== item.id) : [...myList, item.id];
     setMyList(next);
     writeJSON(listKey(activeId), next);
     toast.show(had ? `Removed ${item.title} from My List` : `Saved ${item.title} to My List`);
@@ -378,7 +387,7 @@ export default function App() {
             {current && (
               <Detail
                 item={current}
-                saved={myList.includes(current.title)}
+                saved={myList.includes(current.id)}
                 onWatch={() => watch(current)}
                 onSave={() => toggleSave(current)}
                 onTrailer={() => openTrailer(current)}

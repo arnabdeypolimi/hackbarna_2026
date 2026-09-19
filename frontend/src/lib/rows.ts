@@ -27,13 +27,13 @@ export function buildRow(items: Title[], tab: Tab, query: string, myList: string
     case 'recent':
       return [...items].sort((a, b) => b.added - a.added).slice(0, ROW_MAX);
     case 'list':
-      return items.filter((x) => myList.includes(x.title));
+      return items.filter((x) => myList.includes(x.id));
   }
 }
 
 /** The title for "You watched last time": the most recent from local history or the CSV's own watch columns. */
 export function pickResume(items: Title[], history: Record<string, number>): Title | null {
-  const merged = items.map((x) => (history[x.title] ? { ...x, last: history[x.title] } : x));
+  const merged = items.map((x) => (history[x.id] ? { ...x, last: history[x.id] } : x));
   const inProgress = merged.filter((x) => x.position || x.episode || x.last).sort((a, b) => b.last - a.last);
   return inProgress[0] || null;
 }
