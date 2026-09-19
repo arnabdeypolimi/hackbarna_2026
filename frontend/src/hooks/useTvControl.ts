@@ -18,6 +18,7 @@ export interface CommandHandler {
   back(): string | void;
   home(): string | void;
   show_products(args: CommandArgsByVerb['show_products']): string | void;
+  show_titles(args: CommandArgsByVerb['show_titles']): string | void;
   search_catalog(args: CommandArgsByVerb['search_catalog']): Array<{ title_id: string; name: string }>;
 }
 

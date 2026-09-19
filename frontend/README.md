@@ -62,6 +62,7 @@ command with an `ack` — `ok: false` carries a reason the agent can speak, such
 | "back", "close", "home" | `back`, `close`, `home` | as the remote, except "back" at home does not ask to exit |
 | "search for space movies" | `search_catalog` | filters the loaded CSV with the search bar's matcher and returns the hits |
 | "show me the products" | `show_products` | acked `ok: false`: not supported on this TV |
+| "what should I watch?" (after the agent picks) | `show_titles` | the picks replace the row under the agent's label, first one focused; Back or a tab dismisses it |
 
 In return the app reports what is on screen (`screen_state`) whenever it changes —
 the rail, a window of tiles around the focus, and playback — so the agent can resolve

@@ -33,6 +33,9 @@ import { UploadIcon } from './components/Icons';
 /** What is on screen: the title, the box it grew out of, and whether it owns the whole stage. */
 interface Playing { item: Title; from: Rect | null; full: boolean }
 
+/** A rail the agent put up (`show_titles`): its picks, under its own heading, until the viewer moves on. */
+interface AgentRail { label: string; items: Title[] }
+
 type Status =
   | { kind: 'loading' }
   | { kind: 'ready' }
@@ -59,6 +62,7 @@ export default function App() {
   const [tunes, setTunes] = useState<Tunes>(loadTunes);
   const [player, setPlayer] = useState<Playing | null>(null);
   const [playback, setPlayback] = useState<PlaybackReport>(STOPPED);
+  const [agentRail, setAgentRail] = useState<AgentRail | null>(null);
   const [dragging, setDragging] = useState(false);
   const toast = useToast();
 
@@ -80,7 +84,12 @@ export default function App() {
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
   const catalog = useMemo(() => catalogFor(items, profile), [items, profile]);
-  const row = useMemo(() => buildRow(catalog, tab, query, myList), [catalog, tab, query, myList]);
+  // A typed search outranks the agent's rail; clearing the search brings the rail back.
+  const rail = query ? null : agentRail;
+  const row = useMemo(
+    () => (rail ? rail.items : buildRow(catalog, tab, query, myList)),
+    [catalog, tab, query, myList, rail],
+  );
   const selIdx = Math.min(sel, Math.max(0, row.length - 1));
   const current: Title | undefined = row[selIdx];
 
@@ -214,7 +223,7 @@ export default function App() {
     if (had && tab === 'list' && !query) focusRow();
   };
 
-  const selectTab = (t: Tab) => { setTab(t); setQuery(''); setSel(0); };
+  const selectTab = (t: Tab) => { setTab(t); setQuery(''); setAgentRail(null); setSel(0); };
 
   // ---------- profiles ----------
   const openProfiles = () => { prevFocus.current = document.activeElement as HTMLElement; setProfilesOpen(true); };
@@ -236,6 +245,7 @@ export default function App() {
     setPlayer(null);
     setTab('popular');
     setQuery('');
+    setAgentRail(null);
     setSel(0);
   };
 
@@ -309,6 +319,7 @@ export default function App() {
     if (player) return closePlayer();
     if (dialogOpen) return closeDialog();
     if (inSearch || query) { setQuery(''); setSel(0); return focusRow(); }
+    if (agentRail) { setAgentRail(null); setSel(0); return focusRow(); }
     if (tab !== 'popular') { selectTab('popular'); return focusRow(); }
     openDialog();
   };
@@ -391,8 +402,18 @@ export default function App() {
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.
   const goBack = (): string | void => {
-    if (!profilesOpen && !player && !dialogOpen && !query && tab === 'popular') return 'already at home';
+    if (!profilesOpen && !player && !dialogOpen && !query && !agentRail && tab === 'popular') return 'already at home';
     back(false);
+  };
+  // The agent's picks become the row. Ids the loaded dataset does not have are dropped
+  // rather than shown as blanks; if none survive the agent is told so and can say it.
+  const showTitles = ({ title_ids, label }: { title_ids: string[]; label: string }): string | void => {
+    const items = title_ids.map((id) => fromWireId(id, catalog)).filter((t): t is Title => !!t);
+    if (!items.length) return 'none of those titles are on this TV';
+    if (player) closePlayer();
+    setQuery('');
+    setAgentRail({ label, items });
+    selectPoster(0);
   };
 
   tv.current = {
@@ -420,13 +441,16 @@ export default function App() {
     back: goBack,
     home: () => { if (player) closePlayer(); selectTab('popular'); focusRow(); },
     show_products: () => 'not supported on this TV',
+    show_titles: showTitles,
     search_catalog: ({ query: q, limit }) =>
       searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
   };
 
   const screen = useMemo(
-    () => deriveScreenState({ tab, query, row, selIdx, playing: player?.item ?? null, playback }),
-    [tab, query, row, selIdx, player, playback],
+    () => deriveScreenState({
+      tab, query, agentRail: rail?.label ?? null, row, selIdx, playing: player?.item ?? null, playback,
+    }),
+    [tab, query, rail, row, selIdx, player, playback],
   );
   useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
 
@@ -463,7 +487,10 @@ export default function App() {
   }, []);
 
   // ---------- render ----------
-  const heading = status.kind !== 'ready' ? 'Recommended' : query ? `Results for "${query}"` : TAB_TITLES[tab];
+  const heading = status.kind !== 'ready' ? 'Recommended'
+    : query ? `Results for "${query}"`
+    : rail ? rail.label
+    : TAB_TITLES[tab];
 
   const emptyRow =
     profile.kind === 'kids' && items.length > 0 && !catalog.length ? (
@@ -531,7 +558,7 @@ export default function App() {
 
         <AvatarPanel view={avatar} videoRef={avatarVideo} />
 
-        <TabBar tab={tab} highlight={!query} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
+        <TabBar tab={tab} highlight={!query && !rail} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
 
         {player && player.full && (
           <TrailerPlayer

@@ -28,12 +28,14 @@ const WINDOW = 8;
 export function deriveScreenState(args: {
   tab: Tab;
   query: string;
+  /** Label of the rail the agent put up with `show_titles`, when that is what the row shows. */
+  agentRail: string | null;
   row: Title[];
   selIdx: number;
   playing: Title | null;
   playback: PlaybackReport;
 }): ScreenState {
-  const { tab, query, row, selIdx, playing, playback } = args;
+  const { tab, query, agentRail, row, selIdx, playing, playback } = args;
   const lo = Math.max(0, selIdx - WINDOW);
   // `position` is the absolute row index so focus_index and the prompt's [n] labels agree.
   const tiles: Tile[] = row
@@ -42,7 +44,7 @@ export function deriveScreenState(args: {
   return {
     // The Detail side panel shows whatever is focused, so it is part of `grid`, not a view.
     view: playing ? 'player' : 'grid',
-    rail_id: query ? `search:${query}` : tab,
+    rail_id: query ? `search:${query}` : agentRail ? `agent:${agentRail}` : tab,
     focus_index: row.length ? selIdx : null,
     tiles,
     playback: playing
