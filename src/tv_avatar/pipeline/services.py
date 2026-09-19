@@ -12,7 +12,7 @@ from pipecat.transcriptions.language import Language
 from pipecat_anam import AnamVideoService
 from pipecat_slng import SlngSTTService, SlngTTSService
 
-from tv_avatar.catalog import AvatarProfile
+from tv_avatar.catalog import AvatarProfile, get_catalog
 from tv_avatar.config import Settings
 from tv_avatar.pipeline.turns import RESON8_TTFS_P99_S
 
@@ -92,12 +92,22 @@ def build_anam(settings: Settings, avatar: AvatarProfile) -> AnamVideoService:
     return AnamVideoService(
         api_key=settings.anam_api_key,
         api_version="v1",
-        persona_config=PersonaConfig(
-            avatar_id=avatar.anam_avatar_id,
-            avatar_model=avatar.anam_avatar_model,
-            enable_audio_passthrough=True,
-        ),
+        persona_config=anam_persona(settings, avatar),
         enable_session_replay=False,
         video_width=settings.video_width,
         video_height=settings.video_height,
     )
+
+
+def anam_persona(settings: Settings, avatar: AvatarProfile) -> PersonaConfig:
+    """The catalog's identity for this avatar, unless it is the default avatar
+    and .env overrides it with an id this Anam account actually owns."""
+    is_default = avatar.id == get_catalog().default_avatar
+    if is_default and settings.anam_persona_id:
+        return PersonaConfig(persona_id=settings.anam_persona_id, enable_audio_passthrough=True)
+    return PersonaConfig(
+        avatar_id=settings.anam_avatar_id if is_default and settings.anam_avatar_id else avatar.anam_avatar_id,
+        avatar_model=avatar.anam_avatar_model,
+        enable_audio_passthrough=True,
+    )
+

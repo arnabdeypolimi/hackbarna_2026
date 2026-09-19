@@ -113,6 +113,28 @@ def test_anam_enables_audio_passthrough_and_disables_replay():
     assert anam._api_version == "v1"
 
 
+def test_env_overrides_apply_to_the_default_avatar_only():
+    """Anam avatar ids are account-scoped: the shared yaml's Cara can be missing
+    under a teammate's key, so .env may substitute their own avatar or persona."""
+    from tv_avatar.catalog import get_catalog
+    from tv_avatar.pipeline.services import anam_persona
+
+    default = get_catalog().avatar(get_catalog().default_avatar)
+    other = AvatarProfile(id="other", name="O", anam_avatar_id="avatar-9", voice="v")
+
+    plain = anam_persona(_settings(), default)
+    assert plain.avatar_id == default.anam_avatar_id and plain.persona_id is None
+
+    by_avatar = anam_persona(_settings(anam_avatar_id="mine-1"), default)
+    assert by_avatar.avatar_id == "mine-1" and by_avatar.avatar_model == default.anam_avatar_model
+
+    by_persona = anam_persona(_settings(anam_avatar_id="mine-1", anam_persona_id="persona-1"), default)
+    assert by_persona.persona_id == "persona-1" and by_persona.avatar_id is None  # persona wins
+
+    untouched = anam_persona(_settings(anam_avatar_id="mine-1", anam_persona_id="persona-1"), other)
+    assert untouched.avatar_id == "avatar-9" and untouched.persona_id is None
+
+
 def test_anam_persona_comes_from_the_avatar_profile_not_settings():
     other = AvatarProfile(id="b", name="B", anam_avatar_id="avatar-2",
                           anam_avatar_model="cara-5", voice="v")

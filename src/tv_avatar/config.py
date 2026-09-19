@@ -45,6 +45,12 @@ class Settings(BaseSettings):
 
     # Anam. Avatar ids, models and voices live in avatars.yaml (tv_avatar.catalog).
     anam_api_key: Secret
+    # Local overrides for the catalog's *default* avatar: Anam avatar ids are
+    # account-scoped, so the shared yaml's id can be missing under your key
+    # ("Avatar with id … does not exist"). A saved Persona from Anam Lab wins
+    # over an avatar id. Other avatars in the catalog are unaffected.
+    anam_avatar_id: str = ""
+    anam_persona_id: str = ""
 
     # Media — cara-4 portrait; width and height must be supplied together
     video_width: int = 768

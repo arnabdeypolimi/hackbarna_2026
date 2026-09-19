@@ -50,7 +50,14 @@ def model() -> Any:
             if _model is None:
                 pin_torch_threads()
                 from sentence_transformers import SentenceTransformer
-                _model = SentenceTransformer(E5_MODEL)
+                try:
+                    # Cache first: with the model already downloaded, the default
+                    # path still HEADs huggingface.co and, on flaky venue Wi-Fi,
+                    # retries for ~30 s before falling back to the same cache.
+                    _model = SentenceTransformer(E5_MODEL, local_files_only=True)
+                except Exception:  # noqa: BLE001 — not cached yet: one online download
+                    logger.info("E5 not in the local cache; downloading {}", E5_MODEL)
+                    _model = SentenceTransformer(E5_MODEL)
     return _model
 
 
