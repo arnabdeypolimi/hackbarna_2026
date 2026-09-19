@@ -243,10 +243,11 @@ async def test_interrupted_turn_still_ingests_user_text_with_partial_reply():
 
 
 async def test_greeting_instruction_is_never_ingested():
-    from tv_avatar.agent.prompt import GREETING_INSTRUCTION
+    from tv_avatar.agent.prompt import greeting_instruction
     lane = FakeMemoryLane()
     agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Hi!","actions":[]}']), RecordingBus(), lane=lane)
-    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(GREETING_INSTRUCTION))])
+    greeting = greeting_instruction(agent._session.persona.language)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(greeting))])
     await asyncio.sleep(0.02)
     assert lane.ingests == []
 
@@ -255,7 +256,7 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     """A fresh session for a returning user_id opens with what we talked about last time in the prompt."""
     import time as _t
 
-    from tv_avatar.agent.prompt import GREETING_INSTRUCTION
+    from tv_avatar.agent.prompt import greeting_instruction
     from tv_avatar.history.store import Event, EventKind, HistoryStore
     from tv_avatar.recs.catalog import CatalogItem
 
@@ -270,13 +271,14 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     session = SessionState("sess_new", "tok", 0, user_id="u1")  # new session, same user
     agent = SGRAgentService(_settings(), RecordingBus(), lane, None, history, session,
                             catalog=Cat(), client=client, tools=FakeTools())
-    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(GREETING_INSTRUCTION))])
+    greeting = greeting_instruction(session.persona.language)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(greeting))])
     await history.close()
 
     system, user = client.calls[0]["messages"][0]["content"], client.calls[0]["messages"][-1]["content"]
     assert "Recently recommended: The Dark Knight (2008) (yesterday)" in system
     # The greeting brief repeats the context right next to the instruction.
-    assert user.startswith(GREETING_INSTRUCTION)
+    assert user.startswith(greeting) and "Greet them in English" in user
     assert "Recently recommended: The Dark Knight (2008) (yesterday)" in user
     assert "loves Batman films" in user
     # History decides the title, the profile only the tone — and it says so, in that order.

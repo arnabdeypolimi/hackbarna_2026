@@ -393,7 +393,7 @@ All configuration is read from the environment through `pydantic-settings` in `c
 | `SLNG_API_KEY` | SLNG gateway — covers both STT and TTS |
 | `SLNG_BASE_URL` | Regional hub, e.g. `eu.api.slng.ai` (not a secret; defaulted in config) |
 | `ANAM_API_KEY` | Anam session authentication |
-| `ANAM_AVATAR_ID` | Persona selection |
+| ~~`ANAM_AVATAR_ID`~~ | Superseded: avatar ids, models and voices live in `avatars.yaml` (see `tv_avatar.catalog`); a session picks its avatar and language at `POST /sessions` |
 | *(LLM provider key)* | Named once the provider is chosen (§14) |
 | `SLNG_PROVIDER_KEY` | Optional — BYOK, external routes only |
 

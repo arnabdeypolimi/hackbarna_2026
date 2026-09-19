@@ -7,7 +7,6 @@ REQUIRED = {
     "NEBIUS_API_KEY": "nb-test",
     "SLNG_API_KEY": "sk-test",
     "ANAM_API_KEY": "anam-test",
-    "ANAM_AVATAR_ID": "avatar-1",
 }
 
 
@@ -81,13 +80,3 @@ def test_llm_extra_body_parses_json_env(monkeypatch):
     _set_required(monkeypatch)
     monkeypatch.setenv("LLM_EXTRA_BODY", '{"chat_template_kwargs":{"enable_thinking":false}}')
     assert Settings(_env_file=None).llm_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
-
-
-def test_anam_persona_id_replaces_avatar_id(monkeypatch):
-    _set_required(monkeypatch)
-    monkeypatch.delenv("ANAM_AVATAR_ID")
-    monkeypatch.setenv("ANAM_PERSONA_ID", "persona-1")
-    assert Settings(_env_file=None).anam_persona_id == "persona-1"
-    monkeypatch.delenv("ANAM_PERSONA_ID")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)

@@ -67,7 +67,8 @@ def build_pipeline(
     """
     settings = settings or get_settings()
     runtime = runtime or build_runtime(settings)
-    context = LLMContext(messages=initial_messages())
+    avatar, language = session.persona.avatar, session.persona.language
+    context = LLMContext(messages=initial_messages(language))
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
         user_params=user_aggregator_params(
@@ -78,7 +79,7 @@ def build_pipeline(
 
     stages = [
         transport.input(),
-        build_stt(settings),
+        build_stt(settings, language.pipecat),
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
         user_agg,
     ]
@@ -87,9 +88,9 @@ def build_pipeline(
         # stub, which exercises the same graph in tests) get the capability
         # manifest + screen/memory/history sections stamped per turn.
         stages.append(ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history))
-    stages += [agent, build_tts(settings)]
+    stages += [agent, build_tts(settings, avatar.voice, language.pipecat_tts)]
     if with_avatar:
-        stages.append(build_anam(settings))
+        stages.append(build_anam(settings, avatar))
     stages += [transport.output(), assistant_agg]
     if settings.agent_impl != "sgr":
         # The SGR agent ingests at turn end / interruption itself (it knows the

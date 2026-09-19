@@ -4,11 +4,16 @@
 for the ear (spec §8, sections 1 and 4).
 
 `sgr` (SGRAgentService): build_system_prompt() — static sections first
-(cache-friendly), volatile last. Sections 1–4 are fixed for the process
+(cache-friendly), volatile last. Sections 1–4 are fixed for the session
 lifetime; the screen, memory and recent activity are stamped fresh on every
 turn by the injector and the agent — never stored in the conversation.
+
+The prompts themselves stay in English (instruct models follow English
+instructions most reliably); only the *reply* language is parameterised,
+from the session's LanguageProfile.
 """
 from tv_avatar.agent.envelope import describe_capabilities
+from tv_avatar.catalog import LanguageProfile
 
 SYSTEM_PROMPT = """\
 You are the on-screen voice assistant of a television. You appear as a small \
@@ -16,7 +21,9 @@ video avatar in the corner of the screen and talk with the viewer in real time.
 
 How to speak:
 - Everything you write is spoken aloud by a text-to-speech engine. Use plain \
-spoken English. Never use markdown, bullet points, emojis, code, or symbols.
+spoken {language}. Never use markdown, bullet points, emojis, code, or symbols.
+- Always answer in {language}, even if the viewer mixes in words from another \
+language. Only switch if the viewer explicitly asks you to.
 - Keep answers to one or two short sentences. The viewer can always ask for more.
 - Be warm, quick and natural, like a knowledgeable friend sitting on the sofa.
 - If you do not know something, say so briefly instead of guessing.
@@ -24,8 +31,12 @@ spoken English. Never use markdown, bullet points, emojis, code, or symbols.
 say you have not been connected to the remote yet if they press for details.\
 """
 
+#: Stable prefix of every greeting instruction — the agent recognises the
+#: synthetic opening turn by it (never ingested into memory, gets the brief).
+GREETING_PREFIX = "The viewer has just turned you on."
+
 GREETING_INSTRUCTION = (
-    "The viewer has just turned you on. Greet them in one short sentence, no actions. "
+    GREETING_PREFIX + " Greet them in {language} in one short sentence, no actions. "
     "Recent activity below lists titles newest first. If it names any title, welcome them back and "
     "offer the FIRST title under 'Recently watched', or if that says (none yet) the FIRST under "
     "'Recently recommended' (\"Welcome back — want to carry on with The Batman?\"). "
@@ -34,22 +45,35 @@ GREETING_INSTRUCTION = (
 )
 
 
-def greeting_brief(history: str, memory: str) -> str:
+def greeting_instruction(language: LanguageProfile) -> str:
+    return GREETING_INSTRUCTION.format(language=language.name)
+
+
+def is_greeting(user_text: str) -> bool:
+    return user_text.startswith(GREETING_PREFIX)
+
+
+def greeting_brief(history: str, memory: str, language: LanguageProfile) -> str:
     """The greeting turn's user message with the returning viewer's context spelled
     out inline — the model reliably uses what sits next to the instruction, less
     so a section several thousand characters earlier in the system prompt.
     History first: it decides the title; the profile only shades the wording."""
-    return f"{GREETING_INSTRUCTION}\n\n# Recent activity (newest first)\n{history}\n\n# Viewer profile (tone only)\n{memory}"
+    return (f"{greeting_instruction(language)}\n\n# Recent activity (newest first)\n{history}"
+            f"\n\n# Viewer profile (tone only)\n{memory}")
 
 
-def initial_messages() -> list[dict[str, str]]:
+def system_prompt(language: LanguageProfile) -> str:
+    return SYSTEM_PROMPT.format(language=language.name)
+
+
+def initial_messages(language: LanguageProfile) -> list[dict[str, str]]:
     # Without a user turn the model has nothing to answer and invents a
     # scene ("looks like these two are really going at it"). The greeting
     # instruction gives the opening LLMRunFrame something concrete to do.
     # Under AGENT_IMPL=sgr the injector replaces the system message per turn.
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": GREETING_INSTRUCTION},
+        {"role": "system", "content": system_prompt(language)},
+        {"role": "user", "content": greeting_instruction(language)},
     ]
 
 
@@ -60,7 +84,9 @@ _PERSONA = """\
 You are the voice of a TV, shown as a small video avatar in the corner of the screen. \
 You speak in one or two short, natural sentences — this is spoken aloud, so no lists, \
 no markdown, no ids, no URLs. Be warm, quick and specific, like a knowledgeable friend \
-on the sofa. Prefer doing over explaining."""
+on the sofa. Prefer doing over explaining.
+Every `say` is in {language}, even if the viewer mixes in words from another language; \
+only switch if they explicitly ask you to. Title names stay as they are."""
 
 _RULES = """\
 # Rules
@@ -98,9 +124,9 @@ Reply with exactly one JSON object: {"intent": ..., "say": ..., "actions": [...]
 Actions run in parallel. Internal tools return results to you; TV commands do not."""
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(language: LanguageProfile) -> str:
     return "\n\n".join([
-        _PERSONA,
+        _PERSONA.format(language=language.name),
         "# Capabilities\n" + describe_capabilities(),
         _RULES,
         _CONTRACT,

@@ -62,7 +62,7 @@ class ScreenContextInjector(FrameProcessor):
         history = (await self._history.render_for_prompt(user_id, self._catalog)
                    if self._history is not None else "Recently watched: (none yet)")
         system = "\n\n".join([
-            build_system_prompt(),
+            build_system_prompt(self._session.persona.language),
             "# Screen\n" + render_screen(self._session, self._catalog),
             "# Recent activity\n" + history,
         ])

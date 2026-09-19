@@ -194,12 +194,13 @@ async def main(user_id: str, turns: list[str]) -> int:
         playback=Playback(state="stopped"),
     ))
     bus = CommandBus()
-    context = LLMContext(messages=initial_messages())
+    persona = session.persona  # catalog defaults: avatar voice + language
+    context = LLMContext(messages=initial_messages(persona.language))
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context, user_params=user_aggregator_params(turn_silence_s=settings.turn_silence_s))
     reply = Stats()
     pipeline = Pipeline([
-        build_stt(settings),
+        build_stt(settings, persona.language.pipecat),
         Tap(reply),                      # transcripts, user-stopped
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
         user_agg,
@@ -207,7 +208,7 @@ async def main(user_id: str, turns: list[str]) -> int:
         ScreenContextInjector(session, catalog=runtime.catalog, history=runtime.history),
         build_agent(settings, runtime, session, bus),
         Tap(reply),                      # first say sentence (AggregatedTextFrame)
-        build_tts(settings),
+        build_tts(settings, persona.avatar.voice, persona.language.pipecat_tts),
         Tap(reply),                      # spoken text, first audio
         assistant_agg,
     ])
