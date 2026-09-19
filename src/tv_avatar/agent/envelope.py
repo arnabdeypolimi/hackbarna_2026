@@ -16,7 +16,7 @@ class RecommendTitles(BaseModel):
     """Internal: ask the recommendation engine for titles; results feed cycle 2."""
     verb: Literal["recommend_titles"] = "recommend_titles"
     query: str | None = None
-    genre: str | None = None
+    genre: str | None = Field(default=None, description="TMDB genre words, e.g. 'Crime Thriller'; any match")
     year_min: int | None = None
     year_max: int | None = None
     similar_to: str | None = None

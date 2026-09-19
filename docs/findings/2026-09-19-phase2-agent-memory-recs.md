@@ -111,3 +111,23 @@ so M0/M1 can now actually be run.
   was built.
 - Nemotron labels `intent` loosely (a recommendation turn came back `answer`); harmless because
   routing is by actions, not by intent.
+
+## Live chat-mode run, second pass (same `user_id` across two `smoke_turn.py` sessions)
+
+Session 1: "I really can't stand horror films, and I love slow-burn crime thrillers" → ingested
+`"User strongly dislikes horror…"`. Session 2 (new process, same `user_id=couch_live`):
+
+| Turn | said | commands | total |
+|---|---|---|---|
+| "recommend me something for tonight" | "Let me look." + "…Retribution (2023), Fast X (2023), Kandahar (2023). I'll focus on Retribution since it's a mystery thriller and you enjoy slow-burn crime thrillers." | `focus 762430` | 1576 ms |
+| "play the first one" | "On it." | `play 565770` (tile [0]) | 472 ms |
+| "what kind of films do I hate?" | "You strongly dislike horror films and love slow-burn crime thrillers." | — | 477 ms |
+
+Memory → recs warm start works (the `say` cites the stored preference); recall across sessions
+works from VoiceMem alone (no history row involved).
+
+Fixed on this pass: (5) `RecsEngine` embedded the query and the memory text *sequentially*, each
+with the full embed sub-budget → two timeouts blew the 400 ms tool budget; now `asyncio.gather`.
+(6) Nemotron emits `genre="crime thriller"`; TMDB genres are atomic (`Crime`, `Thriller`), so the
+hard filter matched nothing → `parse_genres()` maps free text to ANY-of TMDB genres.
+(7) Prompt: "play X" occasionally became `focus`; rule tightened.

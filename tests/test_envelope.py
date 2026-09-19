@@ -54,3 +54,11 @@ def test_capabilities_manifest_lists_every_verb():
     for verb in ALL_MODELS:
         assert f"- {verb}" in text
     assert "INTERNAL" in text and "[awaits result]" in text
+
+
+def test_parse_genres_maps_free_text_to_tmdb_genres():
+    from tv_avatar.agent.tools import parse_genres
+    assert parse_genres("crime thriller") == {"Crime", "Thriller"}
+    assert parse_genres("sci-fi") == {"Science Fiction"}
+    assert parse_genres("heist") == set()
+    assert parse_genres(None) == set()

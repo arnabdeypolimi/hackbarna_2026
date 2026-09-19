@@ -13,6 +13,26 @@ from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
 
 
+TMDB_GENRES = (
+    "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family",
+    "Fantasy", "History", "Horror", "Music", "Mystery", "Romance", "Science Fiction", "TV Movie",
+    "Thriller", "War", "Western",
+)
+_GENRE_ALIASES = {"scifi": "Science Fiction", "sci-fi": "Science Fiction", "sf": "Science Fiction",
+                  "romcom": "Romance", "cartoon": "Animation", "kids": "Family", "doc": "Documentary"}
+
+
+def parse_genres(text: str | None) -> set[str]:
+    """'crime thriller' → {'Crime', 'Thriller'}; unknown words are dropped, never filtered on.
+    Multi-word matches are ANY-of: the hard filter widens rather than returning nothing."""
+    if not text:
+        return set()
+    lowered = text.lower()
+    found = {g for g in TMDB_GENRES if g.lower() in lowered}
+    found |= {canon for alias, canon in _GENRE_ALIASES.items() if alias in lowered}
+    return found
+
+
 class InternalTools:
     def __init__(self, recs: RecsEngine | None, lane: MemoryLane, catalog: CatalogStore | None,
                  *, recorder: HistoryRecorder | None = None, timeout_s: float = 0.4) -> None:
@@ -45,8 +65,7 @@ class InternalTools:
         if self._recs is None:
             return {"status": "unavailable", "reason": "no catalog"}
         constraints = CatalogFilter(
-            genres_any={req.genre.title()} if req.genre else set(),
-            year_min=req.year_min, year_max=req.year_max,
+            genres_any=parse_genres(req.genre), year_min=req.year_min, year_max=req.year_max,
         )
         ctx = RecsContext(user_id=user_id, query_text=req.query, constraints=constraints,
                           memory_text=memory_text, limit=req.limit)

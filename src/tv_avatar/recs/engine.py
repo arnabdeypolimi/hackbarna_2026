@@ -47,6 +47,10 @@ def _norm_query(text: str) -> str:
     return " ".join(text.lower().split())[:PREFIX_CHARS]
 
 
+async def _none() -> None:
+    return None
+
+
 def _mean(vectors: list[list[float]]) -> list[float]:
     n = len(vectors)
     return [sum(col) / n for col in zip(*vectors, strict=True)]
@@ -125,18 +129,20 @@ class RecsEngine:
             "min_vote_count": base.min_vote_count if base.min_vote_count is not None else DEFAULT_MIN_VOTES,
         })
 
+        # The two network hops (query embed, memory embed) run concurrently so the
+        # worst case is one embed budget, not two — the taste channel is local.
+        qv, mv, taste = await asyncio.gather(
+            self._query_vector(ctx) if ctx.query_text else _none(),
+            self._safe_embed(ctx.memory_text) if ctx.memory_text else _none(),
+            self._taste_vector(ctx.user_id),
+        )
         channels: list[tuple[list[tuple[CatalogItem, float]], float, str]] = []
-        if ctx.query_text:
-            qv = await self._query_vector(ctx)
-            if qv is not None:
-                channels.append((self._catalog.search(qv, filters, CHANNEL_LIMIT), W_MATCH, "match"))
-        taste = await self._taste_vector(ctx.user_id)
+        if qv is not None:
+            channels.append((self._catalog.search(qv, filters, CHANNEL_LIMIT), W_MATCH, "match"))
         if taste is not None:
             channels.append((self._catalog.search(taste, filters, CHANNEL_LIMIT), W_TASTE, "for you"))
-        if ctx.memory_text:
-            mv = await self._safe_embed(ctx.memory_text)
-            if mv is not None:
-                channels.append((self._catalog.search(mv, filters, CHANNEL_LIMIT), W_MEMORY, "from what you told me"))
+        if mv is not None:
+            channels.append((self._catalog.search(mv, filters, CHANNEL_LIMIT), W_MEMORY, "from what you told me"))
         if not channels:
             popular = self._catalog.top_popular(ctx.limit * 3, exclude=filters.exclude_ids)
             channels.append(([(i, 0.0) for i in popular if self._passes(i, filters)], 1.0, "popular"))

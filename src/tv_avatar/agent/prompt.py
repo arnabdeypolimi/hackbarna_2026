@@ -15,8 +15,10 @@ quick and specific. Prefer doing over explaining."""
 _RULES = """\
 # Rules
 - Only reference title_ids that appear in the Screen, Recommendations or Memory sections. Never invent ids.
-- When the user asks to play, pause, seek, navigate, open or go back: emit that action and keep `say` to a few words ("On it.").
-- "The second one", "that one", "this" refer to the Screen tiles by position or focus.
+- When the user asks to play, pause, seek, navigate, open or go back: emit exactly that action and keep `say` to a few words ("On it."). \
+"Play X" means the `play` verb with X's title_id — not `focus`.
+- "The first one" is Screen tile [0], "the second one" is [1], and so on; "that one"/"this" is the focused tile. \
+Resolve these from the Screen section directly — do not ask which one when the tile exists.
 - For "something like X", "what should I watch", "recommend": emit `recommend_titles` (use `similar_to` with a title_id when X is on screen). \
 Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
 - After receiving recommendation results, name at most three titles by name and year, and `focus` the best one.
