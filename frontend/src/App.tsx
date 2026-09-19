@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent
 import type { Profile, Rect, Tab, Title } from './types/title';
 import { DATA_URL, MAX_FILE_BYTES } from './config';
 import { toTitles } from './lib/csv';
-import { buildRow, pickResume, TAB_TITLES } from './lib/rows';
+import { buildRow, TAB_TITLES } from './lib/rows';
 import { readJSON, writeJSON } from './lib/storage';
 import { catalogFor } from './lib/maturity';
 import {
@@ -17,7 +17,7 @@ import { Stage } from './components/Stage';
 import { SearchBar } from './components/SearchBar';
 import { PosterRow } from './components/PosterRow';
 import { Detail } from './components/Detail';
-import { ResumePanel } from './components/ResumePanel';
+import { AvatarPanel, type AvatarView } from './components/AvatarPanel';
 import { TabBar } from './components/TabBar';
 import { ExitDialog } from './components/ExitDialog';
 import { Profiles } from './components/Profiles';
@@ -45,7 +45,9 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>(loadProfiles);
   const [activeId, setActiveId] = useState<string>(() => loadActiveId(profiles));
   const [myList, setMyList] = useState<string[]>(() => readJSON(listKey(activeId), []));
-  const [history, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
+  // Write-only since the resume panel left: nothing renders history today, but Watch
+  // keeps recording it because the agent will want it.
+  const [, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(loadChoice);
@@ -65,6 +67,7 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
+  const avatarVideo = useRef<HTMLVideoElement>(null);
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -72,7 +75,6 @@ export default function App() {
   const row = useMemo(() => buildRow(catalog, tab, query, myList), [catalog, tab, query, myList]);
   const selIdx = Math.min(sel, Math.max(0, row.length - 1));
   const current: Title | undefined = row[selIdx];
-  const resume = useMemo(() => pickResume(catalog, history), [catalog, history]);
 
   // ---------- theme ----------
   // `clock` moves once a day at most, so this settles on one of four objects.
@@ -394,6 +396,25 @@ export default function App() {
     };
   }, []);
 
+  // TEMPORARY (Task 3 only): a hand-held view so the panel can be laid out before
+  // useAvatar exists. Edit `phase` to eyeball each state. Task 4 replaces it.
+  const avatar: AvatarView = {
+    phase: 'connecting',
+    message: 'Connecting to Cara…',
+    avatar: { id: 'cara', name: 'Cara', description: '', avatar_model: 'cara-4', languages: ['en', 'es', 'fr', 'ca'] },
+    status: 'listening',
+    lastLine: 'Show me something with dragons in it.',
+    languages: [
+      { code: 'en', name: 'English', native_name: 'English' },
+      { code: 'es', name: 'Spanish', native_name: 'Español' },
+      { code: 'fr', name: 'French', native_name: 'Français' },
+      { code: 'ca', name: 'Catalan', native_name: 'Català' },
+    ],
+    language: 'en',
+    setLanguage: () => {},
+    retry: () => {},
+  };
+
   // ---------- render ----------
   const heading = status.kind !== 'ready' ? 'Recommended' : query ? `Results for "${query}"` : TAB_TITLES[tab];
 
@@ -458,12 +479,7 @@ export default function App() {
           )}
         </section>
 
-        <ResumePanel
-          item={resume}
-          onContinue={() => resume && watch(resume)}
-          onEpisodes={() => resume && toast.show(`Opening episodes of ${resume.title}`)}
-          onRemind={() => resume && toast.show(`We'll remind you about ${resume.title} later`)}
-        />
+        <AvatarPanel view={avatar} videoRef={avatarVideo} />
 
         <TabBar tab={tab} highlight={!query} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
 
