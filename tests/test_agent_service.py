@@ -349,6 +349,29 @@ async def test_greeting_instruction_is_never_ingested():
     assert lane.ingests == []
 
 
+async def test_greeting_instruction_leaves_the_history_after_the_greeting_turn():
+    """Live: with the stage direction still in the conversation, "hello" and even
+    "yes" were answered with the greeting again. It is an instruction to the model,
+    not something the viewer said, so later turns must not see it — while the
+    greeting turn itself still gets the brief in its place."""
+    from tv_avatar.agent.prompt import GREETING_PREFIX, greeting_instruction
+    client = FakeOpenAI(['{"intent":"chitchat","say":"Welcome back!","actions":[]}',
+                         '{"intent":"chitchat","say":"Hello there.","actions":[]}'])
+    agent = _agent(client, RecordingBus())
+    ctx = LLMContext()
+    ctx.add_message({"role": "user", "content": greeting_instruction(agent._session.persona.language)})
+    await _run(agent, TimingSink(), [LLMContextFrame(context=ctx)])
+    ctx.add_message({"role": "assistant", "content": "Welcome back!"})
+    ctx.add_message({"role": "user", "content": "hello"})
+    await _run(agent, TimingSink(), [LLMContextFrame(context=ctx)])
+
+    first, second = client.calls[0]["messages"], client.calls[1]["messages"]
+    assert first[-1]["content"].startswith(GREETING_PREFIX)          # the brief, on the greeting turn
+    assert [m["role"] for m in second] == ["system", "assistant", "user"]
+    assert not any(GREETING_PREFIX in m["content"] for m in second[1:])
+    assert second[-1]["content"] == "hello"
+
+
 async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp_path):
     """A fresh session for a returning user_id opens with what we talked about last time in the prompt."""
     import time as _t

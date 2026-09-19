@@ -55,16 +55,17 @@ from tv_avatar.session.state import SessionState
 MAX_HISTORY_MESSAGES = 10
 
 
-def _last_user_text(messages: list[dict]) -> str:
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+def _text_of(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
     return ""
+
+
+def _last_user_text(messages: list[dict]) -> str:
+    return next((_text_of(m) for m in reversed(messages) if m.get("role") == "user"), "")
 
 
 class SGRAgentService(LLMService):
@@ -220,8 +221,16 @@ class SGRAgentService(LLMService):
 
     def build_messages(self, messages: list[dict], memory: MemoryBlock, history_summary: str) -> list[dict]:
         """The agent is the only writer of the system prompt: whatever arrived in
-        the system slot is replaced, never inspected (D9 — stamp, never store)."""
-        rest = [m for m in messages if m.get("role") != "system"][-MAX_HISTORY_MESSAGES:]
+        the system slot is replaced, never inspected (D9 — stamp, never store).
+
+        The greeting stage direction is dropped from the history once the turn
+        has moved on: it sits in the context as a *user* message, and a small
+        model that still sees "Greet them…" answers "hello" — and "yes" — with
+        the greeting again (seen live). The greeting turn itself keeps it as
+        its last message, where `_turn` swaps in the brief."""
+        rest = [m for m in messages if m.get("role") != "system"]
+        rest = [m for i, m in enumerate(rest)
+                if i == len(rest) - 1 or not is_greeting(_text_of(m))][-MAX_HISTORY_MESSAGES:]
         system = build_system_prompt(self._session.persona.language) + "\n\n" + volatile_sections(
             render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary)
         return [{"role": "system", "content": system}, *rest]
