@@ -188,6 +188,17 @@ h2 { margin: 0 0 22px; font-size: 34px; font-weight: 600; letter-spacing: -0.01e
     border-radius 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .player.grown { border-radius: 48px; }
+/* Watch owns the whole stage, so it ends square to the screen edges rather than rounded
+   inside a panel. A 16:9 trailer fills a 16:9 screen exactly, with no letterboxing left. */
+.player.full { border-radius: 48px; }
+.player.full.grown { border-radius: 0; }
+/* Older sets overscan, so full-screen chrome sits inside a safe margin instead of the
+   44px that was fine while the player lived inside an already-inset panel. */
+.player.full .playertop { left: 96px; top: 76px; right: 96px; }
+.player.full .playertop h4 { font-size: 46px; }
+.player.full .playerbar { left: 88px; right: 88px; bottom: 72px; }
+.player.full .bigplay { width: 128px; height: 128px; margin: -64px 0 0 -64px; }
+.player.full .bigplay svg { width: 50px; height: 50px; }
 /* Chrome waits for the box to finish opening, then fades up. */
 .playertop, .playerbar, .bigplay { opacity: 0; transition: opacity 0.4s ease 0.45s; }
 .player.grown .playertop, .player.grown .playerbar, .player.grown .bigplay { opacity: 1; }

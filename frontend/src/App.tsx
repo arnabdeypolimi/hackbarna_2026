@@ -22,6 +22,9 @@ import { Toast, useToast } from './components/Toast';
 import { TrailerPlayer } from './components/TrailerPlayer';
 import { UploadIcon } from './components/Icons';
 
+/** What is on screen: the title, the box it grew out of, and whether it owns the whole stage. */
+interface Playing { item: Title; from: Rect | null; full: boolean }
+
 type Status =
   | { kind: 'loading' }
   | { kind: 'ready' }
@@ -40,8 +43,7 @@ export default function App() {
   const [history, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
-  const [trailer, setTrailer] = useState<Title | null>(null);
-  const [grow, setGrow] = useState<Rect | null>(null);
+  const [player, setPlayer] = useState<Playing | null>(null);
   const [dragging, setDragging] = useState(false);
   const toast = useToast();
 
@@ -133,9 +135,27 @@ export default function App() {
   const onFile = (e: ChangeEvent<HTMLInputElement>) => { readFile(e.target.files?.[0]); e.target.value = ''; };
 
   // ---------- actions ----------
+  /**
+   * Watch plays the title's trailer across the whole stage. It is the only footage the
+   * product has, so the player labels it a trailer rather than pretending to be the film.
+   */
   const watch = (item: Title) => {
-    toast.show(`Playing ${item.title}`);
     setHistory((h) => { const next = { ...h, [item.title]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
+    if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
+    prevFocus.current = document.activeElement as HTMLElement;
+    // It grows out of the browse panel, so the film opens from where the viewer was looking.
+    const stage = stageRef.current;
+    const panel = stage?.querySelector<HTMLElement>('.main');
+    setPlayer({
+      item,
+      full: true,
+      from: stage && panel ? {
+        left: panel.offsetLeft,
+        top: panel.offsetTop,
+        right: stage.clientWidth - panel.offsetLeft - panel.offsetWidth,
+        bottom: stage.clientHeight - panel.offsetTop - panel.offsetHeight,
+      } : null,
+    });
   };
 
   const toggleSave = (item: Title) => {
@@ -166,8 +186,7 @@ export default function App() {
     saveActiveId(id);
     setMyList(readJSON(listKey(id), []));
     setHistory(readJSON(historyKey(id), {}));
-    setTrailer(null);
-    setGrow(null);
+    setPlayer(null);
     setTab('popular');
     setQuery('');
     setSel(0);
@@ -202,16 +221,19 @@ export default function App() {
     // top-left corner, the bottom-right barely moving from where the tile already sat.
     const tile = stageRef.current?.querySelector<HTMLElement>('.trailer');
     const box = tile?.offsetParent as HTMLElement | null;
-    setGrow(tile && box ? {
-      left: tile.offsetLeft,
-      top: tile.offsetTop,
-      right: box.clientWidth - tile.offsetLeft - tile.offsetWidth,
-      bottom: box.clientHeight - tile.offsetTop - tile.offsetHeight,
-    } : null);
-    setTrailer(item);
+    setPlayer({
+      item,
+      full: false,
+      from: tile && box ? {
+        left: tile.offsetLeft,
+        top: tile.offsetTop,
+        right: box.clientWidth - tile.offsetLeft - tile.offsetWidth,
+        bottom: box.clientHeight - tile.offsetTop - tile.offsetHeight,
+      } : null,
+    });
   };
-  const closeTrailer = () => {
-    setTrailer(null);
+  const closePlayer = () => {
+    setPlayer(null);
     const prev = prevFocus.current;
     requestAnimationFrame(() => (prev && document.contains(prev) ? prev.focus() : focusRow()));
   };
@@ -226,7 +248,7 @@ export default function App() {
 
   const back = (inSearch: boolean) => {
     if (profilesOpen) { if (!profilesBack.current()) closeProfiles(); return; }
-    if (trailer) return closeTrailer();
+    if (player) return closePlayer();
     if (dialogOpen) return closeDialog();
     if (inSearch || query) { setQuery(''); setSel(0); return focusRow(); }
     if (tab !== 'popular') { selectTab('popular'); return focusRow(); }
@@ -236,7 +258,7 @@ export default function App() {
   // ---------- remote control ----------
   const move = (dir: Dir, active: HTMLElement | null) => {
     const scope = profilesOpen ? profilesRef.current
-      : trailer ? playerRef.current
+      : player ? playerRef.current
       : dialogOpen ? dialogRef.current
       : stageRef.current;
     if (!scope) return;
@@ -286,7 +308,7 @@ export default function App() {
       back(inSearch);
       return;
     }
-    if (dialogOpen || trailer || profilesOpen) return;
+    if (dialogOpen || player || profilesOpen) return;
     if (e.keyCode === KEY.RED && current) toggleSave(current);
     else if (e.keyCode === KEY.YELLOW) fileRef.current?.click();
     else if ((e.keyCode === KEY.PLAY || e.keyCode === KEY.PLAY_PAUSE) && current) watch(current);
@@ -380,7 +402,9 @@ export default function App() {
             {status.kind === 'error' && (<><b>Couldn't read titles.csv</b>{status.message}</>)}
           </div>
         )}
-        {trailer && <TrailerPlayer item={trailer} from={grow} scopeRef={playerRef} onClose={closeTrailer} />}
+        {player && !player.full && (
+          <TrailerPlayer item={player.item} from={player.from} scopeRef={playerRef} onClose={closePlayer} />
+        )}
       </section>
 
       <ResumePanel
@@ -395,6 +419,10 @@ export default function App() {
       <div className="hint">
         <span><i className="dot red" />Save to My List</span>
       </div>
+
+      {player && player.full && (
+        <TrailerPlayer item={player.item} from={player.from} full scopeRef={playerRef} onClose={closePlayer} />
+      )}
 
       <Toast message={toast.message} kind={toast.kind} visible={toast.visible} />
       {dragging && <div className="drop">Drop your CSV to load it</div>}

@@ -9,14 +9,16 @@ const NUDGE = 5; // seconds left/right moves while the scrubber has focus
 
 interface Props {
   item: Title;
-  /** The tile's box, so the player can expand out of it instead of appearing. */
+  /** The box it expands out of, so the player grows from what the viewer pressed. */
   from: Rect | null;
+  /** Watch fills the whole stage; the trailer card fills only the panel it sits in. */
+  full?: boolean;
   scopeRef: RefObject<HTMLDivElement>;
   onClose: () => void;
 }
 
 /** Cinema-style popup: the video fills the surface, the chrome floats over it. */
-export function TrailerPlayer({ item, from, scopeRef, onClose }: Props) {
+export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: Props) {
   const frameRef = useRef<HTMLDivElement>(null);
   const api = useRef<YTPlayer | null>(null);
   const playRef = useRef<HTMLButtonElement>(null);
@@ -90,10 +92,13 @@ export function TrailerPlayer({ item, from, scopeRef, onClose }: Props) {
 
   const pct = length ? Math.min(100, (time / length) * 100) : 0;
   const facts = [item.years, item.rating, item.runtime].filter(Boolean);
+  // Full screen is reached from Watch, so the chrome says outright that this is the trailer
+  // and not the film: the product has no player of its own yet.
+  const chips = facts.length ? facts : item.genres;
 
   return (
     <div
-      className={`player${grown ? ' grown' : ''}`}
+      className={`player${full ? ' full' : ''}${grown ? ' grown' : ''}`}
       style={grown || !from ? undefined : { left: from.left, top: from.top, right: from.right, bottom: from.bottom }}
       role="dialog"
       aria-modal="true"
@@ -104,7 +109,7 @@ export function TrailerPlayer({ item, from, scopeRef, onClose }: Props) {
         <div className="playerframe" ref={frameRef} />
         <div className="playertop">
           <h4>{item.title}</h4>
-          <Chips values={facts.length ? facts : item.genres} />
+          <Chips values={full ? ['Trailer', ...chips] : chips} />
         </div>
 
         {ready && !playing && (
