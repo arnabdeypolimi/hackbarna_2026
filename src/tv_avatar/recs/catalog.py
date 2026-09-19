@@ -176,22 +176,40 @@ class BuildReport:
     skipped: int
 
 
-def load_source(csv_path: str | Path, limit: int | None) -> pl.DataFrame:
-    lf = (
-        pl.scan_csv(csv_path, infer_schema_length=10_000)
-        .select(_SOURCE_COLUMNS)
-        .filter(
+def read_title_ids(csv_path: str | Path) -> set[str]:
+    """The `id` column of any CSV — e.g. the TV app's trimmed titles.csv."""
+    ids = pl.read_csv(csv_path, columns=["id"], infer_schema_length=10_000)["id"]
+    return set(ids.cast(pl.Int64).cast(pl.Utf8).drop_nulls().to_list())
+
+
+def load_source(csv_path: str | Path, limit: int | None, *, ids: set[str] | None = None) -> pl.DataFrame:
+    lf = pl.scan_csv(csv_path, infer_schema_length=10_000).select(_SOURCE_COLUMNS)
+    if ids is not None:
+        # Recommending a title the TV cannot show is the worst on-stage failure, so
+        # an explicit id list replaces the popularity heuristics rather than
+        # stacking on top of them: whatever the TV carries, the catalog carries.
+        lf = lf.filter(
+            pl.col("id").cast(pl.Int64).cast(pl.Utf8).is_in(sorted(ids))
+            & pl.col("overview").is_not_null()
+            & pl.col("genres").is_not_null()
+        )
+    else:
+        lf = lf.filter(
             (pl.col("status") == "Released")
             & (pl.col("vote_count") >= 50)
             & pl.col("overview").is_not_null()
             & pl.col("genres").is_not_null()
             & pl.col("poster_path").is_not_null()
         )
-        .sort("popularity", descending=True)
-    )
+    lf = lf.sort("popularity", descending=True)
     if limit is not None:
         lf = lf.head(limit)
-    return _normalise(lf).collect()
+    frame = _normalise(lf).collect()
+    if ids is not None:
+        missing = ids - set(frame["title_id"].to_list())
+        if missing:
+            logger.warning("{} requested title ids are not in the source CSV", len(missing), sample=sorted(missing)[:10])
+    return frame
 
 
 def collection_vector_size(client: QdrantClient) -> int | None:
@@ -231,12 +249,15 @@ def _existing_ids(client: QdrantClient, ids: list[int]) -> set[int]:
 
 def build_catalog(csv_path: str | Path, out_parquet: str | Path, qdrant_path: str | Path | None = None,
                   *, limit: int | None = None, embed_fn: EmbedFn, client: QdrantClient | None = None,
-                  batch_size: int = 256, dims: int | None = None) -> BuildReport:
-    """CSV → parquet + Qdrant. Resumable: titles already indexed are skipped."""
+                  batch_size: int = 256, dims: int | None = None, ids: set[str] | None = None) -> BuildReport:
+    """CSV → parquet + Qdrant. Resumable: titles already indexed are skipped.
+
+    `ids` restricts the build to those title ids (see `load_source`).
+    """
     if client is None and qdrant_path is None:
         raise ValueError("build_catalog needs a qdrant_path or an injected client")
     client = client or QdrantClient(path=str(qdrant_path))
-    frame = load_source(csv_path, limit)
+    frame = load_source(csv_path, limit, ids=ids)
     Path(out_parquet).parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(out_parquet)
     items = [_row_to_item(r) for r in frame.to_dicts()]
