@@ -1,0 +1,75 @@
+"""Bridge between the agent's tool handlers and the control WebSocket.
+
+Two rules from spec §8 and §9 live here:
+  - fire-and-forget commands never await the client, because a slow TV
+    would stall the LLM turn and stall speech with it;
+  - the queue is turn-scoped, so barge-in drops commands the interrupted
+    turn had queued but not yet sent.
+"""
+import asyncio
+import uuid
+from collections import deque
+
+from tv_avatar.agent.commands import AWAITS_RESULT, Verb, parse_command
+from tv_avatar.control.protocol import CommandMsg
+
+
+class CommandBus:
+    def __init__(self, search_timeout_s: float = 0.4) -> None:
+        self._outbound: deque[CommandMsg] = deque()
+        self._ready = asyncio.Event()
+        self._pending: dict[str, asyncio.Future[dict]] = {}
+        self._search_timeout_s = search_timeout_s
+
+    async def dispatch(self, verb: str, args: dict, turn_id: str) -> dict:
+        command = parse_command(verb, args)  # raises ValueError; never queued
+        msg = CommandMsg(
+            id=f"cmd_{uuid.uuid4().hex[:8]}",
+            turn_id=turn_id,
+            verb=command.verb.value,
+            args=command.model_dump(exclude={"verb"}, exclude_none=True),
+        )
+
+        if command.verb not in AWAITS_RESULT:
+            self._enqueue(msg)
+            return {"status": "dispatched"}
+
+        future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+        self._pending[msg.id] = future
+        self._enqueue(msg)
+        try:
+            return await asyncio.wait_for(future, timeout=self._search_timeout_s)
+        except asyncio.TimeoutError:
+            return {"status": "unavailable", "reason": "timeout"}
+        finally:
+            self._pending.pop(msg.id, None)
+
+    def _enqueue(self, msg: CommandMsg) -> None:
+        self._outbound.append(msg)
+        self._ready.set()
+
+    async def next_outbound(self) -> CommandMsg:
+        while not self._outbound:
+            self._ready.clear()
+            await self._ready.wait()
+        return self._outbound.popleft()
+
+    def cancel_turn(self, turn_id: str) -> int:
+        """Drop queued-but-unsent commands for an interrupted turn.
+
+        Commands already handed to the WebSocket are NOT rolled back
+        (spec §9, rule 4)."""
+        keep = deque(m for m in self._outbound if m.turn_id != turn_id)
+        dropped = len(self._outbound) - len(keep)
+        self._outbound = keep
+        if not self._outbound:
+            self._ready.clear()
+        return dropped
+
+    def resolve(self, command_id: str, data: dict) -> None:
+        future = self._pending.get(command_id)
+        if future is not None and not future.done():
+            future.set_result(data)
+
+    def pending_count(self) -> int:
+        return len(self._pending)
