@@ -3,7 +3,6 @@ import type { LanguageInfo } from '../lib/avatarClient';
 interface Props {
   options: LanguageInfo[];
   value: string;
-  disabled: boolean;
   onPick: (code: string) => void;
 }
 
@@ -11,8 +10,14 @@ interface Props {
  * Chips, not a <select>: a native dropdown on a television opens a list the remote
  * cannot steer well. Each chip carries `.f`, which is all spatial navigation needs
  * to find it.
+ *
+ * Never disabled, not even mid-connection. The app connects on load, so a picker
+ * that greys out while connecting is dead for the first seconds of every session
+ * and forever if the backend hangs — and a disabled button is skipped by spatial
+ * navigation, which would strand the whole panel. A press during a connection
+ * supersedes it; `useAvatar`'s generation counter exists for exactly that.
  */
-export function LanguagePicker({ options, value, disabled, onPick }: Props) {
+export function LanguagePicker({ options, value, onPick }: Props) {
   if (!options.length) return null;
   return (
     <div className="langs" role="group" aria-label="Avatar language">
@@ -22,7 +27,6 @@ export function LanguagePicker({ options, value, disabled, onPick }: Props) {
           className={l.code === value ? 'lang cur f' : 'lang f'}
           aria-label={`Speak ${l.name}`}
           aria-pressed={l.code === value}
-          disabled={disabled}
           onClick={() => onPick(l.code)}
         >
           {l.native_name}

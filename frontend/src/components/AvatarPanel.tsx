@@ -63,7 +63,6 @@ export function AvatarPanel({ view, videoRef }: Props) {
       <LanguagePicker
         options={view.languages}
         value={view.language}
-        disabled={view.phase === 'connecting'}
         onPick={view.setLanguage}
       />
     </aside>
