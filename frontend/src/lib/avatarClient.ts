@@ -50,19 +50,33 @@ export interface AvatarSession {
   sessionId: string;
   avatar: string;
   language: string;
+  /** The avatar's audio and video. Attaching it is the caller's job — see ConnectOptions. */
+  stream: MediaStream;
   close(): void;
 }
 
+// No video element here, on purpose. Two rapid chip presses run two connect()s against the
+// same element; if the loser attached its stream after the winner it would overwrite the
+// winner's, and then have its own tracks stopped when the caller discards it — a live phase
+// with a black face and no message. The caller attaches the stream only after it has decided
+// the attempt is still the current one.
 export interface ConnectOptions {
   avatar: string;
   language: string;
-  video: HTMLVideoElement;
   onStatus(state: AgentState): void;
   onTranscript(msg: TranscriptMsg): void;
   onCommand(msg: CommandMsg): void;
   onError(err: Error): void;
-  /** Audio autoplay was refused. Recoverable, but only by a user gesture. */
-  onBlocked(): void;
+}
+
+interface Parts {
+  mic?: MediaStream;
+  ws?: WebSocket;
+  pc?: RTCPeerConnection;
+  session?: SessionInfo;
+  // A teardown we asked for is not a disconnection worth reporting: close() closes the
+  // socket and the peer connection itself, and both announce the loss on their way out.
+  closing: boolean;
 }
 
 const MIC: MediaTrackConstraints = {
@@ -78,14 +92,10 @@ export async function fetchConfig(): Promise<BackendConfig> {
 }
 
 export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
-  const parts: {
-    mic?: MediaStream;
-    ws?: WebSocket;
-    pc?: RTCPeerConnection;
-    session?: SessionInfo;
-  } = {};
+  const parts: Parts = { closing: false };
 
   const close = () => {
+    parts.closing = true;
     parts.pc?.close();
     parts.ws?.close();
     parts.mic?.getTracks().forEach((t) => t.stop());
@@ -95,6 +105,9 @@ export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
     fetch(`/sessions/${s.session_id}`, {
       method: 'DELETE',
       headers: { 'X-Control-Token': s.control_token },
+      // This also runs from `beforeunload`, where an ordinary fetch is cancelled along with
+      // the page. sendBeacon cannot carry X-Control-Token; keepalive can, and is Chrome 66.
+      keepalive: true,
     }).catch(() => {});
   };
 
@@ -103,12 +116,14 @@ export async function connect(opts: ConnectOptions): Promise<AvatarSession> {
     // leave a half-built session sitting on the backend.
     parts.mic = await navigator.mediaDevices.getUserMedia({ audio: MIC });
     parts.session = await createSession(opts.avatar, opts.language);
-    parts.ws = openControl(parts.session, opts);
-    parts.pc = await openMedia(parts.session, parts.mic, opts);
+    parts.ws = openControl(parts.session, opts, parts);
+    const media = await openMedia(parts.session, parts.mic, opts, parts);
+    parts.pc = media.pc;
     return {
       sessionId: parts.session.session_id,
       avatar: parts.session.avatar,
       language: parts.session.language,
+      stream: media.stream,
       close,
     };
   } catch (err) {
@@ -124,16 +139,31 @@ async function createSession(avatar: string, language: string): Promise<SessionI
     body: JSON.stringify({ avatar, language }),
   });
   if (!res.ok) throw new Error(`POST /sessions failed (${res.status})`);
-  return (await res.json()) as SessionInfo;
+  const info = (await res.json()) as SessionInfo;
+  // Mirrors PROTOCOL_VERSION in contracts/protocol.d.ts, which is a `.d.ts` const and so has
+  // no runtime value to import. The TV app and the backend ship separately; a version we do
+  // not speak is an error, not something to parse optimistically.
+  if (info.protocol_version !== 1) {
+    throw new Error(`backend speaks protocol v${info.protocol_version}, this app speaks v1`);
+  }
+  return info;
 }
 
-function openControl(session: SessionInfo, opts: ConnectOptions): WebSocket {
+function openControl(session: SessionInfo, opts: ConnectOptions, parts: Parts): WebSocket {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(
     `${proto}://${location.host}${session.control_url}?token=${session.control_token}`,
   );
   ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data as string) as ServerMessage;
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(ev.data as string) as ServerMessage;
+    } catch {
+      // A frame we cannot read is a protocol failure the viewer has to be told about, not
+      // a throw inside an event handler where nothing is listening for it.
+      opts.onError(new Error('unreadable control frame'));
+      return;
+    }
     switch (msg.type) {
       case 'agent_status':
         opts.onStatus(msg.state);
@@ -150,6 +180,10 @@ function openControl(session: SessionInfo, opts: ConnectOptions): WebSocket {
     }
   };
   ws.onerror = () => opts.onError(new Error('control socket failed'));
+  // The mirror of the rule that every non-live phase says what happened: a live phase that
+  // is dead must not stay silent. A backend restart, a network blip or the session's TTL
+  // being reaped would otherwise leave a frozen face and a status pill that lies.
+  ws.onclose = () => { if (!parts.closing) opts.onError(new Error('control connection lost')); };
   return ws;
 }
 
@@ -157,7 +191,8 @@ async function openMedia(
   session: SessionInfo,
   mic: MediaStream,
   opts: ConnectOptions,
-): Promise<RTCPeerConnection> {
+  parts: Parts,
+): Promise<{ pc: RTCPeerConnection; stream: MediaStream }> {
   const pc = new RTCPeerConnection();
   // Owned here until it is handed back. A throw between construction and the return
   // would otherwise strand it: the caller's cleanup reads a variable this function
@@ -168,11 +203,20 @@ async function openMedia(
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
     pc.addTransceiver('video', { direction: 'recvonly' });
 
-    const remote = new MediaStream();
-    opts.video.srcObject = remote;
-    pc.ontrack = (ev) => {
-      remote.addTrack(ev.track);
-      opts.video.play().catch(() => opts.onBlocked());
+    const stream = new MediaStream();
+    pc.ontrack = (ev) => { stream.addTrack(ev.track); };
+
+    // The media half of the same rule as ws.onclose above: without it the face simply
+    // freezes. `disconnected` is deliberately not in this list — ICE enters it on any brief
+    // blip and recovers on its own, and Chrome promotes a connection that really died to
+    // `failed` once consent freshness expires. Reporting `disconnected` would tear down a
+    // healthy paid session for a two-second hiccup. tools/demo/demo.js draws the same line.
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      if (parts.closing) return;
+      if (s === 'failed' || s === 'closed') {
+        opts.onError(new Error('media connection lost'));
+      }
     };
 
     await pc.setLocalDescription(await pc.createOffer());
@@ -187,7 +231,7 @@ async function openMedia(
     if (!res.ok) throw new Error(`WebRTC offer rejected (${res.status})`);
     const answer = (await res.json()) as { sdp: string; type: RTCSdpType };
     await pc.setRemoteDescription(answer);
-    return pc;
+    return { pc, stream };
   } catch (err) {
     pc.close();
     throw err;

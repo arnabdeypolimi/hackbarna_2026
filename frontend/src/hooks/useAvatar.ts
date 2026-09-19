@@ -57,7 +57,6 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
       const live = await connect({
         avatar: who.id,
         language: code,
-        video: el,
         onStatus: (s) => { if (mineStill()) setStatus(s); },
         onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
         onCommand: (m) => {
@@ -68,14 +67,29 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
           // session's late command must not reach the current screen.
           console.debug('[avatar] command', m.verb, m.args);
         },
-        onError: (e) => { if (mineStill()) { setPhase('error'); setMessage(e.message); } },
-        onBlocked: () => { if (mineStill()) { setPhase('blocked'); setMessage(`Press OK to hear ${who.name}`); } },
+        onError: (e) => {
+          if (!mineStill()) return;
+          // The panel is about to say we are not live, so we must not be: a hidden
+          // <video> keeps playing audio, and the session keeps billing.
+          session.current?.close();
+          session.current = null;
+          setPhase('error');
+          setMessage(e.message);
+        },
       });
       // A newer attempt started while this one was negotiating: drop this session
       // rather than leaving it running and unreferenced.
       if (!mineStill()) { live.close(); return; }
       session.current = live;
-      setPhase('live');
+      el.srcObject = live.stream;
+      // Autoplay may be refused when nothing the viewer did started this — the app
+      // connects on load, so that is the normal case, not the exception. The session is
+      // healthy; only playback was blocked, so the recovery is a gesture, never a new
+      // session.
+      el.play().then(
+        () => { if (mineStill()) setPhase('live'); },
+        () => { if (mineStill()) { setPhase('blocked'); setMessage(`Press OK to hear ${who.name}`); } },
+      );
     } catch (err) {
       if (!mineStill()) return;
       const e = err as Error;
@@ -156,7 +170,18 @@ export function useAvatar(video: RefObject<HTMLVideoElement>): AvatarView {
     else void boot();
   };
 
-  const retry = () => { void boot(); };
+  const retry = () => {
+    const el = video.current;
+    // A blocked session is alive and only needs the gesture we just got; re-booting would
+    // tear down a healthy session and mint a new paid one. The other way into `blocked` is
+    // a refused microphone, which leaves session.current null — that one does need a new
+    // session, and falls through to boot().
+    if (phase === 'blocked' && session.current && el) {
+      el.play().then(() => setPhase('live'), () => { /* still blocked; the message stands */ });
+      return;
+    }
+    void boot();
+  };
 
   return {
     phase,

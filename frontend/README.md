@@ -49,7 +49,11 @@ choice is remembered in `localStorage` for the whole television, not per profile
 Wire types come from `contracts/protocol.d.ts`, which is **generated** from
 `src/tv_avatar/agent/commands.py` — import them, never hand-write them. The agent
 does not emit commands yet (phase 2 / M3); `useAvatar` logs them and there is a
-`TODO(M3)` marking where they will be dispatched.
+`TODO(M3)` marking where they will be dispatched. The HTTP types are the exception:
+`BackendConfig` and `SessionInfo` in `src/lib/avatarClient.ts` *are* hand-written,
+because `/config` and `POST /sessions` answer with ad-hoc dicts that the generator
+never sees — so a change to either endpoint in `app.py` has to be mirrored there by
+hand. The comment above `AvatarInfo` says the same thing at the point of use.
 
 ## Add the dataset
 

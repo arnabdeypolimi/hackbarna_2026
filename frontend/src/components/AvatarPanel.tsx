@@ -50,10 +50,12 @@ export function AvatarPanel({ view, videoRef }: Props) {
         </>
       ) : (
         <div className="side-actions">
+          {/* Guarded rather than disabled: spatial navigation skips a disabled control, and
+              disabling the focused button drops focus to <body>, which ejects the viewer
+              from the panel mid-press. The chips are never disabled for the same reason. */}
           <button
             className="btn wide primary f"
-            disabled={view.phase === 'connecting'}
-            onClick={view.retry}
+            onClick={() => { if (view.phase !== 'connecting') view.retry(); }}
           >
             {view.phase === 'connecting' ? 'Connecting…' : `Talk to ${name}`}
           </button>
