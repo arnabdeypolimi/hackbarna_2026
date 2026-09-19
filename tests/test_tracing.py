@@ -1,10 +1,9 @@
 """The tracing bootstrap: off by default, Langfuse OTLP/HTTP contract, redaction,
 and session identity riding on every span via baggage."""
+from conftest import PERSONA
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-from conftest import PERSONA
 
 from tv_avatar.config import Settings
 from tv_avatar.session.state import SessionState
@@ -86,10 +85,10 @@ def test_redacting_processor_strips_content_attrs():
 
 
 def test_session_scope_puts_identity_on_every_span(otel):
-    with session_scope(_session(), _settings(), half_duplex=True):
-        with observation("outer", type="span"):
-            with observation("inner", type="tool", **{"tv.action.ms": None, "tv.x": 1}):
-                pass
+    with (session_scope(_session(), _settings(), half_duplex=True),
+          observation("outer", type="span"),
+          observation("inner", type="tool", **{"tv.action.ms": None, "tv.x": 1})):
+        pass
     spans = otel.spans()
     for s in spans["outer"] + spans["inner"]:
         assert s.attributes["langfuse.session.id"] == "sess_1"
@@ -110,10 +109,9 @@ def test_spans_outside_session_scope_carry_no_identity(otel):
 
 
 def test_detached_context_is_root_but_keeps_baggage(otel):
-    with session_scope(_session(), _settings()):
-        with observation("turn", type="span"):
-            with tracer().start_as_current_span("fold", context=detached_from_span()):
-                pass
+    with (session_scope(_session(), _settings()), observation("turn", type="span"),
+          tracer().start_as_current_span("fold", context=detached_from_span())):
+        pass
     fold, = otel.spans()["fold"]
     assert fold.parent is None
     assert fold.attributes["langfuse.session.id"] == "sess_1"
