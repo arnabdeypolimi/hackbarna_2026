@@ -502,7 +502,7 @@ The right-hand panel becomes the avatar's, and the resume panel leaves. No conne
   - `Phase = 'off' | 'connecting' | 'live' | 'blocked' | 'error'`
   - `AvatarView = { phase: Phase; message: string; avatar: AvatarInfo | null; status: AgentState; lastLine: string; languages: LanguageInfo[]; language: string; setLanguage(code: string): void; retry(): void }` — exported from `components/AvatarPanel`, and the exact shape Task 4's hook must return.
   - `<AvatarPanel view={AvatarView} videoRef={RefObject<HTMLVideoElement>} />`
-  - `<LanguagePicker options={LanguageInfo[]} value={string} disabled={boolean} onPick={(code: string) => void} />`
+  - `<LanguagePicker options={LanguageInfo[]} value={string} onPick={(code: string) => void} />`
 
 - [ ] **Step 1: Write the language picker**
 
@@ -514,7 +514,6 @@ import type { LanguageInfo } from '../lib/avatarClient';
 interface Props {
   options: LanguageInfo[];
   value: string;
-  disabled: boolean;
   onPick: (code: string) => void;
 }
 
@@ -522,8 +521,14 @@ interface Props {
  * Chips, not a <select>: a native dropdown on a television opens a list the remote
  * cannot steer well. Each chip carries `.f`, which is all spatial navigation needs
  * to find it.
+ *
+ * Never disabled, not even mid-connection. The app connects on load, so a picker
+ * that greys out while connecting is dead for the first seconds of every session
+ * and forever if the backend hangs — and a disabled button is skipped by spatial
+ * navigation, which would strand the whole panel. A press during a connection
+ * supersedes it; `useAvatar`'s generation counter exists for exactly that.
  */
-export function LanguagePicker({ options, value, disabled, onPick }: Props) {
+export function LanguagePicker({ options, value, onPick }: Props) {
   if (!options.length) return null;
   return (
     <div className="langs" role="group" aria-label="Avatar language">
@@ -533,7 +538,6 @@ export function LanguagePicker({ options, value, disabled, onPick }: Props) {
           className={l.code === value ? 'lang cur f' : 'lang f'}
           aria-label={`Speak ${l.name}`}
           aria-pressed={l.code === value}
-          disabled={disabled}
           onClick={() => onPick(l.code)}
         >
           {l.native_name}
@@ -614,7 +618,6 @@ export function AvatarPanel({ view, videoRef }: Props) {
       <LanguagePicker
         options={view.languages}
         value={view.language}
-        disabled={view.phase === 'connecting'}
         onPick={view.setLanguage}
       />
     </aside>
@@ -683,7 +686,6 @@ Then append, after the `.side-actions` rule:
 }
 .lang.cur { background: var(--primary); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
 .lang:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); box-shadow: none; }
-.lang[disabled] { opacity: 0.45; }
 ```
 
 - [ ] **Step 4: Delete the resume panel and its data**
@@ -1015,7 +1017,7 @@ The picker does something. Deliverable: choosing Español hangs up and brings ba
 
 With a live English session, arrow down to the chips and press OK on **Español**.
 
-Expected: the chips grey out and the button/frame reads "Connecting to Lucía…"; the old face disappears; within a few seconds Lucía appears and greets you **in Spanish**; the `Español` chip is now the highlighted one. Speak Spanish to her and confirm the transcript line fills in.
+Expected: the frame reads "Connecting to Lucía…" and the chips stay live (they are never disabled); the old face disappears; within a few seconds Lucía appears and greets you **in Spanish**; the `Español` chip is now the highlighted one. Speak Spanish to her and confirm the transcript line fills in.
 
 Then try **Català**: Pau appears. His voice is Cartesia's Spanish model reading Catalan — that is the documented fallback in `avatars.yaml`, not a bug.
 
