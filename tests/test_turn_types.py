@@ -73,8 +73,19 @@ def test_tool_result_knows_whether_it_earns_a_cycle():
     assert ToolResult("recommend_titles", {"titles": []}).earns_cycle
     assert ToolResult("recommend_titles", {"status": "error"}).earns_cycle   # a failure still needs speaking
     assert not ToolResult("search_catalog", {"status": "ok"}).earns_cycle
+    assert not ToolResult("search_catalog", {"titles": []}).earns_cycle      # the TV answered; it shows them
     assert not ToolResult("reject_title", {}).earns_cycle
     assert not ToolResult("not_a_verb", {}).earns_cycle
+
+
+def test_failed_awaited_tv_verb_earns_a_cycle_so_the_viewer_hears_it():
+    assert ToolResult("search_catalog", {"status": "unavailable", "reason": "timeout"}).earns_cycle
+    assert ToolResult("search_catalog", {"status": "error", "reason": "boom"}).earns_cycle
+    assert ToolResult("search_catalog", {"status": "invalid", "reason": "bad args"}).earns_cycle
+    # A barge-in releases the wait with "cancelled": the turn is dying, do not speak again.
+    assert not ToolResult("search_catalog", {"status": "cancelled", "reason": "interrupted"}).earns_cycle
+    # Fire-and-forget verbs never enter the results; even a failure status does not earn a cycle.
+    assert not ToolResult("play", {"status": "invalid"}).earns_cycle
 
 
 def test_cycle_outcome_feedback_is_keyed_by_verb():

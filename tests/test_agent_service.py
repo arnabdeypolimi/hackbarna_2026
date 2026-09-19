@@ -523,7 +523,42 @@ def test_render_fallback_shapes():
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
     assert actions == [("focus", {"title_id": "1"})]
     assert render_fallback((ToolResult("recommend_titles", {"titles": []}),))[1] == []
-    assert "took too long" in render_fallback((ToolResult("search_catalog", {"status": "unavailable"}),))[0]
+    assert "didn't respond" in render_fallback((ToolResult("search_catalog", {"status": "unavailable"}),))[0]
+    assert "took too long" in render_fallback((ToolResult("search_catalog", {"titles": []}),))[0]
+
+
+SEARCH_1 = ('{"intent":"search","say":"Searching for Jurassic World.",'
+            '"actions":[{"verb":"search_catalog","query":"Jurassic World"}]}')
+SEARCH_2 = '{"intent":"answer","say":"The search did not go through. Try again?","actions":[]}'
+
+
+async def test_search_nobody_answers_is_spoken_not_swallowed():
+    """Seen live: with no TV app on the control socket, `search_catalog` timed
+    out and the turn ended on "Searching for X." — the viewer waited on nothing."""
+    client, sink = FakeOpenAI([SEARCH_1, SEARCH_2]), TimingSink()
+    await _run(_agent(client, CommandBus(search_timeout_s=0.02)), sink, [LLMContextFrame(context=_ctx("jurassic world"))])
+    assert _spoken(sink) == ["Searching for Jurassic World.", "The search did not go through.", "Try again?"]
+    assert len(client.calls) == 2
+    feedback = client.calls[1]["messages"][-1]["content"]
+    assert "[tool results]" in feedback and '"status": "unavailable"' in feedback
+
+
+async def test_search_the_tv_answers_stays_one_cycle():
+    """The happy path is unchanged: the TV renders the results, the filler is the reply."""
+    bus, client, sink = CommandBus(), FakeOpenAI([SEARCH_1]), TimingSink()
+
+    async def tv_app():
+        while (msg := await bus.next_outbound()).type != "command":
+            pass
+        bus.resolve(msg.id, {"titles": [{"title_id": "1", "name": "Jurassic World"}]})
+
+    tv = asyncio.create_task(tv_app())
+    try:
+        await _run(_agent(client, bus), sink, [LLMContextFrame(context=_ctx("jurassic world"))])
+    finally:
+        tv.cancel()
+    assert _spoken(sink) == ["Searching for Jurassic World."]
+    assert len(client.calls) == 1
 
 
 async def test_turn_log_line_reports_typed_metrics():

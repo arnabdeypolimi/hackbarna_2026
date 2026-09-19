@@ -63,6 +63,7 @@ class ActionSpec:
     #: The turn blocks on this action's reply (TV round-trip or internal tool).
     awaits_result: bool
     #: The reply is fed back to the LLM for another cycle. Implies awaits_result.
+    #: A *failed* reply of any awaited action is fed back regardless (turn.py).
     earns_cycle: bool
     doc: str
 
@@ -83,7 +84,7 @@ _TV_DOCS: dict[Verb, str] = {
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
     Verb.SHOW_PRODUCTS: "show products visible in a scene",
-    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
+    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; the TV shows the results — you hear back only if it fails",
 }
 
 REGISTRY: dict[str, ActionSpec] = {

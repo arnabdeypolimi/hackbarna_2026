@@ -100,6 +100,12 @@ class TurnTrace:
         return pointed + named
 
 
+#: Reply statuses that mean the awaited action did not happen (bus timeout,
+#: internal tool error, rejected args). "cancelled" is deliberately absent: the
+#: turn is already being torn down by a barge-in and must not speak again.
+FAILED_STATUSES = frozenset({"unavailable", "error", "invalid"})
+
+
 @dataclass(frozen=True)
 class ToolResult:
     """One awaited action's reply, as the model will see it."""
@@ -107,9 +113,20 @@ class ToolResult:
     payload: dict[str, Any]
 
     @property
+    def failed(self) -> bool:
+        return self.payload.get("status") in FAILED_STATUSES
+
+    @property
     def earns_cycle(self) -> bool:
+        """Results the model must see. Cycle-earning tools always; an awaited TV
+        verb only when it failed — a successful `search_catalog` is answered by
+        the TV screen, but with no TV to answer (seen live, 2026-09-20) the
+        filler "Searching for X." was the whole turn and the viewer waited on
+        nothing. The failure is fed back so the agent says so."""
         spec = REGISTRY.get(self.verb)
-        return spec is not None and spec.earns_cycle
+        if spec is None:
+            return False
+        return spec.earns_cycle or (spec.awaits_result and self.failed)
 
 
 @dataclass(frozen=True)

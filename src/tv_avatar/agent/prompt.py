@@ -132,7 +132,8 @@ _CONTRACT = """\
 # Output contract
 Reply with exactly one JSON object: {"intent": ..., "say": ..., "actions": [...]}. \
 `intent` first, `say` second, `actions` last. `say` is spoken immediately, before actions finish. \
-Actions run in parallel. Internal tools return results to you; TV commands do not."""
+Actions run in parallel. Internal tools return results to you; TV commands do not — except when one fails, \
+in which case you receive its error: tell the viewer in one short sentence that it did not go through and offer to retry."""
 
 
 def tool_results_message(feedback: str, *, final: bool) -> str:
