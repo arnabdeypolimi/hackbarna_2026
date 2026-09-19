@@ -11,7 +11,6 @@ flowing so TTS and the avatar stop together.
 import asyncio
 import contextlib
 import json
-import random
 import time
 from typing import Any
 
@@ -24,7 +23,6 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    TTSSpeakFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
@@ -64,9 +62,6 @@ TEMPERATURE = 0.2
 #: Conversation history kept in the prompt (non-system messages). TTFT grows
 #: with context on the shared endpoint: 20 messages measured 2.3 s vs ~0.4 s.
 MAX_HISTORY_MESSAGES = 10
-#: Spoken via TTSSpeakFrame when the LLM has produced no `say` byte after
-#: `filler_after_ms` — masks a slow first token without talking over the reply.
-SLOW_FILLERS = ("One moment.", "Let me think.", "Hmm, one sec.")
 
 
 def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[str, dict]]]:
@@ -311,8 +306,6 @@ class SGRAgentService(LLMService):
         fire: list[asyncio.Task] = []
         first_say_pending = True
         t_req = time.perf_counter()
-        filler = (asyncio.create_task(self._slow_filler(t0, log))
-                  if cycle == 1 and self._cfg.filler_after_ms > 0 else None)
         stream = None
 
         await self.start_ttfb_metrics()
@@ -342,8 +335,6 @@ class SGRAgentService(LLMService):
                                 first_say_pending = False
                                 if first_say is not None:
                                     first_say.set()
-                                if filler is not None:
-                                    filler.cancel()
                                 await self.stop_ttfb_metrics()
                                 marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
                                 log.debug("first say byte", step="say", cycle=cycle,
@@ -387,11 +378,7 @@ class SGRAgentService(LLMService):
                 if streamer.finished:
                     break
         finally:
-            # Covers cancellation during create() too — an orphaned filler used
-            # to speak "One moment." after the turn had been interrupted.
-            if filler is not None:
-                filler.cancel()
-            close = getattr(stream, "close", None)
+            close = getattr(stream, "close", None)  # also on cancellation during create()
             if close is not None:
                 await close()
         if (tail := await sentences.flush()) is not None:  # say never closed: truncated or malformed envelope
@@ -413,15 +400,6 @@ class SGRAgentService(LLMService):
             with contextlib.suppress(Exception):  # failures are logged in dispatch_action
                 await task
         return "".join(raw), results
-
-    async def _slow_filler(self, t0: float, log) -> None:
-        delay = self._cfg.filler_after_ms / 1000 - (time.perf_counter() - t0)
-        if delay > 0:
-            await asyncio.sleep(delay)
-        text = random.choice(SLOW_FILLERS)
-        log.debug("slow filler spoken", step="say", text=text,
-                  ms=round((time.perf_counter() - t0) * 1000))
-        await self.push_frame(TTSSpeakFrame(text))
 
     # --- pieces the tests call directly -------------------------------------
 

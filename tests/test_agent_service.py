@@ -338,31 +338,6 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     assert lane.ingests == []  # the synthetic greeting still is not stored as a user utterance
 
 
-async def test_slow_llm_gets_a_spoken_filler():
-    settings = _settings().model_copy(update={"filler_after_ms": 100})
-    session = SessionState("sess_t", "tok", 0, user_id="u1")
-    # First content chunk only after ~0.35 s: filler must fire, then the real say.
-    slow = FakeOpenAI(['{"intent":"chitchat","say":"Here you go.","actions":[]}'], delay_s=0.35)
-    sink = TimingSink()
-    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None, session,
-                            client=slow, tools=FakeTools())
-    await _run(agent, sink, [LLMContextFrame(context=_ctx("hello"))])
-    kinds = [type(f).__name__ for f in sink.frames]
-    assert "TTSSpeakFrame" in kinds
-    assert kinds.index("TTSSpeakFrame") < kinds.index("AggregatedTextFrame")
-    assert _spoken(sink) == ["Here you go."]
-
-
-async def test_fast_llm_gets_no_filler():
-    settings = _settings().model_copy(update={"filler_after_ms": 500})
-    session = SessionState("sess_t", "tok", 0, user_id="u1")
-    sink = TimingSink()
-    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None, session,
-                            client=FakeOpenAI([PLAY]), tools=FakeTools())
-    await _run(agent, sink, [LLMContextFrame(context=_ctx("play"))])
-    assert not any(type(f).__name__ == "TTSSpeakFrame" for f in sink.frames)
-
-
 async def test_slow_second_cycle_falls_back_to_templated_answer():
     """Cycle 1 is fast; cycle 2 never yields a say byte in time → template + focus, no 3rd call."""
     class TwoSpeeds(FakeOpenAI):

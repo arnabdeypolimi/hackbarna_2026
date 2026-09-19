@@ -20,9 +20,7 @@ class EventKind(StrEnum):
     PLAY_COMPLETED = "play_completed"
     PLAY_ABANDONED = "play_abandoned"
     FOCUS_DWELL = "focus_dwell"
-    SEARCH_ISSUED = "search_issued"
     REC_SHOWN = "rec_shown"
-    REC_ACCEPTED = "rec_accepted"
     #: The viewer declined a title the agent offered ("no, not that one").
     REC_REJECTED = "rec_rejected"
     USER_EVENT = "user_event"

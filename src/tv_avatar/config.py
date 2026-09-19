@@ -99,10 +99,6 @@ class Settings(BaseSettings):
     #: The second SGR cycle (speaking tool results) must produce its first byte
     #: within this budget or the results are spoken from a template instead.
     cycle2_first_byte_s: float = 1.2
-    #: Optional: speak a canned filler if the LLM has said nothing this long after
-    #: the turn opened. Off by default — the SGR envelope's own `say` ("Let me
-    #: look.") is the filler, and a canned one on top was judged annoying.
-    filler_after_ms: int = 0
     log_level: str = "INFO"
 
 
