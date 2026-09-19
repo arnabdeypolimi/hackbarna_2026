@@ -1,5 +1,8 @@
 """HTTP session lifecycle and the control WebSocket endpoint."""
+from pathlib import Path
+
 from fastapi import FastAPI, Query, WebSocket
+from fastapi.staticfiles import StaticFiles
 
 from tv_avatar.config import get_settings
 from tv_avatar.control.channel import ControlChannel
@@ -42,6 +45,10 @@ def create_app(store: SessionStore | None = None) -> FastAPI:
             return
         bus = app.state.manager.bus_for(session_id)
         await ControlChannel(websocket, session, bus).run()
+
+    mock = Path(__file__).resolve().parents[2] / "tools" / "mock_tv_client"
+    if mock.is_dir():
+        app.mount("/mock", StaticFiles(directory=mock, html=True), name="mock")
 
     return app
 
