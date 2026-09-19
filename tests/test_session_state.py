@@ -78,3 +78,15 @@ def test_close_removes_the_session():
     s = store.create(60)
     store.close(s.session_id)
     assert store.get(s.session_id) is None
+
+
+def test_sweep_expired_removes_only_past_expiry_sessions():
+    store = SessionStore()
+    fresh = store.create(ttl_s=3600)
+    stale = store.create(ttl_s=3600)
+    stale.expires_at = 100.0
+
+    assert store.sweep_expired(now=200.0) == [stale.session_id]
+    assert store.get(stale.session_id) is None
+    assert store.get(fresh.session_id) is fresh
+    assert store.sweep_expired(now=200.0) == []

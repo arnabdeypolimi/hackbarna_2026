@@ -33,11 +33,13 @@ def build_pipeline(
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
+    # TODO(phase 2): insert ScreenContextInjector between user_agg and the LLM
+    # so session.render_for_prompt() is injected fresh on every run (spec §4).
     stages = [
         transport.input(),
         build_stt(settings),
         user_agg,
-        StubLLMService(bus=bus),
+        StubLLMService(bus=bus, session=session),
         build_tts(settings),
     ]
     if with_avatar:

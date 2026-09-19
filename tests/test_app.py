@@ -72,3 +72,56 @@ def test_dispatched_command_is_delivered_over_the_socket():
             msg = ws.receive_json()
             assert msg["type"] == "command"
             assert msg["verb"] == "home"
+
+
+# --- lifecycle (review item 3) ----------------------------------------------
+
+import time
+
+
+def test_control_socket_drop_keeps_session_alive_for_reconnect():
+    """Spec §6: a control-socket blip is Degraded, not Closing."""
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        sid = body["session_id"]
+        url = f"/sessions/{sid}/control?token={body['control_token']}"
+        with c.websocket_connect(url) as ws:
+            ws.receive_json()
+        # socket gone; session and bus must both still exist
+        assert app.state.store.get(sid) is not None
+        assert app.state.manager.has(sid)
+        with c.websocket_connect(url) as ws:
+            assert ws.receive_json()["type"] == "agent_status"
+
+
+def test_sweep_reaps_expired_sessions_and_their_buses():
+    app = create_app()
+    with TestClient(app) as c:
+        live = c.post("/sessions").json()["session_id"]
+        stale = c.post("/sessions").json()["session_id"]
+        app.state.store.get(stale).expires_at = time.time() - 1
+
+        swept = app.state.sweep()
+
+        assert swept == [stale]
+        assert app.state.store.get(stale) is None
+        assert not app.state.manager.has(stale)
+        assert app.state.store.get(live) is not None
+        assert app.state.manager.has(live)
+
+
+def test_delete_session_requires_token_and_then_closes_everything():
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        sid, tok = body["session_id"], body["control_token"]
+
+        assert c.delete(f"/sessions/{sid}").status_code == 401
+        assert c.delete(f"/sessions/{sid}", headers={"X-Control-Token": "nope"}).status_code == 401
+        assert c.delete(f"/sessions/{sid}", headers={"X-Control-Token": tok}).status_code == 204
+
+        assert app.state.store.get(sid) is None
+        assert not app.state.manager.has(sid)
+        with c.websocket_connect(f"/sessions/{sid}/control?token={tok}") as ws:
+            assert ws.receive_json()["code"] == "unauthorized"

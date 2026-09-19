@@ -59,3 +59,29 @@ async def test_search_catalog_degrades_on_timeout():
     )
     assert result["status"] == "unavailable"
     assert bus.pending_count() == 0
+
+
+async def test_cancel_turn_releases_a_pending_search_immediately():
+    bus = CommandBus(search_timeout_s=5.0)  # long: the test must not wait this out
+    task = asyncio.create_task(
+        bus.dispatch("search_catalog", {"query": "x"}, turn_id="turn_1")
+    )
+    await asyncio.wait_for(bus.next_outbound(), timeout=0.1)  # handed to the socket
+
+    bus.cancel_turn("turn_1")
+
+    result = await asyncio.wait_for(task, timeout=0.1)
+    assert result["status"] == "cancelled"
+    assert bus.pending_count() == 0
+
+
+async def test_cancel_turn_leaves_other_turns_searches_pending():
+    bus = CommandBus(search_timeout_s=5.0)
+    task = asyncio.create_task(
+        bus.dispatch("search_catalog", {"query": "x"}, turn_id="turn_2")
+    )
+    msg = await asyncio.wait_for(bus.next_outbound(), timeout=0.1)
+    bus.cancel_turn("turn_1")
+    assert bus.pending_count() == 1
+    bus.resolve(msg.id, {"titles": []})
+    assert (await asyncio.wait_for(task, timeout=0.1)) == {"titles": []}
