@@ -14,7 +14,7 @@ The avatar must feel seamless: interruptible mid-sentence, and fast enough that 
 
 ### Non-goals
 
-- The TV frontend itself (a mock client is provided for development and demo).
+- The TV frontend itself — it is a **separately deployed application** with its own repository. This backend's obligation to it is the wire protocol in §7 and the generated type artifacts. A mock client is bundled for development and demo.
 - The content catalog and product data sources. The backend consumes them through a single `search_catalog` tool and through screen state pushed by the client.
 - User accounts, billing, and multi-tenant concerns.
 
@@ -134,6 +134,46 @@ Voice, speed, and language are **pinned for the session**: changing any of them 
 
 Run `SileroVADAnalyzer` **locally in the transport** rather than relying solely on SLNG's server-side VAD. Barge-in detection is the one thing that must not pay a network round-trip — the avatar has to stop the instant the user starts. SLNG's server VAD stays enabled for transcript segmentation, where an extra ~100 ms is invisible.
 
+### Media contract
+
+**Video is continuous for the life of the session.** Once the Anam session connects, `AnamVideoService` forwards decoded audio and video frames for as long as the session is open. When the avatar is not speaking it is still rendering idle motion, so the WebRTC video track never goes silent and the avatar does not pop in and out between turns. Consequences:
+
+- Anam session time and WebRTC bandwidth are a **standing cost** for as long as the overlay is up, not a per-utterance cost.
+- Hiding the avatar when idle is a **frontend** decision — fade the overlay, keep the stream. Tearing down the Anam session would cost seconds of reconnect latency on the next utterance.
+- Anam's idle-loop behavior is inferred from how persistent avatar sessions work, not stated in `pipecat-anam`'s docs. **M1 confirms it by observation.**
+
+**The microphone is always hot.** `transport.input()` feeds audio continuously regardless of whether the avatar is speaking; this is what makes barge-in (§9) possible at any moment.
+
+**Every hop streams**, which is the only reason the §5 latency budget holds — no stage waits for the previous one to complete.
+
+| Hop | Streaming | Granularity |
+|---|---|---|
+| Mic → STT | Yes (WebSocket) | Continuous audio in; partials + finals out |
+| STT → LLM | **Gated by turn** | One LLM run per endpoint, not per partial |
+| LLM → TTS | Yes | Sentence/clause chunks, not tokens |
+| LLM → tool dispatch | Yes | Fires per complete, schema-valid call |
+| TTS → Anam | Yes (WebSocket) | Audio frames as synthesized |
+| Anam → client | Yes (WebRTC) | Continuous synced A/V |
+
+Two qualifications on "everything streams":
+
+1. **STT → LLM batches by turn.** Transcripts arrive as partials, but the aggregator holds them until VAD endpointing reports the user has finished, then fires one LLM run. Running per-partial would multiply cost and answer half-finished sentences. The 300–500 ms endpointing delay is the largest single line in the latency budget; speculative execution on partials is the only place worth optimizing if it must shrink.
+2. **LLM → TTS streams at clause granularity.** Pipecat aggregates tokens to sentence or clause boundaries before synthesis, because word-by-word TTS produces choppy prosody. The avatar begins sentence one while the model writes sentence two — not one token per audio chunk.
+
+Tool calls are dispatched only once **complete and schema-valid** — a partially-streamed `play(title_id=` is never sent. Once valid, dispatch is immediate and does not wait for the rest of the turn, which is what produces the parallelism in §5.
+
+### Frame rate
+
+**Target: 25 fps** (PAL-native, matching European broadcast).
+
+The frame rate is set by Anam's renderer; the pipeline forwards what it decodes. `pipecat-anam`'s docs specify resolution but not output fps, so **M1 measures delivered fps** rather than assuming it. If the source rate exceeds the display rate, match the display to the source — naive frame-dropping produces visible judder on smooth head motion.
+
+**The server performs no per-frame pixel work.** At 768×1152 packed RGB24, 25 fps is ~66 MB/s passing through Python, on the same asyncio event loop as STT, TTS, and LLM streaming. Ten milliseconds of per-frame processing consumes 25% of the loop and surfaces not as dropped video but as **audio stutter and late interruption handling** — the video path and conversational responsiveness compete for the same loop. The video path is therefore a pure passthrough: decode, forward, never touch pixels.
+
+Aspect correction, if needed, is handled by (a) requesting a matching resolution from Anam, or (b) the client's compositing pass, which exists anyway for the masked overlay and runs on the GPU for free.
+
+25 fps is a target, not a guarantee: WebRTC adapts resolution and frame rate under congestion. Instrument **actual delivered fps** in M4 alongside latency metrics.
+
 ---
 
 ## 5. Turn flow
@@ -237,6 +277,7 @@ Both directions use discriminated unions on a `type` field, modelled with Pydant
 
 ```json
 {
+  "v": 1,
   "type": "command",
   "id": "cmd_7",
   "turn_id": "turn_3",
@@ -247,6 +288,18 @@ Both directions use discriminated unions on a `type` field, modelled with Pydant
 ```
 
 `turn_id` is what makes turn-scoped cancellation possible (§9).
+
+### Protocol versioning
+
+The TV frontend is a **separately deployed application** (§1), so the two codebases ship on independent schedules. Every message in both directions carries `"v"`. The backend accepts the current version and rejects unknown ones with an `error` message rather than failing silently on a missing field. Without this, a frontend built against today's argument shape misbehaves invisibly when the backend adds a required one.
+
+### Contract distribution
+
+`agent/commands.py` is the single source of truth for command shapes (§8), but that value only exists inside Python. A build step emits **JSON Schema and TypeScript type definitions** from the Pydantic models as a committed artifact the frontend repository consumes. This extends the no-drift property that the capability manifest gives the prompt: the TV app cannot compile a command the backend would reject. Without generated types the two repositories drift, and the drift is discovered at integration time.
+
+### Control channel authentication
+
+Within a single application `session_id` was effectively private. Across two applications it travels in a URL, so it is not a credential. `POST /sessions` mints a **short-lived control token** bound to the session; the WebSocket rejects connections presenting no token or a token for a different session. This also brings CORS configuration and `wss://` termination into scope — concerns a single-application design would not have.
 
 ---
 
@@ -323,10 +376,28 @@ src/tv_avatar/
     services.py           # SLNG + Anam construction from config
     observers.py          # latency metrics, agent_status emission
 tests/
-tools/mock_tv_client/     # browser page: video + fake grid, speaks the protocol
+tools/
+  mock_tv_client/         # browser page: video + fake grid, speaks the protocol
+  export_schemas.py       # Pydantic models -> JSON Schema + TypeScript types
+contracts/                # generated artifacts, committed, consumed by the TV repo
 ```
 
 Each unit has one purpose and a defined interface: `commands.py` owns the schemas and nothing else imports Pipecat; `channel.py` knows the wire format but not the agent; `builder.py` knows Pipecat but not the protocol. `tools/mock_tv_client/` is not optional scaffolding — it is how the protocol gets exercised before the real TV frontend exists, and how the system is demoed if the frontend slips.
+
+### Configuration and secrets
+
+All configuration is read from the environment through `pydantic-settings` in `config.py`; nothing is hardcoded and no key appears in source. Local development supplies them via `.env`, which is git-ignored; `.env.example` is committed with every key present and every value blank.
+
+| Variable | Purpose |
+|---|---|
+| `SLNG_API_KEY` | SLNG gateway — covers both STT and TTS |
+| `SLNG_BASE_URL` | Regional hub, e.g. `eu.api.slng.ai` (not a secret; defaulted in config) |
+| `ANAM_API_KEY` | Anam session authentication |
+| `ANAM_AVATAR_ID` | Persona selection |
+| *(LLM provider key)* | Named once the provider is chosen (§14) |
+| `SLNG_PROVIDER_KEY` | Optional — BYOK, external routes only |
+
+Startup fails fast on a missing required key rather than surfacing it as a connection error mid-session.
 
 ---
 
@@ -360,18 +431,27 @@ Each unit has one purpose and a defined interface: `commands.py` owns the schema
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| **Version skew.** `pipecat-anam` requires Pipecat ≥ 1.8.0; `pipecat-slng` declares `pipecat-ai>=1.3.0` but is documented as *tested against 1.3.0*. Compatible on paper — the SLNG example already uses the newer `LLMContext` / `LLMContextAggregatorPair` API — but unproven together. | High | M0 exists to prove it on real versions before anything depends on it. Pin exact versions in `pyproject.toml` from day one. |
+| **Prerelease trap.** `pipecat-anam`'s *stable* release (0.1.0) requires `pipecat-ai>=0.0.103` — the legacy Pipecat line. The modern package is the `0.2.0a6` **prerelease**, which requires `pipecat-ai>=1.8.0`. `uv` does not select prereleases by default, so a plain `uv add pipecat-anam` silently installs the legacy version against the wrong Pipecat. | Medium | Pin `pipecat-anam==0.2.0a6` explicitly with prereleases allowed for that package only. Verified at install time by an import-and-version assertion test (Task 1). |
+| **Version skew** between the SLNG and Anam plugins. Resolved as of 2026-09-19: `pipecat-slng` 0.5.2 and `pipecat-anam` 0.2.0a6 both require `pipecat-ai>=1.8.0` and Python ≥3.11. The SLNG *documentation* still says "tested against v1.3.0"; the published package has moved past it. | Low | M0 still proves the combination end to end, but the dependency floors agree. Re-check on any dependency bump. |
 | **Anam interruption / buffer behavior** on barge-in is undocumented. | High | Verified in M1 as an explicit test, not as a side effect. |
 | **Sample-rate alignment** between SLNG TTS output and what Anam expects. | Medium | Set the pipeline sample rate explicitly and pass it to both services rather than relying on defaults. |
 | **Overlay transparency.** WebRTC carries no alpha channel; Anam sends opaque RGB. | Medium | The "transparent overlay" is a client-side masked composite of an opaque portrait feed (cara-4, 768×1152). Documented as a frontend requirement, not a backend one. |
 | **Tool-call chatter** — a weaker model narrating without calling a tool, or inventing `title_id`s. | Medium | Explicit interaction rules in the prompt; validation layer rejects ids absent from screen state or recent search results. |
-| **Aspect-ratio mismatch** between the Anam feed and the overlay slot. | Low | `pipecat-anam` ships a `CenterAspectCropFilter` example that operates on `OutputImageRawFrame`; adopt it if needed. |
+| **Aspect-ratio mismatch** between the Anam feed and the overlay slot. | Low | Request a matching resolution from Anam, or correct it in the client's compositing pass. **Do not** adopt `pipecat-anam`'s `CenterAspectCropFilter` example — per-frame pixel work on the event loop is ruled out by the frame-rate budget in §4. |
+| **Event-loop contention** between the 25 fps video path and conversational responsiveness. | Medium | No per-frame pixel work server-side (§4). Measure delivered fps and interruption latency together in M4 — regressions show up in audio before they show up in video. |
+| **Credentials arrive late.** M0 and M1 — the two highest-risk milestones — both require live keys to validate. | Medium | Build against interfaces meanwhile, but treat key provisioning as the critical path: unretired risk stays unretired until they land. |
 
 ---
 
-## 14. Open questions
+## 14. Deferred: the agent layer
 
-None blocking. Two to settle during implementation:
+The agent — provider choice, prompt wording, tool-calling behavior, and the reasoning quality bar — is **deliberately deferred** and will get its own design pass. Everything in §8 stands as the *interface* the agent must satisfy; how it satisfies it is open.
 
-- **LLM provider and model.** Deliberately deferred (D4). The agent boundary is provider-agnostic; the choice is a config value and a latency measurement in M0.
-- **Product data source** for `show_products` — whether products arrive in the client's screen state or are fetched server-side. Deferred to M5; it does not affect any interface defined above.
+Implementation therefore proceeds in two phases:
+
+- **Phase 1 (this spec's plan): media and control planes, agent stubbed.** `agent/llm.py` ships a placeholder service that satisfies the Pipecat LLM interface — deterministic canned responses and scripted tool calls — so the pipeline, protocol, interruption semantics, and mock client are all fully testable without a provider or a key. A stub is also *better* for this phase: deterministic output makes frame-ordering and interruption tests reproducible in a way a real model never could.
+- **Phase 2 (separate spec + plan): the real agent.** Provider selection, prompt assembly, tool handlers, screen-state injection tuning.
+
+The stub's value outlasts phase 1 — it stays as the test double for the pipeline's integration tests (§12).
+
+Also deferred, and not affecting any interface above: the **product data source** for `show_products` — whether products arrive in the client's screen state or are fetched server-side (M5).
