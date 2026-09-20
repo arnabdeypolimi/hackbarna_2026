@@ -8,6 +8,7 @@ so the two can never disagree about what is on the shelf.
 """
 import json
 import os
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,9 +40,25 @@ class ShopCatalog(RootModel[dict[str, list[Product]]]):
         return bool(self.root.get(title_id))
 
     def render_for_prompt(self, title_id: str) -> str:
-        """The inline shelf summary for a Screen tile: names and prices only. The
-        model needs to recognise "that jacket", not read a product page."""
+        """One shelf as names and prices only. The model needs to recognise "that
+        jacket", not read a product page."""
         return "; ".join(f"{p.name} {p.price}" for p in self.products_for(title_id))
+
+    def render_shelves(self, name_of: Callable[[str], str | None] = lambda _: None) -> str:
+        """The whole shop for the prompt's # Shop section, one line per title.
+
+        Every shelf, not just the tiles on screen: "show me the Barbie merch" has to
+        work while the row is on something else — the TV brings the title into view
+        when the command lands. Six titles today; a real catalogue would list only
+        the shelves near the screen and the ones the viewer named."""
+        if not self.root:
+            return "(no shelves)"
+        lines = []
+        for title_id, products in self.root.items():
+            name = name_of(title_id)
+            label = f"{name} (id={title_id})" if name else f"id={title_id}"
+            lines.append(f"- {label}: " + "; ".join(f"{p.name} {p.price}" for p in products))
+        return "\n".join(lines)
 
     def public(self) -> dict:
         return {"products": {k: [p.model_dump() for p in v] for k, v in self.root.items()}}
