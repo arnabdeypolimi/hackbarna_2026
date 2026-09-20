@@ -5,11 +5,13 @@ through stdlib ``logging``; a single intercept handler on the root logger
 turns those records into loguru records so one sink sees everything and
 ``session_id``/``turn_id`` bindings stay the sole way to correlate a turn.
 """
+import contextlib
 import inspect
 import json
 import logging
 import sys
-from queue import Empty, Full, Queue
+import traceback
+from queue import Full, Queue
 from threading import Event, Thread
 from typing import TYPE_CHECKING
 
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
 
 _policy = ContentPolicy()
 _sink = None
+_STOP = object()  # queued last by stop(): everything before it is still written
 _SAFE_FIELDS = frozenset({
     "session_id", "user_id", "turn_id", "trace_id", "span_id", "event", "step",
     "cycle", "action_index", "intent", "verb", "status", "source", "stop_reason",
@@ -46,11 +49,16 @@ class BackgroundSink:
         self.worker.start()
 
     def write(self, message) -> None:
+        if self.closed.is_set():
+            return
         record = message.record
         data = ({"timestamp": record["time"].isoformat(), "level": record["level"].name,
                  "event": record["extra"].get("event", record["message"]),
                  "message": record["message"],
-                 **{k: v for k, v in record["extra"].items() if k not in _INTERNAL_KEYS}}
+                 **{k: v for k, v in record["extra"].items() if k not in _INTERNAL_KEYS},
+                 **({"exception": _policy.text("".join(traceback.format_exception(
+                     record["exception"].type, record["exception"].value, record["exception"].traceback)))}
+                    if record["exception"] is not None else {})}
                 if self.json_output else str(message))
         try:
             self.queue.put_nowait(data)
@@ -59,12 +67,11 @@ class BackgroundSink:
 
     def _run(self) -> None:
         reported = 0
-        while not self.closed.is_set() or not self.queue.empty():
+        while True:
+            data = self.queue.get()  # blocks; no polling wake-ups from idle sinks
             try:
-                data = self.queue.get(timeout=0.05)
-            except Empty:
-                continue
-            try:
+                if data is _STOP:
+                    return
                 if isinstance(data, Event):
                     data.set()
                     continue
@@ -90,7 +97,11 @@ class BackgroundSink:
         return done.wait(timeout)
 
     def stop(self) -> None:
+        """Drain what is queued, then let the worker exit. Records written after
+        this are dropped."""
         self.closed.set()
+        with contextlib.suppress(Full):  # a stuck stream must not hang the caller too
+            self.queue.put(_STOP, timeout=2.0)
         self.worker.join(timeout=2.0)
 
 
@@ -142,9 +153,10 @@ def _add_ctx(record: dict) -> None:
         value = baggage.get_baggage(attribute)
         if value is not None:
             extra.setdefault(key, value)
+    # The traceback itself stays: `{exception}` in the format prints it in text
+    # mode and the JSON sink serialises it. Only TRACE_CONTENT=false strips it.
     if record["exception"] is not None:
         extra["error_type"] = record["exception"].type.__name__
-        record["exception"] = None
     span_context = trace.get_current_span().get_span_context()
     if span_context.is_valid:
         extra.setdefault("trace_id", format(span_context.trace_id, "032x"))
@@ -175,6 +187,8 @@ def setup_logging(level: str = "INFO", *, settings: "Settings | None" = None,
     logger.remove()
     _policy = ContentPolicy.from_settings(settings) if settings else ContentPolicy(content=content)
     json_output = settings.log_format == "json" if settings else json_output
+    if _sink is not None:
+        _sink.stop()  # otherwise every call leaks a worker thread
     _sink = BackgroundSink(sys.stderr, json_output=json_output)
     logger.configure(patcher=_add_ctx)
     logger.add(_sink, level=level.upper(), format=_format, enqueue=False,

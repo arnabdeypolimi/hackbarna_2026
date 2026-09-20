@@ -195,7 +195,10 @@ class SummaryMemoryLane(BaseMemoryLane):
                     span.set_attribute(ATTR_OBS_STATUS_MESSAGE, type(err).__name__)
                     span.add_event("transcript kept for retry")
                     return
-                await asyncio.to_thread(self._commit, user_id, profile, consumed=len(lines))
+                leftover = await asyncio.to_thread(self._commit, user_id, profile, consumed=len(lines))
+                # Whatever fold consumed the transcript restarts the every-N count;
+                # turns that arrived while summarising are still pending and count.
+                self._since_refresh[user_id] = leftover
                 span.set_attributes({ATTR_MEMORY_PROFILE_CHARS: len(profile), ATTR_OBS_OUTPUT: profile})
             log.info("memory profile updated", turns=len(turns), chars=len(profile),
                      ms=round((time.perf_counter() - t0) * 1000))
@@ -229,9 +232,9 @@ class SummaryMemoryLane(BaseMemoryLane):
             raise ValueError("empty summary")
         return text
 
-    def _commit(self, user_id: str, profile: str, *, consumed: int) -> None:
+    def _commit(self, user_id: str, profile: str, *, consumed: int) -> int:
         """Write the profile and archive the `consumed` turns the summariser saw.
-        Turns appended while it ran stay pending for the next fold."""
+        Turns appended while it ran stay pending for the next fold; returns how many."""
         d = self._dir(user_id)
         (d / PROFILE_FILE).write_text(profile + "\n")
         archive = d / SESSIONS_DIR
@@ -244,6 +247,7 @@ class SummaryMemoryLane(BaseMemoryLane):
         else:
             (d / PENDING_FILE).unlink()
         self._profiles.pop(user_id, None)
+        return len(lines[consumed:])
 
 
 def _log_failure(task: asyncio.Task) -> None:

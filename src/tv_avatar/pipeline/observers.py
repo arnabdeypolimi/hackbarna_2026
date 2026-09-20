@@ -36,17 +36,17 @@ from tv_avatar.session.state import SessionState
 from tv_avatar.tracing import (
     ATTR_LATENCY_PREFIX,
     ATTR_OBS_LEVEL,
-    ATTR_OBS_TYPE,
     EVENT_ERROR,
     LEVEL_ERROR,
     META_N_ERRORS,
     OBS_TYPE_EVENT,
     TurnContextFn,
-    tracer,
+    observation,
 )
 
 
-class _DedupObserver(BaseObserver):
+class DedupObserver(BaseObserver):
+    """An observer sees a frame once per hop it travels; subclasses act on each frame once."""
     def __init__(self, *, dedupe_window: int = 512) -> None:
         super().__init__()
         # Bounded so a long session cannot grow the set without limit.
@@ -63,7 +63,7 @@ class _DedupObserver(BaseObserver):
         return True
 
 
-class SessionEventsObserver(_DedupObserver):
+class SessionEventsObserver(DedupObserver):
     """Translate pipeline frames into protocol events on the session's bus."""
 
     def __init__(self, bus: CommandBus, *, dedupe_window: int = 512) -> None:
@@ -102,7 +102,7 @@ def translate(frame: Frame) -> AgentStatusMsg | TranscriptMsg | None:
             return None
 
 
-class TurnLatencyObserver(_DedupObserver):
+class TurnLatencyObserver(DedupObserver):
     """One structured log line per turn — M4's data source (phase 2, Task 8).
 
     Marks: first interim → LLMContextFrame, LLMContextFrame → first
@@ -189,11 +189,10 @@ class TurnLatencyObserver(_DedupObserver):
         # from here (only its context), so the errors ride on this span instead.
         if (ctx := self._turn_span_context()) is None:
             return
-        attrs = {ATTR_OBS_TYPE: OBS_TYPE_EVENT, META_N_ERRORS: len(self._errors),
+        attrs = {META_N_ERRORS: len(self._errors),
                  **{ATTR_LATENCY_PREFIX + k: v for k, v in marks.items() if k != "n_errors"}}
         if any(fatal for _, fatal in self._errors):
             attrs[ATTR_OBS_LEVEL] = LEVEL_ERROR
-        span = tracer().start_span("turn.latency", context=ctx, attributes=attrs)
-        for message, fatal in self._errors:
-            span.add_event(EVENT_ERROR, {"message": message, "fatal": fatal})
-        span.end()
+        with observation("turn.latency", type=OBS_TYPE_EVENT, parent_context=ctx, **attrs) as span:
+            for message, fatal in self._errors:
+                span.add_event(EVENT_ERROR, {"message": message, "fatal": fatal})

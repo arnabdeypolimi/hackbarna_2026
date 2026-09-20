@@ -5,7 +5,7 @@ to a spoken fallback instead of hanging the turn.
 `run` takes the parsed action (SGR routing: the union member *is* the branch),
 never a verb string plus a dict."""
 import asyncio
-from typing import Any
+from typing import Any, get_args
 
 from loguru import logger
 from opentelemetry import trace
@@ -32,19 +32,19 @@ class InternalTools:
 
     async def run(self, action: InternalAction | BaseModel, user_id: str) -> dict:
         verb = str(getattr(action, "verb", type(action).__name__))
+        # A wrong action type is a routing bug, raised before the degraded-answer
+        # net below — which must still catch a TypeError thrown *inside* a tool.
+        if not isinstance(action, get_args(InternalAction)):
+            raise TypeError(f"{verb} is not an internal action")
         try:
             match action:
                 case RecommendTitles():
                     return await asyncio.wait_for(self._recommend(action, user_id), timeout=self._timeout)
                 case RejectTitle():
                     return self._reject(action, user_id)
-                case _:
-                    raise TypeError(f"{verb} is not an internal action")
         except TimeoutError:
             logger.bind(user_id=user_id).warning("internal tool timed out", verb=verb)
             return {"status": "unavailable", "reason": "timeout"}
-        except TypeError:
-            raise
         except Exception as err:  # noqa: BLE001 — a tool failure is a degraded answer, not a failed turn
             logger.bind(user_id=user_id).opt(exception=err).warning("internal tool failed", verb=verb)
             return {"status": "error", "reason": type(err).__name__}

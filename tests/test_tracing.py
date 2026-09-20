@@ -10,7 +10,7 @@ from tv_avatar.session.state import SessionState
 from tv_avatar.tracing import (
     ATTR_SESSION_ID,
     CONTENT_ATTRS,
-    RedactingSpanProcessor,
+    RedactingSpanExporter,
     build_exporter,
     detached_from_span,
     observation,
@@ -67,10 +67,10 @@ def test_spans_reach_injected_exporter(otel):
     assert "probe" in otel.spans()
 
 
-def test_redacting_processor_strips_content_attrs():
+def test_redacting_exporter_strips_content_attrs():
     sink = InMemorySpanExporter()
     provider = TracerProvider()  # local, never installed globally
-    provider.add_span_processor(RedactingSpanProcessor(SimpleSpanProcessor(sink)))
+    provider.add_span_processor(SimpleSpanProcessor(RedactingSpanExporter(sink)))
     with provider.get_tracer("t").start_as_current_span("llm") as span:
         span.set_attributes({"messages": "[...]", "langfuse.observation.input": "hi",
                              "langfuse.trace.output": "bye",
@@ -89,7 +89,7 @@ def test_redaction_covers_events_status_and_links():
 
     sink = InMemorySpanExporter()
     provider = TracerProvider()
-    provider.add_span_processor(RedactingSpanProcessor(SimpleSpanProcessor(sink)))
+    provider.add_span_processor(SimpleSpanProcessor(RedactingSpanExporter(sink)))
     with provider.get_tracer("t").start_as_current_span("parent") as parent:
         link = Link(parent.get_span_context(), {"text": "private-link"})
         with provider.get_tracer("t").start_as_current_span("child", links=[link]) as span:
@@ -153,7 +153,7 @@ def test_exporter_failure_does_not_escape_into_application():
             raise ConnectionError("export offline")
 
     provider = TracerProvider()
-    provider.add_span_processor(RedactingSpanProcessor(BatchSpanProcessor(BrokenExporter())))
+    provider.add_span_processor(BatchSpanProcessor(RedactingSpanExporter(BrokenExporter())))
     with provider.get_tracer("t").start_as_current_span("work"):
         pass
     provider.force_flush()
@@ -175,10 +175,7 @@ async def test_synthetic_smoke_covers_agent_without_network(otel, monkeypatch):
     assert root.attributes["langfuse.session.id"] == session_id
     assert len(spans["tv.command_result"]) == 3
     sink = InMemorySpanExporter()
-    processor = RedactingSpanProcessor(SimpleSpanProcessor(sink))
-    for group in spans.values():
-        for span in group:
-            processor.on_end(span)
+    RedactingSpanExporter(sink).export([span for group in spans.values() for span in group])
     exported = " ".join(span.to_json() for span in sink.get_finished_spans())
     assert "Find a space film" not in exported, [
         key for span in sink.get_finished_spans() for key, value in span.attributes.items()
@@ -226,3 +223,34 @@ def test_an_app_booted_under_an_existing_provider_does_not_own_it(otel):
     on = _settings(tracing_enabled=True, langfuse_public_key="pk", langfuse_secret_key="sk")
     assert tracing.setup_tracing(on) is False           # already installed by the fixture
     assert tracing._provider is not None
+
+
+def test_redaction_runs_on_the_export_thread_not_in_span_end():
+    """Tracing stays off the media path (CLAUDE.md): the per-span rebuild must
+    happen where the batch processor exports, never inside ``span.end()``."""
+    import threading
+
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    seen: list[str] = []
+    exported = threading.Event()
+
+    class Recording(InMemorySpanExporter):
+        def export(self, spans):
+            seen.append(threading.current_thread().name)
+            result = super().export(spans)
+            exported.set()
+            return result
+
+    sink = Recording()
+    provider = TracerProvider()
+    # A short schedule so the batch worker exports by itself: force_flush()
+    # would drain on the calling thread and prove nothing.
+    provider.add_span_processor(BatchSpanProcessor(RedactingSpanExporter(sink), schedule_delay_millis=10))
+    with provider.get_tracer("t").start_as_current_span("llm") as span:
+        span.set_attribute("langfuse.observation.input", "private")
+    assert exported.wait(5)
+    provider.shutdown()
+    span_out, = sink.get_finished_spans()
+    assert "langfuse.observation.input" not in span_out.attributes
+    assert seen[0] != threading.main_thread().name

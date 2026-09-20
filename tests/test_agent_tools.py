@@ -89,3 +89,17 @@ async def test_run_routes_on_the_typed_action_not_a_verb_string(tmp_path):
     with pytest.raises(TypeError, match="not an internal action"):
         await tools.run(Focus(title_id="1"), "u1")
     await store.close()
+
+
+async def test_a_bug_inside_a_tool_is_a_degraded_answer_and_a_wrong_action_is_not():
+    class Broken:
+        async def recommend(self, ctx):
+            raise TypeError("unsupported operand")
+
+        async def similar(self, title_id, ctx):
+            raise TypeError("unsupported operand")
+
+    tools = InternalTools(Broken(), None)
+    assert await tools.run(RecommendTitles(query="heist"), "u1") == {"status": "error", "reason": "TypeError"}
+    with pytest.raises(TypeError):
+        await tools.run(Focus(title_id="1"), "u1")

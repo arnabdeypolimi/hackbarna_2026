@@ -205,14 +205,12 @@ class ToolResult:
 
     @property
     def is_observation(self) -> bool:
-        """Awaited replies reach the model, including successful TV searches,
-        so the viewer hears the results rather than only the filler. Cancelled
-        replies belong to an interrupted turn and must not start another cycle."""
+        """Every awaited reply reaches the model — a result, an error, or a
+        successful TV search — so the viewer hears what came back rather than
+        only the filler. Cancelled replies belong to an interrupted turn and
+        must not start another cycle."""
         spec = REGISTRY.get(self.verb)
-        if spec is None:
-            return False
-        return self.payload.get("status") != "cancelled" and (
-            spec.returns_observation or (spec.awaits_result and self.failed))
+        return spec is not None and spec.awaits_result and self.payload.get("status") != "cancelled"
 
 
 @dataclass(frozen=True)

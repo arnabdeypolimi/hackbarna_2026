@@ -20,7 +20,7 @@ import asyncio
 import base64
 import contextvars
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -33,13 +33,13 @@ from opentelemetry.sdk.trace import (
     Event,
     ReadableSpan,
     Span,
-    SpanProcessor,
     TracerProvider,
 )
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SpanExporter,
+    SpanExportResult,
 )
 from opentelemetry.trace import (
     Link,
@@ -253,9 +253,9 @@ def setup_tracing(settings: Settings, *, exporter: SpanExporter | None = None) -
     that provider alone.
 
     Built here rather than through ``pipecat.utils.tracing.setup`` because that
-    helper registers its batch processor before returning, and the redacting
-    processor (D18) has to *wrap* the batch processor to see spans first. The
-    resource mirrors Pipecat's so its spans and ours share one service.
+    helper registers its batch processor around the raw exporter, and the
+    redacting exporter (D18) has to sit *inside* it. The resource mirrors
+    Pipecat's so its spans and ours share one service.
     """
     global _provider
     if exporter is None and not tracing_wanted(settings):
@@ -272,11 +272,10 @@ def setup_tracing(settings: Settings, *, exporter: SpanExporter | None = None) -
     # Baggage runs in on_start, so it is registered whether or not content is redacted.
     provider.add_span_processor(BaggageSpanProcessor(ALLOW_ALL_BAGGAGE_KEYS))
     policy = ContentPolicy.from_settings(settings)
-    downstream = RedactingSpanProcessor(BatchSpanProcessor(exporter), policy=policy)
-    provider.add_span_processor(downstream)
+    provider.add_span_processor(BatchSpanProcessor(RedactingSpanExporter(exporter, policy=policy)))
     if settings.otel_console_export:
-        provider.add_span_processor(RedactingSpanProcessor(
-            BatchSpanProcessor(ConsoleSpanExporter()), policy=policy))
+        provider.add_span_processor(BatchSpanProcessor(
+            RedactingSpanExporter(ConsoleSpanExporter(), policy=policy)))
     trace.set_tracer_provider(provider)
     _provider = provider
     logger.info("tracing on: service={} content={}", settings.otel_service_name,
@@ -395,28 +394,28 @@ def detached_from_span() -> context.Context:
     return trace.set_span_in_context(trace.INVALID_SPAN, context.get_current())
 
 
-class RedactingSpanProcessor(SpanProcessor):
-    """Drop ``CONTENT_ATTRS`` from every span before the wrapped processor sees it.
+class RedactingSpanExporter(SpanExporter):
+    """Apply the content policy to every span before the wrapped exporter sees it.
 
-    ``on_end`` receives an immutable ``ReadableSpan``, so the span is rebuilt
-    with a filtered attribute mapping and the copy is forwarded — the SDK's
-    constructor takes every field it exposes (verified on opentelemetry-sdk
-    1.44.0). Wrapping, rather than sitting beside, the batch processor is what
-    makes the policy hold for Pipecat's spans as well as ours.
+    An exporter rather than a ``SpanProcessor``: ``export`` runs on the batch
+    processor's worker thread, whereas a processor's ``on_end`` runs inside
+    ``span.end()`` on the ending task — the JSON parse and rebuild per span
+    (the whole prompt on ``agent.cycle``) would land on the turn's own path.
+    A ``ReadableSpan`` is immutable, so a copy with filtered attributes is
+    forwarded — the SDK's constructor takes every field it exposes (verified
+    on opentelemetry-sdk 1.44.0). Wrapping the exporter, inside the batch
+    processor, is what makes the policy hold for Pipecat's spans as well as ours.
     """
 
-    def __init__(self, downstream: SpanProcessor, *, policy: ContentPolicy | None = None) -> None:
+    def __init__(self, downstream: SpanExporter, *, policy: ContentPolicy | None = None) -> None:
         self._downstream = downstream
         self._policy = policy or ContentPolicy(content=False)
 
-    def on_start(self, span: Span, parent_context: context.Context | None = None) -> None:
-        self._downstream.on_start(span, parent_context)
-
-    def on_end(self, span: ReadableSpan) -> None:
+    def redact(self, span: ReadableSpan) -> ReadableSpan:
         clean = lambda attrs: self._policy.attributes(attrs, content_keys=CONTENT_ATTRS)
         status = Status(span.status.status_code, self._policy.attribute(span.status.description)
                         if self._policy.content else None)
-        redacted = ReadableSpan(
+        return ReadableSpan(
             name=span.name, context=span.context, parent=span.parent, resource=span.resource,
             attributes=clean(span.attributes),
             events=[Event(e.name, clean(e.attributes), e.timestamp) for e in span.events],
@@ -425,7 +424,9 @@ class RedactingSpanProcessor(SpanProcessor):
             start_time=span.start_time, end_time=span.end_time,
             instrumentation_scope=span.instrumentation_scope,
         )
-        self._downstream.on_end(redacted)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._downstream.export([self.redact(span) for span in spans])
 
     def shutdown(self) -> None:
         self._downstream.shutdown()

@@ -32,8 +32,10 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSTextFrame,
 )
-from pipecat.observers.base_observer import BaseObserver, FramePushed
+from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from tv_avatar.pipeline.observers import DedupObserver
 
 #: Transcripts keep arriving after playback ends: partials trail the audio by
 #: ~1.2 s and the final follows finalize by ~0.5 s (turns.py), so echo of the
@@ -97,18 +99,20 @@ class SpokenWindow:
         return sum(w in said for w in heard) / len(heard) >= ratio
 
 
-class BotSpeechObserver(BaseObserver):
+class BotSpeechObserver(DedupObserver):
     """Feed the window from the frames TTS and the output transport emit.
 
-    Frames are seen once per hop; every update here is idempotent so no
-    de-duplication is needed.
+    A TTSTextFrame is observed once per hop it travels (TTS → Anam → output →
+    assistant aggregator); the dedup base applies each frame to the window once.
     """
 
-    def __init__(self, window: SpokenWindow) -> None:
-        super().__init__()
+    def __init__(self, window: SpokenWindow, *, dedupe_window: int = 512) -> None:
+        super().__init__(dedupe_window=dedupe_window)
         self._window = window
 
     async def on_push_frame(self, data: FramePushed) -> None:
+        if not self._first_time(data.frame):
+            return
         match data.frame:
             case TTSTextFrame(text=text):
                 self._window.add(text)

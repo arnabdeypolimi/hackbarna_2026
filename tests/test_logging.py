@@ -73,3 +73,44 @@ def test_bound_context_appears_in_format():
     finally:
         logger.remove(sink_id)
     assert captured and captured[0].startswith("sess_1 turn_1 turn")
+
+
+def test_tracebacks_survive_the_patcher_in_text_and_json(capsys):
+    """An `opt(exception=...)` warning must still show the stack — error_type is
+    an addition for filtering, not a replacement."""
+    import json
+
+    from tv_avatar.logging import flush_logging
+
+    setup_logging("INFO")
+    captured: list[str] = []
+    sink_id = logger.add(captured.append, format="{message} {extra[error_type]}\n{exception}")
+    try:
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logger.opt(exception=True).warning("memory ingest failed")
+    finally:
+        logger.remove(sink_id)
+    assert "ValueError" in captured[0] and "boom" in captured[0] and "Traceback" in captured[0]
+
+    setup_logging("INFO", json_output=True)
+    try:
+        raise ValueError("boom-json")
+    except ValueError:
+        logger.opt(exception=True).warning("memory ingest failed", event="memory.ingest.failed")
+    flush_logging()
+    record = next(json.loads(line) for line in capsys.readouterr().err.splitlines()
+                  if '"memory.ingest.failed"' in line)
+    assert record["error_type"] == "ValueError" and "boom-json" in record["exception"]
+    setup_logging("INFO")
+
+
+def test_setup_logging_stops_the_previous_sink():
+    from tv_avatar import logging as log_module
+
+    setup_logging("INFO")
+    first = log_module._sink
+    setup_logging("INFO")
+    assert log_module._sink is not first
+    assert not first.worker.is_alive()

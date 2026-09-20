@@ -102,3 +102,16 @@ async def test_filter_drops_echo_and_passes_the_viewer():
     viewer = TranscriptionFrame(text="show me comedies instead", user_id="u", timestamp="0")
     await run_test(flt, frames_to_send=[echo, viewer], expected_down_frames=[TranscriptionFrame])
     assert flt.dropped == 1
+
+
+async def test_observer_applies_each_frame_once_across_hops():
+    """One TTSTextFrame is pushed through several processors; the window must
+    not grow a copy per hop."""
+    w = _window()
+    obs = BotSpeechObserver(w)
+    src = FrameProcessor()
+    frame = TTSTextFrame(text="Sleep well tonight.", aggregated_by="sentence")
+    for _ in range(3):
+        await obs.on_push_frame(FramePushed(source=src, destination=src, frame=frame,
+                                            direction=FrameDirection.DOWNSTREAM, timestamp=0))
+    assert len(w._said) == 1

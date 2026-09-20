@@ -71,14 +71,11 @@ class WordsToBargeInUserTurnStartStrategy(MinWordsUserTurnStartStrategy):
 
     def __init__(self, *, min_words: int = DEFAULT_BARGE_IN_MIN_WORDS, **kwargs) -> None:
         super().__init__(min_words=min_words, **kwargs)
-        self._avatar_speaking = False
 
     async def process_frame(self, frame: Frame) -> ProcessFrameResult:
-        if isinstance(frame, BotStartedSpeakingFrame):
-            self._avatar_speaking = True
-        elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._avatar_speaking = False
-        elif isinstance(frame, VADUserStartedSpeakingFrame) and not self._avatar_speaking:
+        # `_bot_speaking` is the parent's own flag, kept from the same
+        # Bot{Started,Stopped}SpeakingFrames — no second copy to drift from it.
+        if isinstance(frame, VADUserStartedSpeakingFrame) and not self._bot_speaking:
             await self.trigger_user_turn_started()
             return ProcessFrameResult.STOP
         return await super().process_frame(frame)
