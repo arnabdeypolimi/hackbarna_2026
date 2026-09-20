@@ -116,10 +116,14 @@ def build_pipeline(
     # turn 1 (observability plan D14). The identity attributes also travel as
     # baggage from `run_session`; passing them here as well guarantees the
     # trace-level view even if the conversation span is created outside it.
+    # The latency observer parents its span on Pipecat's turn span, reachable only
+    # through the task that does not exist yet — hence the late-bound lookup.
+    latency = TurnLatencyObserver(session, turn_context=lambda: (
+        task.turn_trace_observer.get_current_turn_context() if task.turn_trace_observer else None))
     task = PipelineTask(
         Pipeline(stages),
         params=PipelineParams(enable_metrics=True),
-        observers=[SessionEventsObserver(bus), TurnLatencyObserver(session), BotSpeechObserver(spoken)],
+        observers=[SessionEventsObserver(bus), latency, BotSpeechObserver(spoken)],
         enable_tracing=tracing_wanted(settings),
         conversation_id=session.session_id,
         additional_span_attributes=session_attributes(session, settings, half_duplex=half_duplex),

@@ -84,3 +84,38 @@ async def test_latency_observer_logs_one_line_per_turn():
     ], expected_down_frames=None)
     assert observer.last_marks is not None
     assert "ttft_ms" in observer.last_marks and "turn_total_ms" in observer.last_marks
+
+
+async def test_latency_marks_become_a_span_under_the_turn_and_errors_become_events(otel):
+    """One producer, two sinks (D16): the marks logged per turn are also a
+    zero-duration `turn.latency` event parented on Pipecat's turn span, with
+    every ErrorFrame of the turn as a `tv.error` event on it."""
+    from pipecat.frames.frames import ErrorFrame
+
+    from tv_avatar.tracing import observation
+
+    with observation("turn", type="span") as turn:
+        turn_ctx = turn.get_span_context()
+        observer = TurnLatencyObserver(SessionState("sess", "tok", 0, user_id="u1"), turn_context=lambda: turn_ctx)
+        for frame in (UserStartedSpeakingFrame(), LLMContextFrame(context=LLMContext()),
+                      ErrorFrame("SLNG TTS context abandoned"), LLMTextFrame("hi"), BotStoppedSpeakingFrame()):
+            await observer.on_push_frame(FramePushed(source=None, destination=None, frame=frame,
+                                                     direction=FrameDirection.DOWNSTREAM, timestamp=0))
+    latency, = otel.spans()["turn.latency"]
+    assert latency.parent.span_id == turn_ctx.span_id
+    assert latency.attributes["langfuse.observation.type"] == "event"
+    assert latency.attributes["tv.latency.ttft_ms"] == observer.last_marks["ttft_ms"]
+    assert latency.attributes["langfuse.observation.metadata.n_errors"] == 1 == observer.last_marks["n_errors"]
+    assert "langfuse.observation.level" not in latency.attributes           # not fatal
+    assert [(e.name, e.attributes["message"]) for e in latency.events] == [
+        ("tv.error", "SLNG TTS context abandoned")]
+
+
+async def test_latency_observer_without_a_turn_context_opens_no_span(otel):
+    observer = TurnLatencyObserver(SessionState("sess", "tok", 0, user_id="u1"))
+    await run_test(_Passthrough(), observers=[observer], frames_to_send=[
+        UserStartedSpeakingFrame(), LLMContextFrame(context=LLMContext()), LLMTextFrame("hi"),
+        BotStoppedSpeakingFrame(),
+    ], expected_down_frames=None)
+    assert "ttft_ms" in observer.last_marks
+    assert "turn.latency" not in otel.spans()
