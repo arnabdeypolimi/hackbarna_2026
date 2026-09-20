@@ -86,11 +86,11 @@ function ack(id, ok = true, error = null) {
 function apply(msg) {
   const a = msg.args || {};
   switch (msg.verb) {
-    case "navigate":
-      focus = Math.min(TITLES.length - 1, Math.max(0,
-        focus + (a.direction === "right" ? (a.count || 1)
-              : a.direction === "left" ? -(a.count || 1) : 0)));
+    case "navigate": {
+      const step = { right: 1, left: -1 }[a.direction] || 0;
+      focus = Math.min(TITLES.length - 1, Math.max(0, focus + step * (a.count || 1)));
       break;
+    }
     case "focus":
     case "open_details":
       focus = Math.max(0, TITLES.findIndex((t) => t.title_id === a.title_id));

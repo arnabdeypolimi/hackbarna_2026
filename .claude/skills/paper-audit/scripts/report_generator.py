@@ -3,9 +3,16 @@ Report Generator for Paper Audit skill.
 Handles scoring engine, issue aggregation, and Markdown report rendering.
 """
 
+import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
+
+
+def _now() -> datetime:
+    """Local wall-clock time, timezone-aware, so report timestamps are unambiguous."""
+    return datetime.now(timezone.utc).astimezone()
+
 
 # --- Data Models ---
 
@@ -218,7 +225,7 @@ def render_polish_precheck_report(result: AuditResult, precheck: dict) -> str:
 def render_self_check_report(result: AuditResult) -> str:
     """Render a self-check mode Markdown report."""
     scores = calculate_scores(result.issues)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = _now().strftime("%Y-%m-%d %H:%M")
 
     lines = [
         "# Paper Audit Report",
@@ -313,7 +320,7 @@ def render_self_check_report(result: AuditResult) -> str:
 def render_review_report(result: AuditResult) -> str:
     """Render a peer-review simulation Markdown report."""
     scores = calculate_scores(result.issues)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = _now().strftime("%Y-%m-%d %H:%M")
     label = _score_label(scores["overall"])
 
     lines = [
@@ -447,7 +454,7 @@ def render_review_report(result: AuditResult) -> str:
 
 def render_gate_report(result: AuditResult) -> str:
     """Render a quality gate pass/fail Markdown report."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = _now().strftime("%Y-%m-%d %H:%M")
 
     blocking = [i for i in result.issues if i.severity == "Critical"]
     passed = len(blocking) == 0 and all(item.passed for item in result.checklist)
@@ -511,7 +518,7 @@ def render_json_report(result: AuditResult) -> str:
         "language": result.language,
         "mode": result.mode,
         "venue": result.venue,
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": _now().isoformat(),
         "scores": {k: round(v, 2) for k, v in scores.items()},
         "verdict": _score_label(scores["overall"]),
         "issues": [
@@ -558,7 +565,7 @@ def render_reaudit_report(result: AuditResult) -> str:
     if result.venue:
         lines.append(f"**Venue**: {result.venue}")
     lines.append(f"**Previous Report**: `{data.get('previous_report', 'N/A')}`")
-    lines.append(f"**Generated**: {datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}")
+    lines.append(f"**Generated**: {_now().strftime('%Y-%m-%dT%H:%M:%S')}")
     lines.append("")
 
     # Summary
@@ -684,25 +691,24 @@ def render_report(result: AuditResult) -> str:
     if result.scholar_eval_result is not None:
         try:
             from scholar_eval import render_scholar_eval_report
-
+        except ImportError as exc:
+            print(f"[WARN] ScholarEval section skipped: {exc}", file=sys.stderr)
+        else:
             report += "\n\n" + render_scholar_eval_report(result.scholar_eval_result)
-        except Exception:
-            pass
 
     # Append literature comparison section if available
     if result.literature_context is not None:
         try:
             from literature_compare import render_comparison_report
-
+            from literature_search import render_literature_summary
+        except ImportError as exc:
+            print(f"[WARN] literature section skipped: {exc}", file=sys.stderr)
+        else:
             if hasattr(result.literature_context, "comparison_result"):
                 report += "\n\n" + render_comparison_report(
                     result.literature_context.comparison_result
                 )
             elif hasattr(result.literature_context, "filtered_results"):
-                from literature_search import render_literature_summary
-
                 report += "\n\n" + render_literature_summary(result.literature_context)
-        except Exception:
-            pass
 
     return report

@@ -183,7 +183,8 @@ export function dropProfileData(id: string): void {
   try {
     localStorage.removeItem(listKey(id));
     localStorage.removeItem(historyKey(id));
-  } catch {
+  } catch (err) {
     // Storage unavailable: nothing was persisted to clear.
+    console.warn('[profiles] could not clear profile data', id, err);
   }
 }
