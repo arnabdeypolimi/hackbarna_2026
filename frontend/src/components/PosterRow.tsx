@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type WheelEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type WheelEvent } from 'react';
 import type { Title } from '../types/title';
 import { Art } from './Art';
 import { HeartIcon } from './Icons';
@@ -13,6 +13,10 @@ interface Props {
 }
 
 const PEEK = 80; // how much of the previous poster stays visible
+/** How many tiles either side of the selection keep turning before the arc holds its angle.
+    Two: at 4° a step the third tile would sit 12° off the panel's own 9°, and a poster title
+    at 21° to the room loses its thinner strokes on a 720p set. */
+const FAN_REACH = 2;
 const HOVER_ZONE = 0.16; // fraction of the row at each end that scrolls on hover
 const HOVER_SPEED = 11; // px per frame while the pointer rests in a zone
 
@@ -54,6 +58,26 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
     if (!track || !poster) return setOffset(0);
     setOffset(Math.min(limit(), Math.max(0, poster.offsetLeft - padLeft() - (sel ? PEEK : 0))));
   }, [sel, items]);
+
+  /**
+   * The row has to re-measure when the panel around it does. The browse panel is 1792px wide
+   * until the avatar answers and 1204 after, and everything above only recomputes the track's
+   * offset when the selection or the dataset changes — so a row scrolled near its end while
+   * the panel was wide would stay scrolled past the narrow panel's limit, leaving a gap at
+   * the right edge that nothing puts back.
+   */
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      // No glide: this fires on every frame of the room opening, and an eased transform
+      // chasing a value that moves every frame never arrives.
+      setGlide(false);
+      setOffset((o) => Math.min(limit(), Math.max(0, o)));
+    });
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
 
   // Free scrolling: the row moves under a fixed selection, so browsing costs nothing.
   const onWheel = (e: WheelEvent) => {
@@ -103,6 +127,13 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
                 key={it.id}
                 className={`poster f${i === sel ? ' sel' : ''}`}
                 data-poster={i}
+                // Signed steps from the selection and their absolute value, as unitless
+                // numbers. The stylesheet turns them into an angle and a depth, so playback
+                // can flatten the arc by zeroing one token instead of re-rendering the row.
+                style={{
+                  '--fan-steps': Math.max(-FAN_REACH, Math.min(FAN_REACH, i - sel)),
+                  '--fan-away': Math.min(FAN_REACH, Math.abs(i - sel)),
+                } as CSSProperties}
                 aria-label={`${it.title}, ${it.typeLabel}${it.years ? ', ' + it.years : ''}${
                   saved.indexOf(it.id) >= 0 ? ', saved to My List' : ''
                 }`}

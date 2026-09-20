@@ -128,6 +128,41 @@
   --r-tile: 24px;
   --r-pill: 999px;
 
+  /* The room's one turn, and it is a depth, not an angle. Both panels are hinged on the edge
+     nearest the screen's rim, and both far edges recede to this same 150px — which is what
+     makes the seam between them read as one corner. An equal *angle* does not: the panels
+     are 1204 and 548 wide, so 9° on both put their far edges 188px and 86px back, and the
+     avatar panel's edge stood 33px taller than the browse panel's across the gap.
+     The angle each wall needs therefore follows from its own width, and CSS has no asin, so
+     the arithmetic is here rather than in the value:
+       --tilt-main = asin(150 / 1204) =  7.2°
+       --tilt-side = asin(150 /  548) = 15.9°
+     Both far edges then project at the same 0.941 and stand the same 781px tall. Keep the
+     depth under about 190px: past that the browse panel passes 9°, and poster titles at the
+     far end of the row start losing their thinner strokes on a 720p set. */
+  --tilt-depth: 150px;   /* documentation for the two angles below; nothing reads it */
+  --tilt-main: 7.2deg;
+  --tilt-side: 15.9deg;
+  --tilt-lean: 2deg;     /* the chrome bars' extra lean, so they read as lying in the room */
+  --tilt-lift: 24px;     /* and how far off their panel's plane they float */
+
+  /* What stands off a wall, and by how much. Everything angled or lifted on the stage reads
+     from one of these, which is what lets playback fold the whole room flat by zeroing them
+     in a single rule rather than unwinding a dozen transforms. */
+  --fan-step: 4deg;      /* a poster's turn per step away from the selected one */
+  --fan-depth: -18px;    /* and how far it falls back over that step */
+  --sel-lift: 24px;      /* the selected poster, stood proud of the arc */
+  --lean-trailer: -5deg; /* the trailer card, turned back towards the viewer */
+  --lift-trailer: 30px;
+  --lift-face: 40px;     /* the talking head, off the wall it is hung on */
+  /* The face does not counter-turn. It was at 10° against the wall's -15.9°, on the argument
+     that a talking head should face the room — but the video frame then sat at a visibly
+     different angle from the card holding it, and two nested rectangles disagreeing about
+     which way the wall faces is a worse thing to look at than a head in three-quarter view.
+     It keeps the lift: parallel to the wall and standing off it is depth without dissent. */
+  --lean-face: 0deg;
+  --lift-action: 20px;
+
   /* Motion. One curve, four lengths. The curve is an exponential ease-out: things decelerate
      the way objects do. It used to be five different easings — two of them the browser's own
      `ease`, which decelerates too early — and seven lengths written in two unit styles. */
@@ -135,6 +170,14 @@
   --t-quick: 250ms;      /* a toast, a poster taking focus */
   --t-base: 320ms;       /* the row's glide, the avatar's first frame */
   --t-slow: 700ms;       /* the player opening: the largest movement in the app */
+  /* The room folding open or flat, which is slower than anything else here and deliberately
+     so: it is the set turning to face the viewer, not a control responding to a press. It
+     also gets the one curve in this file that is not --ease. --ease is an exponential
+     ease-out, and at this distance it is front-loaded to the point of looking like a snap
+     with a long tail — measured, it was 95% travelled in the first 325ms of 700. A camera
+     move starts at rest and ends at rest, so this one is symmetric. */
+  --t-room: 1200ms;
+  --ease-room: cubic-bezier(0.65, 0, 0.35, 1);
   --t-veil: 1200ms;      /* the moving sky arriving over the still one */
 }
 
@@ -157,7 +200,45 @@ input { caret-color: var(--ink); }
 ::selection { background: var(--primary); color: var(--ink); }
 
 
-#stage { position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
+/* The room stands flat in two situations, and they are the same rule.
+   Playback, because a trailer is the one thing on this screen the viewer is meant to look
+   *through* rather than at, and a turned wall beside a moving image is a distraction with a
+   vanishing point. And the opening, before the avatar has answered: until there is a second
+   wall to turn towards there is no corner, only a panel at an angle for no reason.
+   Zeroing the tokens is the whole of it — the walls swing back to square, the chrome bars
+   lie down, the row's arc opens out and the face settles onto the panel, each over --t-room,
+   because every surface carries a transform transition.
+   The perspective on #stage stays: with nothing rotated there is nothing for it to project,
+   and leaving it avoids re-establishing a containing block mid-transition. */
+#stage[data-flat], #stage[data-solo] {
+  --tilt-main: 0deg; --tilt-side: 0deg; --tilt-lean: 0deg; --tilt-lift: 0px;
+  --fan-step: 0deg; --fan-depth: 0px; --sel-lift: 0px;
+  --lean-trailer: 0deg; --lift-trailer: 0px;
+  --lean-face: 0deg; --lift-face: 0px; --lift-action: 0px;
+}
+
+/* Before the avatar answers, the browse panel has the screen to itself: it runs frame to
+   frame, and the two chrome bars centre on the screen rather than on a panel that is no
+   longer off to one side. Then the room opens — the panel gives back the 588px the avatar
+   panel needs, the bars slide left onto its axis, the walls turn, and the second wall fades
+   up out of nothing. One move, --t-room.
+   .side is hidden, not merely transparent: a transparent panel still takes focus, and the
+   viewer would be able to arrow off the edge of the screen into a panel nobody can see. */
+#stage[data-solo] .main { width: 1792px; }
+#stage[data-solo] .search { left: 720px; }   /* 960 - 480/2 */
+#stage[data-solo] .tabs { left: 530px; }     /* 960 - 860/2 */
+#stage[data-solo] .side { visibility: hidden; opacity: 0; transform: translateX(80px); }
+
+/* The camera for the room. Everything on the stage that is tilted shares this one vanishing
+   point at the centre of the screen, so the two panels read as two walls of the same room
+   rather than two independently skewed rectangles. 2400px is a long lens: enough depth to
+   see, little enough that the far edge of a panel is still only ~7% smaller than the near
+   one, which is what keeps 214px poster art readable at ten feet. The scale() this element
+   already carries is 2D and does not flatten its children's 3D. */
+#stage {
+  position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
+  perspective: 2400px; perspective-origin: 960px 540px;
+}
 
 /* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter.
    It fills the window, not the stage: on a desktop the window is rarely 16:9, and the sky
@@ -186,15 +267,30 @@ input { caret-color: var(--ink); }
 }
 
 .panel { position: absolute; background: var(--glass); border: 1.5px solid var(--glass-edge); border-radius: var(--r-panel); }
-.main { left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0; }
-/* The browse panel's top and height, flat, so the two read as a pair of the same size; its
-   right edge lands on the frame, so the screen has one right edge instead of two. It used
-   to be taller and tilted in perspective for depth, but a tilted panel never looks the same
-   size as a flat one; the depth now comes from the room's lights and the glass over them. */
+.main {
+  left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0;
+  transform-origin: left center; transform: rotateY(var(--tilt-main));
+  transition: transform var(--t-room) var(--ease-room), width var(--t-room) var(--ease-room);
+}
+/* The two panels are the room's two walls, each hinged on the edge nearest the screen's rim
+   and turned away towards the centre: the browse panel on its left edge, this one on its
+   right. The rim edges stay exactly on --frame, so the screen keeps one left edge and one
+   right edge; the turn is absorbed entirely by the centre, where the 40px seam between the
+   flat panels opens into a ~66px gap. Each wall turns by its own angle so that both far
+   edges arrive at the same --tilt-depth and meet the gap at the same height — see the token.
+   They stand ~6% shorter than the near edges. That size difference is the cost of the tilt
+   and it is deliberate — the panels no longer read as a matched pair, they read as depth.
+   Their layout boxes do not move, so every measurement below (and the search and tab bars'
+   centring arithmetic) is still the flat one. Only the paint is turned. */
 .side {
   left: 1308px; top: 110px; width: 548px; height: 830px; overflow: hidden;
   padding: var(--pad-panel) var(--pad-panel) var(--gap-section);
   display: flex; flex-direction: column;
+  transform-origin: right center; transform: rotateY(calc(-1 * var(--tilt-side)));
+  /* visibility with no duration so the panel becomes focusable the instant the room starts
+     opening rather than 700ms into it; it is the solo rule above that hides it again. */
+  transition: transform var(--t-room) var(--ease-room), opacity var(--t-room) var(--ease-room), visibility 0s;
+  perspective: 1600px;
 }
 
 h1 { margin: 0 0 0 var(--pad-text); font-size: var(--t-2); font-weight: var(--w-display); letter-spacing: var(--track-display); line-height: var(--lead-display); }
@@ -202,10 +298,18 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 
 /* Search */
 /* Centred on the browse panel, not on the stage: 64 + 1204/2 = 666, so left = 666 - 480/2.
-   It searches that panel's row, and reads as belonging to it. */
+   It searches that panel's row, and reads as belonging to it.
+   It also stands on that panel's plane. The hinge is the panel's left edge, which is 362px
+   to the left of this field's own box — hence the negative transform-origin. Sharing the
+   hinge rather than spinning on its own centre is what makes the bar look like it is lying
+   in the room instead of skewed for decoration. The lean and the lift float it off the
+   glass, the way the bar is drawn above the panel rather than printed on it. */
 .search {
   left: 426px; top: var(--gap-block); width: 480px; height: 70px; border-radius: var(--r-pill);
   display: flex; align-items: center; gap: var(--gap-group); padding: 0 var(--inset-lg);
+  transform-origin: -362px center;
+  transform: rotateY(var(--tilt-main)) rotateX(var(--tilt-lean)) translateZ(var(--tilt-lift));
+  transition: transform var(--t-room) var(--ease-room), left var(--t-room) var(--ease-room);
 }
 .search svg { flex: none; opacity: 0.85; }
 .search input { flex: 1; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: var(--t-5); }
@@ -214,7 +318,16 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 
 
 /* Poster row */
-.rowwrap { position: relative; height: 344px; margin-top: var(--gap-group); overflow: hidden; }
+/* The row is its own camera, not the stage's. It has to be: overflow: hidden here (and on
+   .side, and on .face) forces transform-style to flat, so a poster's depth can never come
+   down the chain from #stage — it has to be born inside this box. The vanishing point sits
+   on the selected tile, 268px in: --pad-text 56 + the 80px of peek the track leaves + half
+   a selected poster. Tiles either side turn away from that point, so the row curves around
+   whatever the viewer is on rather than around the middle of the panel. */
+.rowwrap {
+  position: relative; height: 344px; margin-top: var(--gap-group); overflow: hidden;
+  perspective: 1200px; perspective-origin: 268px 50%;
+}
 /* With no posters there is no detail block under the row either, so the row takes the panel
    it would otherwise leave empty and the message sits in the middle of it. */
 .rowwrap.bare { height: 660px; }
@@ -223,10 +336,25 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
   display: flex; align-items: center; gap: var(--gap-block); padding: 0 var(--pad-text);
   transition: transform var(--t-base) var(--ease);
 }
-.poster { position: relative; flex: none; width: 214px; height: 272px; border-radius: var(--r-tile); overflow: hidden; background: var(--card-b); transition: transform var(--t-quick) var(--ease); }
+/* PosterRow hands each tile two unitless numbers — --fan-steps, signed and clamped to ±2,
+   and --fan-away, its absolute value — and the angle is worked out here rather than there.
+   Inline numbers, not an inline transform: an inline transform beats every stylesheet rule,
+   which would have silently killed the :focus grow below and the selected tile's lift. */
+.poster {
+  position: relative; flex: none; width: 214px; height: 272px; border-radius: var(--r-tile);
+  overflow: hidden; background: var(--card-b); transition: transform var(--t-quick) var(--ease);
+  --fan-a: calc(var(--fan-steps, 0) * var(--fan-step));
+  --fan-d: calc(var(--fan-away, 0) * var(--fan-depth));
+  transform: rotateY(var(--fan-a)) translateZ(var(--fan-d));
+}
 /* A larger tile carries a proportionally larger corner, so the two read as the same shape. */
-.poster.sel { width: 262px; height: 334px; border-radius: 28px; }
-.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); transform: scale(1.03); }
+/* 24px of lift and no more: the tile is already 334px inside a 344px row, and coming forward
+   magnifies it — 40px grew it past the row's edge and the browser clipped the bottom. */
+.poster.sel { width: 262px; height: 334px; border-radius: 28px; transform: translateZ(var(--sel-lift)); }
+.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); transform: rotateY(var(--fan-a)) translateZ(var(--fan-d)) scale(1.03); }
+/* Named explicitly, because .poster:focus is declared after .poster.sel and weighs the same:
+   without this the selected tile dropped back onto the wall the moment it took focus. */
+.poster.sel:focus { transform: translateZ(var(--sel-lift)) scale(1.03); }
 
 /* Over artwork of any colour, so the mark brings its own dark ground. */
 .savemark {
@@ -262,7 +390,10 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 .data-state { height: 560px; }
 
 /* Detail */
-.detail { display: flex; gap: var(--gutter); padding: var(--gap-block) var(--pad-text) 0; }
+/* The detail block's own camera, for the trailer card below. The text column is deliberately
+   left on the wall: the synopsis and the metadata row are the smallest type on the screen and
+   they are already riding the panel's 9°, which is as much as they can take at ten feet. */
+.detail { display: flex; gap: var(--gutter); padding: var(--gap-block) var(--pad-text) 0; perspective: 1600px; }
 .info { flex: 1; min-width: 0; }
 /* Two lines, always reserved: a third of this catalogue is franchise titles that need the
    second one, and the part number at the end is what tells two of them apart. Reserved rather
@@ -298,7 +429,15 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 /* A filled heart is the saved state; the row carries the same mark on the poster itself. */
 .btn.saved svg { fill: var(--key-red); stroke: var(--key-red); }
 
-.trailer { position: relative; flex: none; width: 470px; height: 268px; border-radius: var(--r-card); overflow: hidden; align-self: flex-start; }
+/* Hung off the wall and turned back towards the viewer, so the one thing on this panel that
+   is a moving image is also the one thing not lying flat against the glass. */
+.trailer {
+  position: relative; flex: none; width: 470px; height: 268px; border-radius: var(--r-card);
+  overflow: hidden; align-self: flex-start;
+  transform-origin: right center;
+  transform: rotateY(var(--lean-trailer)) translateZ(var(--lift-trailer));
+  transition: transform var(--t-room) var(--ease-room);
+}
 .trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .trailer .scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
 .trailer .bar { position: absolute; left: var(--gap-group); right: var(--gap-group); bottom: var(--gap-group); display: flex; align-items: center; justify-content: space-between; font-size: var(--t-6); }
@@ -308,7 +447,11 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 
 /* Side panel */
 .label { margin: var(--gap-block) 0 0; font-size: var(--t-6); line-height: var(--lead-snug); color: var(--ink-2); }
-.side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: auto; padding-top: var(--gap-group); }
+.side-actions {
+  display: flex; flex-direction: column; gap: var(--gap-item); margin-top: auto; padding-top: var(--gap-group);
+  transform: translateZ(var(--lift-action));
+  transition: transform var(--t-room) var(--ease-room);
+}
 
 /* The avatar panel keeps the resume panel's slot, glass and tilt. The room has one
    right-hand plane and the face belongs on it, not floating in front of it. */
@@ -325,9 +468,13 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
    48 of gaps. It was overflowing by 65px into `overflow: hidden`, which cut the language
    picker in half. Everything below the face is the size it needs; the face gives up the
    difference. */
+/* Lifted off the wall, and parallel to it: the frame's edges stay square to the card that
+   holds them, and the depth comes from the lift alone. */
 .face {
   position: relative; flex: 0 1 570px; min-height: 240px;
   border-radius: var(--r-card); overflow: hidden; background: var(--scrim);
+  transform: rotateY(var(--lean-face)) translateZ(var(--lift-face));
+  transition: transform var(--t-room) var(--ease-room);
 }
 .face video {
   display: block; width: 100%; height: 100%;
@@ -388,6 +535,11 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 .tabs {
   left: 236px; top: 956px; width: 860px; height: 92px; border-radius: var(--r-pill);
   display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-group);
+  /* Same hinge as the search field, 172px to the left of this bar's box, and leaning the
+     other way: it sits below the eye, so its near edge is the one that drops towards us. */
+  transform-origin: -172px center;
+  transform: rotateY(var(--tilt-main)) rotateX(calc(-1 * var(--tilt-lean))) translateZ(var(--tilt-lift));
+  transition: transform var(--t-room) var(--ease-room), left var(--t-room) var(--ease-room);
 }
 .tab { height: 62px; padding: 0 var(--inset-sm); border-radius: var(--r-pill); font-size: var(--t-6); font-weight: var(--w-control); color: var(--ink-2); white-space: nowrap; }
 .tab.cur { background: var(--primary); color: var(--ink); }
@@ -611,4 +763,7 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
      setting exists for. Its chrome fades on a delay, which has to go with it or the controls
      arrive late on a player that is already open. */
   .track, .poster, .toast, .player, .playertop, .playerbar, .bigplay { transition: none; }
+  /* The room opening is the same size of movement as the player, and the same argument: the
+     state it arrives at is correct, so cut to it. */
+  .main, .side, .search, .tabs, .trailer, .face, .side-actions { transition: none; }
 }

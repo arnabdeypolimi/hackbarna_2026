@@ -56,8 +56,8 @@ Five surfaces:
    track slides under a fixed selection point.
 2. **Detail block** — metadata, genre chips, clamped synopsis, Watch / Save, and a
    trailer card.
-3. **Resume panel** — "You watched last time", the browse panel's height and flat beside
-   it, with continue / episodes / remind actions on its floor.
+3. **Resume panel** — "You watched last time", the browse panel's height beside it and
+   turned to face the same centre, with continue / episodes / remind actions on its floor.
 4. **Trailer player** — expands *out of the trailer card* to fill the main panel, with
    custom transport chrome over a YouTube embed.
 5. **Tab bar + search** — Popular, Top rated, New releases, My List.
@@ -375,9 +375,64 @@ treatments: buttons **invert to solid white**; images take a **5 px white ring**
 selected poster is also physically larger (262×334 vs 214×272), so the selection reads
 from across a room, even in peripheral vision.
 
-**Depth** — comes from the room: a moving sky, lights on it, and smoked glass over it. The
-resume panel used to be tilted in perspective for the same effect, but a tilted panel never
-reads as the same size as the flat browse panel beside it, so it stands flat and level now.
+**Depth** — the stage is a room seen through a 2400 px lens (`perspective` on `#stage`,
+vanishing point dead centre), and the two panels are its two walls. Each is hinged on the
+edge nearest the screen's rim and turned away towards the middle: the browse
+panel on its left edge, the avatar panel on its right. What the two share is a *depth*, not
+an angle: both far edges recede to `--tilt-depth` (150 px), so each wall's angle follows from
+its own width — 7.2° across the 1204 px browse panel, 15.9° across the 548 px avatar panel.
+An equal angle on both was the first attempt and it was wrong: it put the far edges 188 px
+and 86 px back, and the avatar panel's edge stood 33 px taller than the browse panel's across
+the gap, so the seam read as two unrelated skews instead of one corner. Their layout boxes never move, so
+every measurement in this document is still the flat one — only the paint is turned. The
+search field and the tab bar stand on the browse panel's plane, hinged on the same edge and
+floated `--tilt-lift` off it, which is why they read as slabs lying in the room rather than
+chrome pasted on the glass.
+
+The cost is deliberate and worth naming: a turned panel does not read as the same size as
+the one beside it, and the far edge of each stands about 7% shorter than its near edge. An
+earlier revision flattened both panels for exactly that reason. The tilt is back because
+depth from the room alone — sky, lights, smoked glass — never gave the screen a floor.
+Overlays (Who's watching?, the theme picker, the exit dialog, the full-screen player) stay
+flat and level: they are the one thing on the stage that is in front of the room, not in it.
+
+Inside the walls, three more surfaces have a plane of their own. The poster row curves around
+whatever is selected — `--fan-step` (4°) of turn and `--fan-depth` (−18 px) of retreat per
+tile, holding after two — while the selected tile comes `--sel-lift` forward and stands
+square, so the selection is marked by depth as well as by size. The trailer card hangs off
+the browse panel, turned back towards the viewer. The talking head lifts `--lift-face` off
+the avatar panel and stays parallel to it. It briefly turned 10° back against the wall's
+−15.9°, on the argument that a talking head should face the room — but the video frame then
+sat at a visibly different angle from the card holding it, and two nested rectangles
+disagreeing about which way the wall faces is worse to look at than a head in three-quarter
+view. Depth from the lift alone. Each of those surfaces carries its own `perspective`
+rather than sharing the stage's: `.rowwrap`, `.side` and `.face` are all `overflow: hidden`,
+which forces `transform-style: flat` and severs any 3D chain coming down from `#stage`.
+
+**The room opens once, when the avatar arrives.** From the moment a profile is pressed until
+the avatar's phase settles, the stage carries `data-solo`: the browse panel runs frame to
+frame at 1792 px, the search field and tab bar centre on the screen, everything stands flat,
+and the avatar panel is `visibility: hidden` — hidden rather than transparent, so the remote
+cannot arrow off the edge of the screen into a panel nobody can see. Then the room opens as
+one move: the panel gives back the 588 px the second wall needs, the bars slide onto its
+axis, both walls turn, and the avatar panel fades up.
+
+`error` counts as arrived, because with no backend the panel reads "Backend not running" and
+that belongs in the room, not behind an intro that never ends; a 7-second cap covers a
+connect that hangs without ever failing. It is latched: switching profile restarts the
+session and pushes the phase back to `connecting`, and the room collapsing behind the picker
+to re-open as the viewer left it would be a worse thing than a missing flourish. The opening
+belongs to arriving at the television, not to every session on it.
+
+**Playback folds the room flat**, the same rule and the same tokens. A moving image is the
+one thing on this screen the viewer looks *through* rather than at, and a turned wall beside
+it is a distraction with a vanishing point. The room unfolds on close.
+
+Both folds run on `--t-room` (1200 ms) and `--ease-room`, the one curve in the stylesheet
+that is not `--ease`. `--ease` is an exponential ease-out, and over a movement this large it
+is front-loaded to the point of reading as a snap with a long tail — measured, 95% travelled
+in the first 325 ms of 700. `--ease-room` is symmetric: 8% at 300 ms, 52% at the midpoint,
+at rest by 1200. A camera move starts at rest and ends at rest.
 
 **Radii** — large and consistent: 48 px panels, 24–30 px cards, full pills on buttons.
 

@@ -93,6 +93,29 @@ export default function App() {
     userId: activeId, commands: tv, ready: viewerChosen, videoEnabled: avatarVideo,
   });
 
+  /**
+   * The room opens once, when the avatar has finished arriving. Until then the browse panel
+   * has the whole screen and stands flat: there is no second wall to turn towards yet, and a
+   * panel at an angle beside empty space is an angle for no reason.
+   *
+   * `error` counts as arrived. With no backend the avatar panel reads "Backend not running",
+   * and that belongs in the room rather than behind an intro that never ends. So does the
+   * timeout below, for the case the phase never settles at all — a WebRTC connect that hangs
+   * rather than failing. Seven seconds is past the slowest healthy connect measured here.
+   *
+   * Latched, because switching profile restarts the session and pushes the phase back to
+   * `connecting`: the room would collapse behind the picker and re-open as the viewer left
+   * it. The opening belongs to arriving at the television, not to every session on it.
+   */
+  const [roomOpen, setRoomOpen] = useState(false);
+  const settled = avatar.phase === 'live' || avatar.phase === 'blocked' || avatar.phase === 'error';
+  useEffect(() => {
+    if (roomOpen || !viewerChosen) return;
+    if (settled) return setRoomOpen(true);
+    const id = window.setTimeout(() => setRoomOpen(true), 7000);
+    return () => window.clearTimeout(id);
+  }, [roomOpen, viewerChosen, settled]);
+
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
   const catalog = useMemo(() => catalogFor(items, profile), [items, profile]);
@@ -539,7 +562,8 @@ export default function App() {
       {/* Outside the stage so it fills the window, whatever shape a desktop gives it; the stage scales inside. */}
       {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
       <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
-      <Stage ref={stageRef}>
+      {/* Any trailer, inline or full: while a moving image is on screen the room stands square. */}
+      <Stage ref={stageRef} flat={!!player} solo={!roomOpen}>
         <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
         <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={onFile} />
 
