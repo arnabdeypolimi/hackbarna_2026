@@ -3,7 +3,7 @@ import type { Profile, ProfileKind } from '../types/title';
 import {
   AVATAR_COLORS, KIND_LABEL, MAX_PROFILES, NAME_MAX, adultCount, initials, newProfile,
 } from '../lib/profiles';
-import { CheckIcon, CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './Icons';
+import { CheckIcon, CloseIcon, PencilIcon, PlusIcon, TrashIcon, VideoIcon, VideoOffIcon } from './Icons';
 import type { ToastKind } from './Toast';
 
 const KINDS: ProfileKind[] = ['adult', 'kids'];
@@ -23,6 +23,9 @@ interface Props {
   onSave: (list: Profile[]) => void;
   onDelete: (id: string) => void;
   onNotice: (message: string, kind?: ToastKind) => void;
+  /** The set's talking-head setting. Off builds the session without an avatar at all. */
+  avatarVideo: boolean;
+  onAvatarVideo: (on: boolean) => void;
 }
 
 /**
@@ -30,7 +33,10 @@ interface Props {
  * grid in manage mode, and the form for one profile. Back unwinds them in that order,
  * which is why App asks the overlay first before closing it.
  */
-export function Profiles({ open, profiles, activeId, scopeRef, backRef, onPick, onSave, onDelete, onNotice }: Props) {
+export function Profiles({
+  open, profiles, activeId, scopeRef, backRef, onPick, onSave, onDelete, onNotice,
+  avatarVideo, onAvatarVideo,
+}: Props) {
   const [manage, setManage] = useState(false);
   const [draft, setDraft] = useState<Profile | null>(null);
   const [adding, setAdding] = useState(false);
@@ -176,6 +182,18 @@ export function Profiles({ open, profiles, activeId, scopeRef, backRef, onPick, 
       </div>
       <button className="btn f pmanage" onClick={() => setManage(!manage)}>
         {manage ? <><CheckIcon />Done</> : <><PencilIcon />Manage profiles</>}
+      </button>
+      {/* The set's own setting, in the corner rather than among the viewers: it belongs to
+          the television, and this is the screen everyone passes through on the way in. The
+          icon carries the state as well as the fill — the corner has no label beside it. */}
+      <button
+        className={`btn f pvideo${avatarVideo ? ' cur' : ''}`}
+        aria-label={`Avatar video, ${avatarVideo ? 'on' : 'off'}`}
+        aria-pressed={avatarVideo}
+        onClick={() => onAvatarVideo(!avatarVideo)}
+      >
+        {avatarVideo ? <VideoIcon /> : <VideoOffIcon />}
+        Avatar video
       </button>
     </div>
   );

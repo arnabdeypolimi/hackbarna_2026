@@ -10,10 +10,30 @@ import { dispatchCommand, type CommandHandler } from './useTvControl';
 // A property of the television, not of a profile: whoever sits down next hears the
 // language the set was left speaking.
 const LANG_KEY = 'tv.avatar.language';
+// The same kind of property, and read by "Who's watching?" before any session exists,
+// which is why loading it does not belong to this hook alone.
+const VIDEO_KEY = 'tv.avatar.video';
+
+export const loadAvatarVideo = (): boolean => readJSON<boolean>(VIDEO_KEY, true);
+export const saveAvatarVideo = (on: boolean): void => writeJSON(VIDEO_KEY, on);
+
+// The talking head is a property of the session, not of the element showing it: the offer
+// carries `avatar=false` and the backend builds the pipeline without one, so nothing is
+// generated and no Anam session is minted. Turning it on or off therefore needs a new
+// session, the same as changing language does.
 
 export interface AvatarOptions {
   /** The viewer's profile id; a change restarts the session under the new identity. */
   userId: string;
+  /**
+   * Whether a viewer has been chosen yet. The app opens on "Who's watching?", and a session
+   * is a paid one under a particular identity, so there is nothing to connect for until
+   * somebody has said who they are. It also saves a session: connecting on mount and then
+   * picking a profile used to mint one under the restored id and immediately replace it.
+   */
+  ready: boolean;
+  /** Whether the talking head is shown. Off keeps the voice and stops the decode. */
+  videoEnabled: boolean;
   /**
    * What the TV does with each command. A ref, not a value: App reassigns it every render
    * so the socket callback always sees the latest closures without reconnecting.
@@ -24,7 +44,7 @@ export interface AvatarOptions {
 export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOptions): AvatarView {
   const [config, setConfig] = useState<BackendConfig | null>(null);
   const [phase, setPhase] = useState<Phase>('off');
-  const [message, setMessage] = useState('Starting…');
+  const [message, setMessage] = useState('Choose who is watching to start.');
   const [status, setStatus] = useState<AgentState>('idle');
   const [lastLine, setLastLine] = useState('');
   const [language, setLanguageState] = useState(() => readJSON<string>(LANG_KEY, ''));
@@ -39,6 +59,9 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
   const lang = useRef(language);
   const user = useRef(opts.userId);
   user.current = opts.userId;
+  // Read from the connect callback, which must not be rebuilt when the setting changes.
+  const wantVideo = useRef(opts.videoEnabled);
+  wantVideo.current = opts.videoEnabled;
   const commands = opts.commands;
 
   const choose = (code: string) => {
@@ -74,6 +97,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
         avatar: who.id,
         language: code,
         userId: user.current,
+        video: wantVideo.current,
         onStatus: (s) => { if (mineStill()) setStatus(s); },
         onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
         onCommand: (m) => {
@@ -103,6 +127,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
       // rather than leaving it running and unreferenced.
       if (!mineStill()) { live.close(); return; }
       session.current = live;
+      // Attached either way: with no avatar the stream is the voice alone.
       el.srcObject = live.stream;
       // Autoplay may be refused when nothing the viewer did started this — the app
       // connects on load, so that is the normal case, not the exception. The session is
@@ -162,16 +187,27 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     await start(cfg, lang.current);
   }, [start]);
 
+  // Boots once, on the first render where a viewer has been chosen — not on mount, because
+  // until then there is no identity to open a session under. Guarded by a ref rather than the
+  // dependency list: `ready` can go false again (the picker reopens to switch viewer) and that
+  // must not tear down or re-open a live session.
+  const booted = useRef(false);
   useEffect(() => {
     mounted.current = true;
-    void boot();
+    if (opts.ready && !booted.current) {
+      booted.current = true;
+      void boot();
+    }
     return () => {
       mounted.current = false;
-      gen.current++;
-      session.current?.close();
-      session.current = null;
     };
-    // Mount only: re-running this would open a second session.
+  }, [opts.ready, boot]);
+
+  // Closing the session belongs to unmount alone; the effect above reruns when `ready` moves.
+  useEffect(() => () => {
+    gen.current++;
+    session.current?.close();
+    session.current = null;
   }, []);
 
   // A different viewer is a different backend identity (history, memory), so the session
@@ -182,6 +218,15 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     if (firstUser.current) { firstUser.current = false; return; }
     if (config && config.configured && session.current) void start(config, lang.current);
   }, [opts.userId]);
+
+  // Reopening "Who's watching?" mid-session and flipping this rebuilds the pipeline, exactly
+  // as a language change does. Skipped on the first run — boot() has not happened yet on the
+  // launch path, and when it has there is nothing to replace.
+  const firstVideo = useRef(true);
+  useEffect(() => {
+    if (firstVideo.current) { firstVideo.current = false; return; }
+    if (config && config.configured && session.current) void start(config, lang.current);
+  }, [opts.videoEnabled]);
 
   // Stable across renders so effects keyed on it (the screen-state push) do not refire.
   const send = useCallback((msg: Outbound) => { session.current?.send(msg); }, []);
@@ -225,6 +270,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     lastLine,
     languages: config ? languageOptions(config) : [],
     language,
+    videoEnabled: opts.videoEnabled,
     setLanguage,
     retry,
     send,

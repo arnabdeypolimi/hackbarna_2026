@@ -201,8 +201,10 @@ h1 { margin: 0 0 0 var(--pad-text); font-size: var(--t-2); font-weight: var(--w-
 h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-tight); }
 
 /* Search */
+/* Centred on the browse panel, not on the stage: 64 + 1204/2 = 666, so left = 666 - 480/2.
+   It searches that panel's row, and reads as belonging to it. */
 .search {
-  left: 720px; top: var(--gap-block); width: 480px; height: 70px; border-radius: var(--r-pill);
+  left: 426px; top: var(--gap-block); width: 480px; height: 70px; border-radius: var(--r-pill);
   display: flex; align-items: center; gap: var(--gap-group); padding: 0 var(--inset-lg);
 }
 .search svg { flex: none; opacity: 0.85; }
@@ -286,7 +288,10 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 /* .tab.cur is listed here as well as on its own below. Both selectors weigh the same, so the
    later one wins, and .tab.cur is declared further down: without this the current tab — the
    one a viewer arrows onto first — showed no focus state at all. */
-.btn:focus, .tab:focus, .tab.cur:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+.btn:focus, .btn.cur:focus, .tab:focus, .tab.cur:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+/* Declared after the focus rule and weighing the same, so `.btn.cur:focus` above has to be
+   named explicitly — this is the pair that left the current tab with no focus state at all. */
+.btn.cur { background: var(--primary); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
 .btn.primary:focus { box-shadow: none; }
 /* Delete and Exit cost something. Focus makes that plain instead of looking like consent. */
 .btn.danger:focus { background: var(--alert); color: #fff; }
@@ -375,11 +380,13 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
 .lang:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); box-shadow: none; }
 
 /* Tab bar */
-/* Centred on the screen, not on the browse panel: it is the bar for the whole screen. A 16px
-   gap to the panels against 32px to the screen edge is what keeps it reading as the bottom
-   chrome of the stage rather than a third panel. */
+/* Centred on the browse panel, on the same 666 axis as the search field above it: four of its
+   five controls filter that panel's row, so the bar lines up with what it acts on rather than
+   with the stage. 236 = 666 - 860/2, and its right edge lands at 1096, inside the panel. A
+   16px gap to the panels against 32px to the screen edge keeps it reading as bottom chrome
+   rather than a third panel. */
 .tabs {
-  left: 530px; top: 956px; width: 860px; height: 92px; border-radius: var(--r-pill);
+  left: 236px; top: 956px; width: 860px; height: 92px; border-radius: var(--r-pill);
   display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-group);
 }
 .tab { height: 62px; padding: 0 var(--inset-sm); border-radius: var(--r-pill); font-size: var(--t-6); font-weight: var(--w-control); color: var(--ink-2); white-space: nowrap; }
@@ -524,6 +531,9 @@ h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-h
   content: ''; display: block; width: 28px; height: 3px; margin: 10px auto 0; border-radius: 2px; background: var(--ink);
 }
 .pmanage { margin-top: var(--gap-major); }
+/* Bottom right of the picker, on the frame's edge and the tab bar's bottom line, so it sits
+   where the screen's chrome sits rather than in the middle with the viewers. */
+.pvideo { position: absolute; right: var(--frame); bottom: 32px; }
 
 /* One profile's form */
 .pform { position: relative; width: 760px; padding: var(--pad-panel); background: var(--solid); }

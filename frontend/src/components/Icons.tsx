@@ -39,6 +39,12 @@ export const CheckIcon = () => (
 export const TrashIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M4 7h16M10 7V5h4v2M6.5 7l1 13h9l1-13M10 11v6M14 11v6" /></svg>
 );
+export const VideoIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><rect x="3" y="6" width="13" height="12" rx="2.5" /><path d="m16 11 5-3v8l-5-3z" /></svg>
+);
+export const VideoOffIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M16 10.5V8a2 2 0 0 0-2-2H8.5M3 6.5V16a2 2 0 0 0 2 2h9M21 8l-5 3 5 3V8z" /><path d="m3 3 18 18" /></svg>
+);
 export const CalendarIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><rect x="4" y="5" width="16" height="15" rx="2.5" /><path d="M4 10h16M8 3v4M16 3v4" /></svg>
 );

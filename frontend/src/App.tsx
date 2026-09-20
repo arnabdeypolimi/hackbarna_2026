@@ -24,7 +24,7 @@ import { Profiles } from './components/Profiles';
 import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
 import { Toast, useToast } from './components/Toast';
-import { useAvatar } from './hooks/useAvatar';
+import { loadAvatarVideo, saveAvatarVideo, useAvatar } from './hooks/useAvatar';
 import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
 import { deriveScreenState, fromWireId, searchCatalog, STOPPED, toWireId, type PlaybackReport } from './lib/tvBridge';
 import { TrailerPlayer, type TrailerPlayerHandle } from './components/TrailerPlayer';
@@ -55,7 +55,17 @@ export default function App() {
   // keeps recording it because the agent will want it.
   const [, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [profilesOpen, setProfilesOpen] = useState(false);
+  // The set is shared, so the app opens on "Who's watching?" rather than on whoever used it
+  // last. Nothing behind it is wrong — the saved profile is already active — but the avatar
+  // waits for this to be answered before it opens a session.
+  const [profilesOpen, setProfilesOpen] = useState(true);
+  // True once the picker has been left by any route: a profile pressed, or Back. Until then
+  // the avatar has no viewer to be, and does not connect.
+  const [viewerChosen, setViewerChosen] = useState(false);
+  // A property of the set, like the avatar's language: whoever sits down next gets the
+  // television as it was left.
+  const [avatarVideo, setAvatarVideo] = useState(loadAvatarVideo);
+  const toggleAvatarVideo = (on: boolean) => { setAvatarVideo(on); saveAvatarVideo(on); };
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(loadChoice);
   const [clock, setClock] = useState(0); // bumped when the season may have changed
   const [themeOpen, setThemeOpen] = useState(false);
@@ -76,10 +86,12 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
-  const avatarVideo = useRef<HTMLVideoElement>(null);
+  const avatarVideoRef = useRef<HTMLVideoElement>(null);
   // Assigned below, once the actions it calls exist; useAvatar only reads it on a command.
   const tv = useRef<CommandHandler | null>(null);
-  const avatar = useAvatar(avatarVideo, { userId: activeId, commands: tv });
+  const avatar = useAvatar(avatarVideoRef, {
+    userId: activeId, commands: tv, ready: viewerChosen, videoEnabled: avatarVideo,
+  });
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -115,6 +127,11 @@ export default function App() {
   const flushRowFocus = () => {
     if (!wantRowFocus.current) return;
     wantRowFocus.current = false;
+    // An overlay owns the remote while it is open, and the row must not pull focus out from
+    // under it. The dataset arriving is the case that did: its focusRow() lands after
+    // "Who's watching?" has focused a tile, leaving the viewer steering a hidden panel.
+    // Dropping the request is safe — every path that closes an overlay asks for focus itself.
+    if (profilesOpen || themeOpen || dialogOpen || player) return;
     const stage = stageRef.current;
     const target =
       stage?.querySelector<HTMLElement>('.poster.sel') ||
@@ -229,6 +246,7 @@ export default function App() {
   const openProfiles = () => { prevFocus.current = document.activeElement as HTMLElement; setProfilesOpen(true); };
   const closeProfiles = () => {
     setProfilesOpen(false);
+    setViewerChosen(true);
     const back = prevFocus.current;
     requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
   };
@@ -254,6 +272,7 @@ export default function App() {
     if (!next) return;
     activate(id);
     setProfilesOpen(false);
+    setViewerChosen(true);
     toast.show(next.kind === 'kids' ? `Watching as ${next.name} — kids titles only` : `Watching as ${next.name}`);
     focusRow();
   };
@@ -567,7 +586,7 @@ export default function App() {
           )}
         </section>
 
-        <AvatarPanel view={avatar} videoRef={avatarVideo} />
+        <AvatarPanel view={avatar} videoRef={avatarVideoRef} />
 
         <TabBar tab={tab} highlight={!query && !rail} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
 
@@ -591,6 +610,8 @@ export default function App() {
           onSave={writeProfiles}
           onDelete={removeProfile}
           onNotice={toast.show}
+          avatarVideo={avatarVideo}
+          onAvatarVideo={toggleAvatarVideo}
         />
         <ThemePicker
           open={themeOpen} choice={themeChoice} theme={theme} tune={tunes[theme.id]}

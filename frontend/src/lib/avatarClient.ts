@@ -75,6 +75,13 @@ export interface ConnectOptions {
   language: string;
   /** The viewer's profile id. History and memory are keyed by it on the backend (D10). */
   userId?: string;
+  /**
+   * Whether to ask for the talking head at all. False builds the pipeline without the
+   * avatar — the backend's own `avatar` query flag — so nothing generates a frame and no
+   * Anam session is minted. The voice is unaffected. Because it changes how the pipeline
+   * is built, changing it means a new session, not a change to a running one.
+   */
+  video: boolean;
   onStatus(state: AgentState): void;
   onTranscript(msg: TranscriptMsg): void;
   onCommand(msg: CommandMsg): void;
@@ -225,7 +232,9 @@ async function openMedia(
   // misconfigured offer with 503 is the everyday way to hit that.
   try {
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
-    pc.addTransceiver('video', { direction: 'recvonly' });
+    // Offered only when the head is wanted: with avatar=false below there is nothing on the
+    // other end to fill it, and an m-line for a track the backend never produces is noise.
+    if (opts.video) pc.addTransceiver('video', { direction: 'recvonly' });
 
     const stream = new MediaStream();
     pc.ontrack = (ev) => { stream.addTrack(ev.track); };
@@ -246,7 +255,7 @@ async function openMedia(
     await pc.setLocalDescription(await pc.createOffer());
     await iceGathered(pc);
 
-    const url = `${session.offer_url}?token=${session.control_token}&avatar=true&halfduplex=false`;
+    const url = `${session.offer_url}?token=${session.control_token}&avatar=${opts.video}&halfduplex=false`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
