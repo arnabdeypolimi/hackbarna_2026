@@ -87,7 +87,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = BuildSettings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings=settings)
     ids = None
     if args.ids_from:
         ids = read_title_ids(args.ids_from)

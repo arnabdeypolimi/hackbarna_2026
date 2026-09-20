@@ -6,8 +6,9 @@ from tv_avatar.memory.lane import BaseMemoryLane, MemoryBlock
 
 class FakeMemoryLane(BaseMemoryLane):
     def __init__(self, blocks: dict[str, MemoryBlock] | None = None, *, search_delay_s: float = 0.0,
-                 ingest_delay_s: float = 0.0, fail_ingest: bool = False) -> None:
-        super().__init__()
+                 ingest_delay_s: float = 0.0, fail_ingest: bool = False,
+                 recall_budget_s: float | None = None) -> None:
+        super().__init__(**({} if recall_budget_s is None else {"recall_budget_s": recall_budget_s}))
         self.blocks = blocks or {}
         self.search_delay_s = search_delay_s
         self.ingest_delay_s = ingest_delay_s

@@ -135,13 +135,16 @@ missing field.
 - **Client → server:** `screen_state`, `ack`, `result`, `user_event`
 - **Server → client:** `command`, `agent_status`, `transcript`, `error`
 
-Twelve command verbs are defined in `src/tv_avatar/agent/commands.py`: `play`, `pause`,
+Thirteen command verbs are defined in `src/tv_avatar/agent/commands.py`: `play`, `pause`,
 `resume`, `seek`, `navigate`, `focus`, `open_details`, `close`, `back`, `home`,
-`show_products`, `search_catalog`.
+`show_products`, `search_catalog`, `show_titles`.
 
 Commands are **fire-and-forget** — the backend never waits for the TV app, because a slow
 client would stall the LLM turn and stall speech with it. `search_catalog` is the single
-exception: it blocks the turn for at most 400 ms and then answers `{"status": "unavailable"}`.
+exception: it waits for the TV's result, a failed acknowledgment, or turn cancellation,
+with no default deadline. A successful acknowledgment alone does not finish a search.
+The engineering `/demo/` console logs commands but does not answer catalog searches;
+use the TV frontend for catalog replies.
 
 Commands are also **turn-scoped**. When the viewer barges in, commands the interrupted turn
 had queued but not yet sent are dropped. Commands already on the wire are never rolled back.
@@ -171,8 +174,11 @@ src/tv_avatar/
     envelope.py           the SGR turn envelope: intent / say / actions, plus internal tools
     service.py            SGRAgentService — streams `say` sentence by sentence, dispatches actions
     stream_parse.py       incremental parser for the streamed envelope
-    tools.py              internal tools: recommend_titles, recall_memory, reject_title
-    injector.py           stamps screen / history sections into the system prompt per turn
+    loop.py               TurnRunner — the bounded SGR cycle loop, independent of Pipecat
+    turn.py               typed turn state: TurnContext / TurnMetrics / ToolResult / TurnTrace
+    tools.py              internal tools: recommend_titles, reject_title
+    fallback.py           the templated answer for a cycle that blows its budget
+    injector.py           stamps screen / history sections — AGENT_IMPL=stub only
     prompt.py             system prompts, written for the ear rather than the screen
     llm.py                provider construction + the deterministic scripted stub
   memory/
@@ -232,6 +238,46 @@ behaviour. End-to-end is manual, through the console at `/demo/`.
 
 ---
 
+## Tracing
+
+Every session can be seen as one tree in [Langfuse](https://langfuse.com): Pipecat's own
+`conversation → turn → stt / tts` spans, and under each turn the agent's
+`llm → agent.recall / agent.cycle → agent.action → tv.command`, the memory lane
+(`memory.prefetch`, `memory.recall`, `memory.ingest`, `memory.finish_session`), the recommender
+(`recs.recommend`), the observer's `turn.latency` marks and the TV's `tv.command_result` acks —
+with prompts, envelopes, timings and, where the endpoint reports it, token usage. OpenTelemetry is
+the only instrumentation API; Langfuse is an OTLP/HTTP sink (no `langfuse` SDK). Off by default,
+and never on the media path: spans are attribute writes, export is batched on a background thread.
+
+```dotenv
+TRACING_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com      # EU; US: https://us.cloud.langfuse.com
+```
+
+```bash
+uv run python tools/langfuse_smoke.py                     # export one span, read it back: 5 s
+npx langfuse-cli api traces list --sessionId <session_id> # read a real session back
+npx langfuse-cli api traces get <trace_id>
+```
+
+Every span of a session carries `sessionId` and `userId` (propagated as OTel baggage), so both
+filter across observations, not just traces. Filterable facts live under
+`langfuse.observation.metadata.*` (`intent`, `cycles`, `fallback`, `interrupted`, `verb`, `status`,
+`source`, `trigger`, `query_embed`); details are `tv.*` attributes on the span. Each span declares
+its Langfuse observation type: `agent.cycle` and `memory.finish_session` are `generation`s,
+`agent.action` and `tv.command` are `tool`s, the recall/recs spans are `retriever`s.
+
+- `TRACE_CONTENT=false` strips prompts, transcripts, envelopes and spoken text from every span
+  (Pipecat's included) before export.
+- Any OTLP/HTTP collector instead of Langfuse: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
+  (e.g. `docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one`). It wins over the keys.
+- The full span vocabulary and the decisions behind it:
+  [`docs/superpowers/plans/2026-09-19-tv-avatar-observability.md`](docs/superpowers/plans/2026-09-19-tv-avatar-observability.md).
+
+---
+
 ## Measured decisions
 
 These came out of measurement on 2026-09-19, not from defaults:
@@ -243,6 +289,10 @@ These came out of measurement on 2026-09-19, not from defaults:
   Silero VAD, not the smart-turn model. A timer is predictable and cannot hold a turn open
   on a "sounds unfinished" verdict. Speaker echo trips VAD without producing words, so a
   turn with VAD activity and no transcript is abandoned after 2 s.
+- **The echo guard is opt-in** (`ECHO_FILTER`, default off). It drops user transcripts that
+  mostly repeat the avatar's last words, but word overlap cannot tell echo from a correction
+  that reuses a title: "no, die hard" right after the avatar named "No Hard Feelings" was
+  swallowed. Browser AEC and `BARGE_IN_MIN_WORDS` are the defence without it.
 - **SLNG regional routing is a header**, `X-World-Part-Override`. Per-region hostnames such
   as `eu.api.slng.ai` do not resolve.
 
@@ -258,10 +308,12 @@ interruption behaviour, the control protocol with a mock client, and the agent l
 ### Agent layer (phase 2)
 
 `AGENT_IMPL=sgr` (default) runs `SGRAgentService`: a Schema-Guided-Reasoning agent whose
-every turn is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
-decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel;
-internal tools (`recommend_titles`, `recall_memory`) earn one bounded second cycle to speak
-their results, with a templated fallback if the model is late.
+every cycle is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
+decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel. A
+reply from an awaited tool — `recommend_titles` or `search_catalog`, including failures —
+buys one more cycle, up to `AGENT_MAX_CYCLES` (default 2). The final cycle's schema excludes
+observation-returning tools. `CYCLE_FIRST_BYTE_S=0` disables the follow-up speech deadline;
+a positive value enables a first-byte budget and a templated fallback.
 
 - **Recommendations** — a TMDB slice indexed in embedded Qdrant with the local
   `multilingual-e5-small` (~15 ms per query). Build it once:
@@ -273,8 +325,10 @@ their results, with a templated fallback if the model is late.
 - **Viewing log** — `data/history.db`: what was played, what the agent offered, what the
   viewer declined (`reject_title`). The greeting and the recommender take titles from here.
 - **Memory** — one profile per viewer in `data/memory/<user_id>/profile.md`, rewritten by
-  the LLM from the session transcript when the session ends (crash-safe: leftovers are
-  folded in at the next start). Durable preferences and tone, readable and editable by hand.
+  the LLM from the session transcript when the session ends *and* every
+  `MEMORY_REFRESH_EVERY_TURNS` ingests (default 6), so what was said early in a long session
+  is back in the prompt before it ends. Crash-safe: leftovers are folded in at the next start.
+  Durable preferences and tone, readable and editable by hand.
 - **Viewer identity** — `POST /sessions {"user_id": "..."}`; sessions come and go, the
   couch persists.
 
@@ -288,11 +342,12 @@ uv run python tools/smoke_turn.py --user couch_1 "something like Sicario" "no, n
 poster row, pulled only when the viewer asks ("what's that jacket?"). The catalogue is
 `products.json` at the repo root (override with `PRODUCTS_FILE`), served at `/shop`; tiles
 the TV can shop carry `shoppable: true` in the screen state and render in the prompt as
-`[shop: item price; ...]`, so the agent names the item while the shelf arrives.
+`[shop]`. A separate `# Shop` section lists every shelf's title, items and prices, including
+off-screen titles, so the agent names the item while the shelf arrives.
 
-Not built yet: **M4** latency instrumentation beyond the console and the per-turn log line;
-persona polish. The session store is an in-memory dict —
-swapping in Redis touches `SessionStore` and nothing else.
+**M4** latency instrumentation is available through the opt-in tracing described above.
+Persona polish remains. The session store is an in-memory dict — swapping in Redis touches
+`SessionStore` and nothing else.
 
 ### The frontend
 
@@ -307,6 +362,8 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 The sky loops in `frontend/public/sky/` are Git LFS objects: clone with `git lfs` installed, or
 that folder holds pointer files and the room stays still.
 
-It is **not yet wired to this backend.** Watch, Episodes and Continue record local history
-and report what they would do; the YouTube trailer player is the only real playback surface.
-Connecting those seams to the control protocol above is the work that joins the two halves.
+It is **connected to this backend** through WebRTC and the control WebSocket. The avatar
+can search, display recommendation rails, navigate and control the YouTube trailer player,
+which remains the only real playback surface. The TV sends screen state and viewer events
+back to the agent using the generated protocol types. See `frontend/README.md` for setup;
+loading the frontend with a configured backend opens a paid avatar session automatically.

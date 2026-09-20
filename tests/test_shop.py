@@ -77,7 +77,7 @@ async def test_injector_prompt_has_a_shop_section_with_every_shelf(monkeypatch):
 
     from tv_avatar.agent.injector import ScreenContextInjector
 
-    monkeypatch.setattr("tv_avatar.agent.injector.get_shop", lambda: ShopCatalog.model_validate(SHELF))
+    monkeypatch.setattr("tv_avatar.agent.prompt.get_shop", lambda: ShopCatalog.model_validate(SHELF))
     s = SessionStore().create(60, PERSONA)
     screen = _screen()
     screen.tiles = [Tile(title_id="565770", name="Blue Beetle", position=0)]  # Barbie off screen

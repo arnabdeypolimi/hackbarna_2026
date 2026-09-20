@@ -1,41 +1,47 @@
 """Internal tool dispatch — verbs that never reach the TV (recommend_titles,
-recall_memory, reject_title). Every call is bounded by the 400 ms tool budget and degrades
-to a spoken fallback instead of hanging the turn."""
+reject_title). Every call is bounded by the 400 ms tool budget and degrades
+to a spoken fallback instead of hanging the turn.
+
+`run` takes the parsed action (SGR routing: the union member *is* the branch),
+never a verb string plus a dict."""
 import asyncio
-from typing import Any
+from typing import Any, get_args
 
 from loguru import logger
+from opentelemetry import trace
+from pydantic import BaseModel
 
-from tv_avatar.agent.envelope import RecallMemory, RecommendTitles, RejectTitle
+from tv_avatar.agent.envelope import (
+    InternalAction,
+    RecommendTitles,
+    RejectTitle,
+)
 from tv_avatar.history.recorder import HistoryRecorder
-from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.recs.catalog import CatalogFilter, CatalogStore
 from tv_avatar.recs.engine import RecsContext, RecsEngine
+from tv_avatar.tracing import ATTR_ACTION_MATCHED, ATTR_ACTION_N_TITLES
 
 
 class InternalTools:
-    def __init__(self, recs: RecsEngine | None, lane: MemoryLane, catalog: CatalogStore | None,
+    def __init__(self, recs: RecsEngine | None, catalog: CatalogStore | None,
                  *, recorder: HistoryRecorder | None = None, timeout_s: float = 0.4) -> None:
         self._recs = recs
-        self._lane = lane
         self._catalog = catalog
         self._recorder = recorder
         self._timeout = timeout_s
 
-    async def run(self, verb: str, args: dict[str, Any], user_id: str, memory_text: str | None) -> dict:
+    async def run(self, action: InternalAction | BaseModel, user_id: str) -> dict:
+        verb = str(getattr(action, "verb", type(action).__name__))
+        # A wrong action type is a routing bug, raised before the degraded-answer
+        # net below — which must still catch a TypeError thrown *inside* a tool.
+        if not isinstance(action, get_args(InternalAction)):
+            raise TypeError(f"{verb} is not an internal action")
         try:
-            match verb:
-                case "recommend_titles":
-                    return await asyncio.wait_for(
-                        self._recommend(RecommendTitles.model_validate(args), user_id, memory_text),
-                        timeout=self._timeout)
-                case "recall_memory":
-                    return await asyncio.wait_for(
-                        self._recall(RecallMemory.model_validate(args), user_id), timeout=self._timeout)
-                case "reject_title":
-                    return self._reject(RejectTitle.model_validate(args), user_id)
-                case _:
-                    return {"status": "unknown_tool", "verb": verb}
+            match action:
+                case RecommendTitles():
+                    return await asyncio.wait_for(self._recommend(action, user_id), timeout=self._timeout)
+                case RejectTitle():
+                    return self._reject(action, user_id)
         except TimeoutError:
             logger.bind(user_id=user_id).warning("internal tool timed out", verb=verb)
             return {"status": "unavailable", "reason": "timeout"}
@@ -43,7 +49,7 @@ class InternalTools:
             logger.bind(user_id=user_id).opt(exception=err).warning("internal tool failed", verb=verb)
             return {"status": "error", "reason": type(err).__name__}
 
-    async def _recommend(self, req: RecommendTitles, user_id: str, memory_text: str | None) -> dict:
+    async def _recommend(self, req: RecommendTitles, user_id: str) -> dict:
         if self._recs is None:
             return {"status": "unavailable", "reason": "no catalog"}
         disliked = set(req.exclude_genres)
@@ -77,15 +83,16 @@ class InternalTools:
                 "why": r.reasons,
             })
         # With a free-text query, "popular" is the engine's fill-in for nothing having
-        # matched it. Those are substitutes, not recommendations: the model is told so,
-        # and they are not logged as shown — otherwise the next greeting offers to
-        # "carry on" with whatever happened to be popular. Without a query (a genre or
-        # year request) popular-within-the-filters is the genuine answer.
+        # matched it. Those are substitutes, not recommendations: the model is told so.
+        # Without a query (a genre or year request) popular-within-the-filters is the
+        # genuine answer. Nothing is logged as shown here — the turn records the
+        # titles the agent actually went on to name or focus (TurnTrace.offered_ids).
         substitute = bool(req.query) and not req.similar_to
         matched = [t for t in titles if not (substitute and t["why"] == ["popular"])]
-        if self._recorder is not None and matched:
-            self._recorder.spawn(self._recorder.on_rec_shown(user_id, [t["title_id"] for t in matched]))
         result: dict[str, Any] = {"titles": titles, "matched": bool(matched)}
+        # Called inside the `agent.action` span; the engine opens its own below it.
+        trace.get_current_span().set_attributes(
+            {ATTR_ACTION_N_TITLES: len(titles), ATTR_ACTION_MATCHED: bool(matched)})
         if titles and not matched:
             result["note"] = ("nothing in the catalog matched the request; these are popular fill-ins — "
                               "tell the viewer you could not find a match before offering them")
@@ -96,9 +103,3 @@ class InternalTools:
         if self._recorder is not None:
             self._recorder.spawn(self._recorder.on_rec_rejected(user_id, req.title_id))
         return {"status": "ok"}
-
-    async def _recall(self, req: RecallMemory, user_id: str) -> dict:
-        block = await self._lane.recall(user_id, req.query)
-        logger.bind(user_id=user_id).debug("recall_memory", step="tool", query=req.query,
-                                           empty=block.empty, tokens=block.token_est)
-        return {"memory": block.render_for_prompt()}

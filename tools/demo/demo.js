@@ -154,6 +154,10 @@ async function openMedia(session, withAvatar, halfDuplex) {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   state.mic = mic;
+  // Browsers may silently drop AEC (some external devices, Firefox). Without it
+  // the avatar's own voice reaches Silero and no backend setting fully saves you.
+  const { echoCancellation, noiseSuppression, autoGainControl } = mic.getAudioTracks()[0].getSettings();
+  wire("sys", `mic aec=${echoCancellation} ns=${noiseSuppression} agc=${autoGainControl}`);
   meter(mic);
 
   const pc = new RTCPeerConnection();

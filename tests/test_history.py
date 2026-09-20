@@ -65,8 +65,17 @@ async def test_recorder_renders_recent_names(tmp_path):
     rec = HistoryRecorder(store, Cat())
     await rec.on_screen_transition("u1", _screen("stopped"), _screen("playing", "27205"))
     text = await store.render_for_prompt("u1", catalog=Cat())
-    assert "Inception" in text
+    # The id travels with the name: the agent may only act on ids it can see,
+    # and "carry on with Inception?" → "yes, play it" needs one.
+    assert "Recently watched: Inception (2010) (id=27205)" in text
     assert "(none yet)" in await store.render_for_prompt("nobody", catalog=Cat())
+    await store.close()
+
+
+async def test_render_keeps_id_when_title_is_not_in_catalog(tmp_path):
+    store = HistoryStore(str(tmp_path / "h.db"))
+    await store.record(Event(user_id="u1", kind=EventKind.PLAY_STARTED, title_id="999"))
+    assert "Recently watched: unknown title (id=999)" in await store.render_for_prompt("u1", catalog=None)
     await store.close()
 
 
@@ -102,6 +111,7 @@ async def test_render_includes_recently_recommended_with_relative_time(tmp_path)
     await store.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="155", ts=yesterday + 1))  # dedup
     text = await store.render_for_prompt("u1", catalog=Cat())
     assert text.startswith("Recently watched: (none yet)")
-    assert "Recently recommended: The Dark Knight (2008) (yesterday); Batman Begins (2005) (yesterday)" in text
+    assert ("Recently recommended: The Dark Knight (2008) (id=155, yesterday); "
+            "Batman Begins (2005) (id=272, yesterday)") in text
     assert _when(_t.time() - 30) == "just now" and _when(_t.time() - 7200) == "2 hours ago"
     await store.close()

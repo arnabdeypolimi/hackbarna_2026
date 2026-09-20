@@ -2,7 +2,7 @@
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # A blank line in .env ("KEY=") reads as "", which str alone would accept.
@@ -57,8 +57,16 @@ class Settings(BaseSettings):
     video_height: int = 1152
     target_fps: int = 25
 
-    # Turn-taking — silence after the last word before the LLM runs
+    # Turn-taking — silence after the last word before the LLM runs, and how
+    # many transcribed words a barge-in needs before it cuts the avatar off
     turn_silence_s: float = 0.5
+    barge_in_min_words: int = 2
+    # Drop user transcripts that repeat what the avatar just said (pipeline/echo.py).
+    # Off: browser AEC is the only echo defence and the barge-in word count the
+    # only guard against the avatar cutting itself off. On: a short correction
+    # that reuses a title's words — "no, die hard" right after the avatar named
+    # "No Hard Feelings" — is lost as echo (2026-09-20).
+    echo_filter: bool = False
 
     control_token_ttl_s: int = 3600
 
@@ -85,6 +93,11 @@ class Settings(BaseSettings):
     # not part of it — history.db is the viewing log. Empty model = llm_model.
     memory_model: str = ""
     memory_profile_max_words: int = 200
+    #: Also fold the pending transcript into the profile every N ingested turns
+    #: (off the turn), so what the viewer said this session reaches the prompt
+    #: before the session ends — the conversation window is only ~5 exchanges.
+    #: 0 = only at session end.
+    memory_refresh_every_turns: int = Field(default=6, ge=0)
 
     # Phase-2 local data — everything under data/ is git-ignored
     catalog_path: str = "data/catalog.parquet"
@@ -96,14 +109,43 @@ class Settings(BaseSettings):
     # Turn behaviour
     mem_prefetch_min_chars: int = 6
     tool_timeout_s: float = 0.4
-    #: The second SGR cycle (speaking tool results) must produce its first byte
-    #: within this budget or the results are spoken from a template instead.
-    cycle2_first_byte_s: float = 1.2
-    #: Optional: speak a canned filler if the LLM has said nothing this long after
-    #: the turn opened. Off by default — the SGR envelope's own `say` ("Let me
-    #: look.") is the filler, and a canned one on top was judged annoying.
-    filler_after_ms: int = 0
+    #: SGR cycles per turn. Cycle 1 streams the envelope; each further cycle
+    #: is a full LLM round trip that feeds tool results back. The last cycle
+    #: refuses internal tools so the loop always ends in speech. 2 is the
+    #: measured sweet spot on a voice budget; every extra cycle is ~1 s of
+    #: waiting the viewer hears.
+    agent_max_cycles: int = Field(default=2, ge=1, le=4)
+    #: Optional first `say` byte budget for follow-up cycles; zero disables it.
+    #: When enabled, overdue tool results are spoken from a template instead.
+    cycle_first_byte_s: float = Field(
+        default=0.0, ge=0, validation_alias=AliasChoices("CYCLE_FIRST_BYTE_S", "CYCLE2_FIRST_BYTE_S"))
     log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+    telemetry_max_chars: int = Field(default=16384, ge=128, le=262144)
+    app_revision: str = "unknown"
+
+    @field_validator("log_format", "telemetry_max_chars", "app_revision", mode="before")
+    @classmethod
+    def telemetry_defaults(cls, value: Any, info: ValidationInfo) -> Any:
+        return cls.model_fields[info.field_name].default if value == "" else value
+
+    # Tracing — OpenTelemetry → Langfuse as an OTLP/HTTP sink (observability
+    # plan D13, D17). Off by default; nothing is exported and nothing in the
+    # pipeline changes until enabled *and* a sink is configured.
+    tracing_enabled: bool = False
+    #: False strips prompts, transcripts, envelopes and spoken text from every span.
+    trace_content: bool = True
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # LANGFUSE_BASE_URL is what the langfuse-cli reads, so one .env serves both.
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com",
+        validation_alias=AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL"))
+    #: Any OTLP/HTTP collector instead of Langfuse; wins over the keys when set.
+    otel_exporter_otlp_endpoint: str = ""
+    otel_exporter_otlp_headers: str = ""
+    otel_console_export: bool = False
+    otel_service_name: str = "tv-avatar"
 
 
 @lru_cache

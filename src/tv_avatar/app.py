@@ -27,6 +27,7 @@ from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionState, SessionStore
 from tv_avatar.shop import get_shop
+from tv_avatar.tracing import setup_tracing, shutdown_tracing
 
 #: How often expired sessions (and their command buses) are reaped.
 SWEEP_INTERVAL_S = 60.0
@@ -54,7 +55,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings = None if _missing_settings() else get_settings()
-        setup_logging(settings.log_level if settings else "INFO")
+        setup_logging(settings.log_level if settings else "INFO", settings=settings)
+        owns_tracing = settings is not None and setup_tracing(settings)
         if app.state.runtime is None and settings is not None:
             app.state.runtime = build_runtime(settings)
         if app.state.runtime is not None and settings is not None and settings.agent_impl == "sgr":
@@ -70,6 +72,10 @@ def create_app(
             await webrtc.close()
             if app.state.runtime is not None:
                 await app.state.runtime.close()
+            # Flushes the last batch; without it the final turn's spans are lost
+            # on every Ctrl-C / reload.
+            if owns_tracing:
+                shutdown_tracing()
 
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
@@ -111,6 +117,7 @@ def create_app(
             "agent_impl": s.agent_impl,
             "llm_model": s.llm_model,
             "stt_model": s.slng_stt_model,
+            "echo_filter": s.echo_filter,
             "tts_model": s.slng_tts_model,
             "tts_sample_rate": s.slng_tts_sample_rate,
             "catalog_titles": len(rt.catalog) if rt is not None and rt.catalog is not None else 0,
@@ -166,7 +173,8 @@ def create_app(
             app.state.manager.start_pipeline(
                 session_id,
                 run_session(session, bus, transport, with_avatar=avatar,
-                            half_duplex=halfduplex, runtime=app.state.runtime),
+                            half_duplex=halfduplex, runtime=app.state.runtime,
+                            settings=settings),
             )
 
         answer = await webrtc.handle_web_request(request, on_connection)
@@ -216,7 +224,8 @@ def create_app(
         # The bus deliberately survives this call returning: a dropped control
         # socket is the Degraded state (spec §6) — commands queue until the TV
         # app reconnects with the same session id. Expiry or DELETE reaps it.
-        await ControlChannel(websocket, session, bus, recorder=recorder).run()
+        await ControlChannel(websocket, session, bus, recorder=recorder,
+                             settings=get_settings() if _settings_available() else None).run()
 
     @app.get("/catalog/sample")
     async def catalog_sample(limit: int = Query(default=8, ge=1, le=50)) -> dict:

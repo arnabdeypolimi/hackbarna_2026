@@ -1,0 +1,83 @@
+%% TV buddy architecture — current as of 2026-09-20 (feat/observability).
+%% Paste into a GitHub README, Notion, or mermaid.live.
+%% The hand-drawn SVG version carries the same content with the measured
+%% numbers, in three panels — system map, the agent turn, the trace tree:
+%% tv-buddy-architecture-v3.html. (tv-buddy-architecture.html and -v2.html are
+%% kept as history; both predate the agent cleanup and are wrong about memory,
+%% the injector and the cycle loop.) Numbers come from
+%% docs/findings/2026-09-19-phase2-agent-memory-recs.md.
+%% Note: a bare "%%" line breaks mermaid-cli's lexer — comments need content.
+
+flowchart LR
+
+  subgraph MEDIA["media plane — one Pipecat pipeline per session, over WebRTC"]
+    direction LR
+    MIC["TV mic<br/>living room"]
+    STT["VAD + STT<br/>Silero, Nova 3 on SLNG<br/>partials on, 60 ms sends"]
+    ECHO["EchoTranscriptFilter<br/>the avatar hearing itself<br/>ECHO_FILTER, off by default"]
+    TAP["MemoryPrefetchTap<br/>first partial, 6 chars up"]
+    AGG["user aggregator<br/>0.2 s VAD stop + 0.5 s silence<br/>barge-in wants 2 words"]
+    AGENT["SGRAgentService<br/>a Pipecat LLMService, and<br/>the only prompt writer"]
+    OUT["TTS, then the avatar<br/>Cartesia Sonic 3, 24 kHz<br/>Anam cara-4, same peer"]
+  end
+
+  subgraph TURN["one turn — TurnRunner, a bounded SGR loop, agent/loop.py"]
+    direction TB
+    STATE["# Screen<br/>SessionState, newest wins<br/>tiles with ids, focus marked"]
+    PROF["# Memory<br/>profile.md, 200 words up<br/>verbatim, or stale at 0.35 s"]
+    REND["# Recent activity<br/>rendered from the viewing log:<br/>watched and recommended, each<br/>with its id and how long ago"]
+    PROMPT["build the prompt<br/>static: persona, manifest,<br/>rules, output contract"]
+    CYCLE["cycle N: one TurnPlan<br/>strict json_schema, in order:<br/>intent, say, actions"]
+    SAY["say to TTS, per sentence<br/>the model's own 'On it.'<br/>is the filler now"]
+    DISPATCH["dispatch as each closes<br/>routed on the typed union,<br/>not on a verb string"]
+    TVV["12 TV verbs, Pydantic<br/>play, pause, resume, seek, navigate,<br/>focus, open_details, close, back,<br/>home, show_products, and<br/>search_catalog, which alone awaits"]
+    INT["2 internal tools<br/>recommend_titles — returns an observation<br/>reject_title — fire-and-forget"]
+    OBSERVE["observation step<br/>observations back as a user msg;<br/>the last cycle is decoded against<br/>a schema with no internal tools"]
+    FB["render_fallback<br/>a template, no LLM call<br/>kept out of the transcript"]
+  end
+
+  BUS["CommandBus — its own WebSocket<br/>a turn-scoped queue that outlives<br/>the socket; invalid is never queued<br/>barge-in drops what is unsent"]
+  RECS["RecsEngine — 400 ms budget<br/>match, taste and popular channels<br/>merged, then filtered hard<br/>title_ids and reasons only"]
+
+  subgraph STORES["what persists — per viewer, all of it written off the turn"]
+    direction TB
+    PEND["pending.jsonl to profile.md<br/>every exchange, crash-safe<br/>one LLM call rewrites it"]
+    EV["history.db, the viewing log<br/>play started, completed,<br/>abandoned; shown, rejected"]
+    CAT["catalog<br/>TMDB parquet + Qdrant<br/>local E5-small, 384 dims"]
+  end
+
+  TRACE["tracing — OpenTelemetry to Langfuse, off by default, never on the media path<br/>conversation, turn, llm, then agent.recall, agent.cycle, agent.action, agent.fallback,<br/>memory.*, recs.recommend, tv.command, turn.latency — spans are attribute writes,<br/>export is batched on a background thread"]
+
+  MIC --> STT --> ECHO --> TAP --> AGG --> AGENT --> OUT
+
+  AGENT --> PROMPT
+  STATE -.-> PROMPT
+  PROF -.-> PROMPT
+  REND -.-> PROMPT
+  TAP -. "prefetch" .-> PROF
+  TAP -. "warm the embed" .-> RECS
+
+  PROMPT --> CYCLE
+  CYCLE --> SAY
+  CYCLE --> DISPATCH
+  DISPATCH --> TVV
+  DISPATCH --> INT
+  TVV -.-> OBSERVE
+  INT -.-> OBSERVE
+  OBSERVE -- "max 2 cycles, 1.2 s" --> CYCLE
+  OBSERVE -. "over budget" .-> FB
+
+  TVV --> BUS
+  INT --> RECS
+  RECS --> CAT
+  EV -. "taste, exclusions" .-> RECS
+
+  AGENT -. "ingest" .-> PEND
+  AGENT -. "rec_shown" .-> EV
+  INT -. "reject_title" .-> EV
+  BUS -. "play events" .-> EV
+  PEND --> PROF
+  EV -.-> REND
+
+  classDef lane stroke-dasharray: 5 4
+  class STORES,TRACE lane

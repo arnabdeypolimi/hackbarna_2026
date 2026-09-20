@@ -69,13 +69,6 @@ class HistoryRecorder:
     async def on_rec_rejected(self, user_id: str, title_id: str) -> None:
         await self._store.record(Event(user_id=user_id, kind=EventKind.REC_REJECTED, title_id=title_id))
 
-    async def on_command(self, user_id: str, verb: str, args: dict[str, Any]) -> None:
-        if verb == "search_catalog":
-            await self._store.record(Event(user_id=user_id, kind=EventKind.SEARCH_ISSUED, detail=args))
-        elif verb == "play" and args.get("title_id"):
-            await self._store.record(Event(user_id=user_id, kind=EventKind.REC_ACCEPTED,
-                                           title_id=str(args["title_id"])))
-
     def spawn(self, coro) -> asyncio.Task:
         """Fire-and-forget with a logged failure — history must never stall a turn."""
         task = asyncio.create_task(coro)

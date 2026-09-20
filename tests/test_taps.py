@@ -68,3 +68,26 @@ async def test_ingest_skipped_after_interruption():
     ], expected_down_frames=None)
     await asyncio.sleep(0.01)
     assert tap.ingest_count == 1  # only the un-interrupted turn
+
+
+async def test_prefetch_span_is_parented_on_the_current_turn_not_a_root(otel):
+    """Seen live: a root `memory.prefetch` per STT partial became its own trace in
+    the Langfuse session view. The tap hands the task Pipecat's turn context."""
+    from tv_avatar.tracing import observation
+
+    with observation("turn", type="span") as turn:
+        ctx = turn.get_span_context()
+        tap = MemoryPrefetchTap(FakeMemoryLane(), _session(), min_chars=6, turn_context=lambda: ctx)
+        await run_test(tap, frames_to_send=[UserStartedSpeakingFrame(), _interim("what do I like"),
+                                            SleepFrame(0.02)], expected_down_frames=None)
+        await asyncio.sleep(0.01)
+    prefetch, = otel.spans()["memory.prefetch"]
+    assert prefetch.parent.span_id == ctx.span_id
+
+
+async def test_prefetch_without_a_turn_context_is_still_a_span(otel):
+    tap = MemoryPrefetchTap(FakeMemoryLane(), _session(), min_chars=6)
+    await run_test(tap, frames_to_send=[UserStartedSpeakingFrame(), _interim("what do I like"),
+                                        SleepFrame(0.02)], expected_down_frames=None)
+    await asyncio.sleep(0.01)
+    assert otel.spans()["memory.prefetch"][0].parent is None
