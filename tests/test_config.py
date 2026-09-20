@@ -75,7 +75,9 @@ def test_phase2_defaults(monkeypatch):
 def test_cycle_loop_bounds(monkeypatch):
     _set_required(monkeypatch)
     s = Settings(_env_file=None)
-    assert s.agent_max_cycles == 2 and s.cycle_first_byte_s == 1.2
+    assert s.agent_max_cycles == 2 and s.cycle_first_byte_s == 0.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, CYCLE_FIRST_BYTE_S=-1)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, agent_max_cycles=5)
     with pytest.raises(ValidationError):

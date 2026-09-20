@@ -317,6 +317,21 @@ async def test_first_cycle_is_never_budgeted():
     assert (await bus.next_outbound()).verb == "play"
 
 
+async def test_follow_up_waits_past_the_old_deadline_by_default():
+    class SlowFollowUp(FakeOpenAI):
+        async def _create(self, **kwargs):
+            if self.calls:
+                await asyncio.sleep(1.3)
+            return await super()._create(**kwargs)
+
+    bus, sink = RecordingBus(), TimingSink()
+    client = SlowFollowUp([RECO_1, RECO_2])
+    await _run(_agent(client, bus), sink, [LLMContextFrame(context=_ctx("recommend"))])
+    assert len(client.calls) == 2
+    assert _spoken(sink) == ["Let me look.", "Try Heat or Inception."]
+    assert (await bus.next_outbound()).verb == "focus"
+
+
 async def test_every_follow_up_cycle_is_budgeted():
     """With a 3-cycle cap, a slow cycle 2 still falls back after ONE budget — no cycle 3."""
     class TwoSpeeds(FakeOpenAI):
@@ -817,6 +832,11 @@ async def test_slow_follow_up_cycle_records_over_budget_and_fallback(otel):
     assert fallback.attributes["langfuse.observation.output"].startswith("How about Heat")
     assert fallback.attributes["tv.fallback.n_actions"] == 1
     assert spans["llm"][0].attributes["langfuse.observation.metadata.fallback"] is True
+    assert cycle2.attributes["langfuse.observation.metadata.stop_reason"] == "budget_exceeded"
+    submitted = [s for s in spans["agent.speech"]
+                 if s.attributes["langfuse.observation.metadata.source"] == "fallback"]
+    assert len(submitted) == 1
+    assert submitted[0].attributes["langfuse.observation.output"].startswith("How about Heat")
 
 
 async def test_cycle_cap_refusal_and_parse_rejection_are_counted(otel):
@@ -855,6 +875,76 @@ async def test_interruption_records_partial_turn(otel):
     assert 0 < len(llm.attributes["langfuse.observation.output"]) < len("I love that you love sci-fi, let me think about it some more.")
     cycle, = spans["agent.cycle"]
     assert cycle.attributes["langfuse.observation.output"].startswith('{"intent":"chitchat"')   # partial envelope kept
+    assert cycle.attributes["langfuse.observation.metadata.stop_reason"] == "interrupted"
+    assert cycle.attributes["langfuse.observation.metadata.validation"] == "incomplete"
+
+
+async def test_cycle_records_validated_plan_and_speech_submission(otel):
+    import json
+
+    agent = _traced(_agent(FakeOpenAI([PLAY]), RecordingBus()))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play"))])
+    spans = otel.spans()
+    cycle, = spans["agent.cycle"]
+    meta = "langfuse.observation.metadata."
+    assert cycle.attributes[meta + "stop_reason"] == "envelope_complete"
+    assert cycle.attributes[meta + "schema_name"] == "turn_plan"
+    assert cycle.attributes[meta + "usage_available"] is False
+    assert cycle.attributes[meta + "validation"] == "valid"
+    plan, = spans["agent.plan"]
+    assert json.loads(plan.attributes["langfuse.observation.output"])["plan"]["say"] == "On it."
+    speech, = spans["agent.speech"]
+    assert speech.attributes[meta + "status"] == "submitted"
+    assert speech.attributes[meta + "source"] == "model"
+    assert speech.attributes["langfuse.observation.output"] == "On it."
+    assert spans["llm"][0].attributes["langfuse.observation.type"] == "agent"
+    assert spans["agent.action"][0].attributes[meta + "action_index"] == 0
+
+
+async def test_incomplete_envelope_is_diagnostic_not_a_successful_plan(otel):
+    agent = _traced(_agent(FakeOpenAI(['{"intent":"answer","say":"partial']), RecordingBus()))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("hello"))])
+    cycle, = otel.spans()["agent.cycle"]
+    assert cycle.attributes["langfuse.observation.metadata.validation"] == "incomplete"
+    assert cycle.attributes["langfuse.observation.metadata.stop_reason"] == "provider_eof"
+
+
+async def test_finish_reason_and_usage_are_not_confused_with_application_stop(otel):
+    class WithUsage(FakeOpenAI):
+        async def _create(self, **kwargs):
+            async def chunks():
+                yield SimpleNamespace(model="reported-model", id="completion-1",
+                    usage=SimpleNamespace(prompt_tokens=12, completion_tokens=8),
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content=PLAY), finish_reason="stop")])
+            return chunks()
+
+    agent = _traced(_agent(WithUsage([]), RecordingBus()))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play"))])
+    cycle, = otel.spans()["agent.cycle"]
+    assert cycle.attributes["langfuse.observation.metadata.finish_reason"] == "stop"
+    assert cycle.attributes["langfuse.observation.metadata.stop_reason"] == "envelope_complete"
+    assert cycle.attributes["gen_ai.usage.input_tokens"] == 12
+    assert cycle.attributes["langfuse.observation.metadata.usage_available"] is True
+    assert cycle.attributes["gen_ai.response.model"] == "reported-model"
+
+
+async def test_provider_failure_retains_partial_json_without_claiming_completion(otel):
+    class Broken(FakeOpenAI):
+        async def _create(self, **kwargs):
+            async def chunks():
+                yield SimpleNamespace(choices=[SimpleNamespace(
+                    delta=SimpleNamespace(content='{"intent":"answer","say":"part'), finish_reason=None)])
+                raise ConnectionError("private provider response")
+            return chunks()
+
+    agent = _traced(_agent(Broken([]), RecordingBus()))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("hello"))])
+    cycle, = otel.spans()["agent.cycle"]
+    assert cycle.attributes["langfuse.observation.metadata.stop_reason"] == "provider_error"
+    assert cycle.attributes["langfuse.observation.metadata.validation"] == "incomplete"
+    assert cycle.status.status_code.name == "ERROR"
+    assert cycle.attributes["langfuse.observation.output"].endswith("part")
+    assert "agent.speech" not in otel.spans()
 
 
 async def test_tracing_off_opens_no_spans(otel):

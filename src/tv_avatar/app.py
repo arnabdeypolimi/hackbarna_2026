@@ -54,7 +54,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings = None if _missing_settings() else get_settings()
-        setup_logging(settings.log_level if settings else "INFO")
+        setup_logging(settings.log_level if settings else "INFO", settings=settings)
         owns_tracing = settings is not None and setup_tracing(settings)
         if app.state.runtime is None and settings is not None:
             app.state.runtime = build_runtime(settings)

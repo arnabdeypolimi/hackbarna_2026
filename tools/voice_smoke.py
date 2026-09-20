@@ -170,7 +170,7 @@ def _ms(a: float | None, b: float | None) -> str:
 
 async def main(user_id: str, turns: list[str]) -> int:
     settings = SmokeSettings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings=settings)
     # Embedded Qdrant is single-process: a running uvicorn holds data/qdrant_db,
     # so the harness works on a throw-away copy of the index.
     if Path(settings.qdrant_path).exists():

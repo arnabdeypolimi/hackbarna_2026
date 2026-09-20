@@ -16,6 +16,7 @@ know nothing about the pipeline.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextvars
 import os
@@ -28,13 +29,28 @@ from opentelemetry import baggage, context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.processor.baggage import ALLOW_ALL_BAGGAGE_KEYS, BaggageSpanProcessor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import (
+    Event,
+    ReadableSpan,
+    Span,
+    SpanProcessor,
+    TracerProvider,
+)
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
     SpanExporter,
 )
-from opentelemetry.trace import NonRecordingSpan, SpanContext, Tracer
+from opentelemetry.trace import (
+    Link,
+    NonRecordingSpan,
+    SpanContext,
+    Status,
+    StatusCode,
+    Tracer,
+)
+
+from tv_avatar.telemetry import ContentPolicy
 
 if TYPE_CHECKING:
     from tv_avatar.config import Settings
@@ -69,6 +85,10 @@ OBS_TYPE_GENERATION = "generation"
 OBS_TYPE_TOOL = "tool"
 OBS_TYPE_RETRIEVER = "retriever"
 OBS_TYPE_EVENT = "event"
+OBS_TYPE_AGENT = "agent"
+ATTR_RELEASE = "langfuse.release"
+ATTR_TELEMETRY_VERSION = "langfuse.observation.metadata.telemetry_version"
+TELEMETRY_VERSION = "2"
 
 LEVEL_WARNING = "WARNING"
 LEVEL_ERROR = "ERROR"
@@ -90,6 +110,29 @@ META_TRIGGER = _META + "trigger"
 META_REFRESH_TRIGGERED = _META + "refresh_triggered"
 META_QUERY_EMBED = _META + "query_embed"
 META_N_ERRORS = _META + "n_errors"
+META_TURN_ID = _META + "turn_id"
+META_ACTION_INDEX = _META + "action_index"
+META_SCHEMA_NAME = _META + "schema_name"
+META_SCHEMA_HASH = _META + "schema_hash"
+META_FINAL_CYCLE = _META + "final_cycle"
+META_VALIDATION = _META + "validation"
+META_STOP_REASON = _META + "stop_reason"
+META_FINISH_REASON = _META + "finish_reason"
+META_USAGE_AVAILABLE = _META + "usage_available"
+META_PROVIDER = _META + "provider"
+META_REPLY_TYPE = _META + "reply_type"
+ATTR_RESPONSE_MODEL = "gen_ai.response.model"
+ATTR_RESPONSE_ID = "gen_ai.response.id"
+ATTR_REQUEST_ID = "tv.provider.request_id"
+ATTR_FIRST_CONTENT_MS = "tv.cycle.first_content_ms"
+ATTR_GENERATION_MS = "tv.cycle.generation_ms"
+ATTR_CYCLE_TOTAL_MS = "tv.cycle.total_ms"
+ATTR_FIRST_SENTENCE_MS = "tv.cycle.first_sentence_ms"
+ATTR_SENTENCE_INDEX = "tv.speech.sentence_index"
+ATTR_SPEECH_SUBMITTED = "tv.speech.submitted"
+ATTR_PROMPT_HASH = "tv.prompt.hash"
+ATTR_ENVELOPE_COMPLETE = "tv.cycle.envelope_complete"
+ATTR_ERROR_TYPE = "error.type"
 
 # --- gen_ai.* (Langfuse maps these to model / parameters / usage) -------------
 ATTR_GENAI_MODEL = "gen_ai.request.model"
@@ -141,8 +184,12 @@ EVENT_ERROR = "tv.error"
 #: Langfuse's input/output mapping plus Pipecat's own content attributes.
 CONTENT_ATTRS: frozenset[str] = frozenset({
     ATTR_OBS_INPUT, ATTR_OBS_OUTPUT, ATTR_TRACE_INPUT, ATTR_TRACE_OUTPUT,
-    "gen_ai.prompt", "gen_ai.completion",
-    "messages", "output", "system_instructions", "transcript", "text",
+    "gen_ai.prompt", "gen_ai.completion", "gen_ai.input.messages", "gen_ai.output.messages",
+    "gen_ai.system_instructions", "input.value", "output.value",
+    "messages", "input", "output", "system", "system_instructions", "transcript", "text",
+    "message", "context_messages", "param.system_instruction",
+    "exception.message", "exception.stacktrace", ATTR_OBS_STATUS_MESSAGE,
+    "reason", "args", "raw", "say", "query", "error", "payload", ATTR_SPEECH_SUBMITTED,
 })
 
 _provider: TracerProvider | None = None
@@ -224,12 +271,12 @@ def setup_tracing(settings: Settings, *, exporter: SpanExporter | None = None) -
     }))
     # Baggage runs in on_start, so it is registered whether or not content is redacted.
     provider.add_span_processor(BaggageSpanProcessor(ALLOW_ALL_BAGGAGE_KEYS))
-    downstream: SpanProcessor = BatchSpanProcessor(exporter)
-    if not settings.trace_content:
-        downstream = RedactingSpanProcessor(downstream)
+    policy = ContentPolicy.from_settings(settings)
+    downstream = RedactingSpanProcessor(BatchSpanProcessor(exporter), policy=policy)
     provider.add_span_processor(downstream)
     if settings.otel_console_export:
-        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+        provider.add_span_processor(RedactingSpanProcessor(
+            BatchSpanProcessor(ConsoleSpanExporter()), policy=policy))
     trace.set_tracer_provider(provider)
     _provider = provider
     logger.info("tracing on: service={} content={}", settings.otel_service_name,
@@ -259,6 +306,8 @@ def session_attributes(session: SessionState, settings: Settings,
         BAGGAGE_TRACE_META_LANGUAGE: session.persona.language.code,
         BAGGAGE_TRACE_META_AGENT: settings.agent_impl,
         BAGGAGE_TRACE_META_HALF_DUPLEX: str(half_duplex).lower(),
+        ATTR_RELEASE: settings.app_revision,
+        ATTR_TELEMETRY_VERSION: TELEMETRY_VERSION,
     }
 
 
@@ -281,15 +330,44 @@ def session_scope(session: SessionState, settings: Settings,
 
 
 @contextmanager
-def observation(name: str, *, type: str, **attributes: Any) -> Iterator[Span]:
+def attribute_scope(attributes: dict[str, Any]) -> Iterator[None]:
+    ctx = context.get_current()
+    for key, value in attributes.items():
+        ctx = baggage.set_baggage(key, value, context=ctx)
+    token = context.attach(ctx)
+    try:
+        yield
+    finally:
+        context.detach(token)
+
+
+@contextmanager
+def observation(name: str, *, type: str, parent_context: context.Context | None = None,
+                links: tuple[Link, ...] = (), **attributes: Any) -> Iterator[Span]:
     """The one way business code opens a span, so the Langfuse type is never forgotten.
 
     ``attributes`` are set at open; ``None`` values are dropped (OTel rejects them).
     """
     attrs = {ATTR_OBS_TYPE: type}
     attrs.update({k: v for k, v in attributes.items() if v is not None})
-    with tracer().start_as_current_span(name, attributes=attrs) as span:
-        yield span
+    with tracer().start_as_current_span(
+            name, attributes=attrs, context=parent_context, links=links,
+            record_exception=False, set_status_on_exception=False) as span:
+        try:
+            yield span
+        except asyncio.CancelledError:
+            span.set_attribute(META_STATUS, "cancelled")
+            logger.info("operation.cancelled", event="operation.cancelled", operation=name)
+            raise
+        except Exception as err:
+            span.set_attribute(META_STATUS, "error")
+            span.set_attribute(ATTR_OBS_LEVEL, LEVEL_ERROR)
+            logger.error("operation.failed", event="operation.failed", operation=name,
+                         error_type=err.__class__.__name__)
+            span.set_status(StatusCode.ERROR, err.__class__.__name__)
+            span.set_attribute(ATTR_ERROR_TYPE, err.__class__.__name__)
+            span.add_event("exception", {"exception.type": err.__class__.__name__})
+            raise
 
 
 def set_attributes(span: Span, attributes: dict[str, Any]) -> None:
@@ -327,21 +405,23 @@ class RedactingSpanProcessor(SpanProcessor):
     makes the policy hold for Pipecat's spans as well as ours.
     """
 
-    def __init__(self, downstream: SpanProcessor) -> None:
+    def __init__(self, downstream: SpanProcessor, *, policy: ContentPolicy | None = None) -> None:
         self._downstream = downstream
+        self._policy = policy or ContentPolicy(content=False)
 
     def on_start(self, span: Span, parent_context: context.Context | None = None) -> None:
         self._downstream.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        attrs = span.attributes or {}
-        if not any(k in CONTENT_ATTRS for k in attrs):
-            self._downstream.on_end(span)
-            return
+        clean = lambda attrs: self._policy.attributes(attrs, content_keys=CONTENT_ATTRS)
+        status = Status(span.status.status_code, self._policy.attribute(span.status.description)
+                        if self._policy.content else None)
         redacted = ReadableSpan(
             name=span.name, context=span.context, parent=span.parent, resource=span.resource,
-            attributes={k: v for k, v in attrs.items() if k not in CONTENT_ATTRS},
-            events=span.events, links=span.links, kind=span.kind, status=span.status,
+            attributes=clean(span.attributes),
+            events=[Event(e.name, clean(e.attributes), e.timestamp) for e in span.events],
+            links=[Link(link.context, clean(link.attributes)) for link in span.links],
+            kind=span.kind, status=status,
             start_time=span.start_time, end_time=span.end_time,
             instrumentation_scope=span.instrumentation_scope,
         )

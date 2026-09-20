@@ -5,33 +5,22 @@ command delivery, and a chatty client never delays it.
 """
 import asyncio
 import contextlib
-import json
-import time
 
 from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
-from opentelemetry.trace import Link, StatusCode
 
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
 from tv_avatar.control.protocol import (
     AgentStatusMsg,
+    CommandMsg,
     ErrorMsg,
     ProtocolError,
     parse_client_message,
 )
 from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.session.state import SessionState
-from tv_avatar.tracing import (
-    ATTR_COMMAND_ID,
-    ATTR_COMMAND_ROUNDTRIP_MS,
-    ATTR_OBS_OUTPUT,
-    ATTR_OBS_TYPE,
-    META_STATUS,
-    OBS_TYPE_EVENT,
-    session_scope,
-    tracer,
-)
+from tv_avatar.tracing import session_scope
 
 
 class ControlChannel:
@@ -97,7 +86,8 @@ class ControlChannel:
                         self._recorder.on_screen_transition(self._session.user_id, old, msg.state))
             case "result":
                 self._bus.resolve(msg.command_id, msg.data)
-                self._record_reply(msg.command_id, str(msg.data.get("status", "ok")), msg.data)
+                self._record_reply(msg.command_id, str(msg.data.get("status", "ok")), msg.data,
+                                   reply_type="result")
             case "ack":
                 if not msg.ok:
                     self._log.warning("command {} failed: {}", msg.command_id, msg.error)
@@ -109,25 +99,24 @@ class ControlChannel:
                     self._recorder.spawn(
                         self._recorder.on_user_event(self._session.user_id, msg.event, msg.detail))
 
-    def _record_reply(self, command_id: str, status: str, payload: dict) -> None:
+    def _record_reply(self, command_id: str, status: str, payload: dict,
+                      *, reply_type: str = "ack") -> None:
         """Close the loop the media plane cannot see: did the TV execute the
         command, and how long after the agent decided. A zero-duration root
         span (type `event`) linked to the originating `tv.command`; the
         session id arrives via this channel's baggage."""
-        origin = self._bus.origin(command_id)
-        if origin is None:
+        if not self._bus.has_origin(command_id):
             return  # unknown or already answered: the protocol error path handles it
-        span_context, sent_at = origin
-        span = tracer().start_span("tv.command_result", links=[Link(span_context)], attributes={
-            ATTR_OBS_TYPE: OBS_TYPE_EVENT, META_STATUS: status, ATTR_COMMAND_ID: command_id,
-            ATTR_COMMAND_ROUNDTRIP_MS: round((time.monotonic() - sent_at) * 1000),
-            ATTR_OBS_OUTPUT: json.dumps(payload, ensure_ascii=False, default=str),
-        })
-        if status == "failed":
-            span.set_status(StatusCode.ERROR, str(payload.get("error")))
-        span.end()
+        self._bus.record_reply(command_id, status, payload, reply_type=reply_type)
 
     async def _write_loop(self) -> None:
         while True:
             message = await self._bus.next_outbound()
-            await self._ws.send_text(message.model_dump_json())
+            try:
+                await self._ws.send_text(message.model_dump_json())
+            except (Exception, asyncio.CancelledError):
+                if isinstance(message, CommandMsg):
+                    self._bus.mark_send_failed(message.id)
+                raise
+            if isinstance(message, CommandMsg):
+                self._bus.mark_sent(message.id)

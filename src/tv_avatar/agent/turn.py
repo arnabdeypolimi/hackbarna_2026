@@ -8,9 +8,12 @@ the loop passes around instead of positional parameters, a `marks` dict and
 import json
 import time
 from dataclasses import dataclass, field, fields
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
-from tv_avatar.agent.envelope import REGISTRY
+from pydantic import ValidationError
+
+from tv_avatar import tracing as tel
+from tv_avatar.agent.envelope import REGISTRY, FinalTurnPlan, TurnPlan
 from tv_avatar.tracing import (
     ATTR_TURN_PREFIX,
     META_CYCLES,
@@ -29,6 +32,56 @@ class TurnContext:
 
     def elapsed_ms(self) -> int:
         return round((time.perf_counter() - self.t0) * 1000)
+
+
+@dataclass
+class CycleTelemetry:
+    stop_reason: Literal["provider_eof", "envelope_complete", "budget_exceeded",
+                         "interrupted", "provider_error"] = "provider_eof"
+    finish_reason: str | None = None
+    usage_available: bool = False
+    envelope_complete: bool = False
+    validation: str = "incomplete"
+    first_content_ms: int | None = None
+    first_sentence_ms: int | None = None
+    generation_ms: int | None = None
+    total_ms: int | None = None
+    accepted: list[dict] = field(default_factory=list)
+    rejected: list[dict] = field(default_factory=list)
+    sentence_index: int = 0
+
+    def plan(self, raw: str, *, final: bool) -> dict:
+        plan = None
+        errors = []
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, RecursionError):
+            self.validation = "invalid" if self.envelope_complete else "incomplete"
+        else:
+            try:
+                plan = (FinalTurnPlan if final else TurnPlan).model_validate(parsed).model_dump()
+                self.validation = "valid"
+            except ValidationError as err:
+                self.validation = "invalid"
+                errors = [{"path": list(e["loc"]), "code": e["type"]}
+                          for e in err.errors(include_input=False, include_context=False)]
+        return {"plan": plan, "validation": self.validation, "errors": errors,
+                "accepted_actions": self.accepted, "rejected_actions": self.rejected}
+
+    def as_log_fields(self) -> dict:
+        return {name: getattr(self, name) for name in (
+            "stop_reason", "finish_reason", "usage_available", "validation", "first_content_ms",
+            "first_sentence_ms", "generation_ms", "total_ms") if getattr(self, name) is not None}
+
+    def as_span_attributes(self) -> dict:
+        mapping = {
+            "stop_reason": tel.META_STOP_REASON, "finish_reason": tel.META_FINISH_REASON,
+            "usage_available": tel.META_USAGE_AVAILABLE, "validation": tel.META_VALIDATION,
+            "first_content_ms": tel.ATTR_FIRST_CONTENT_MS,
+            "first_sentence_ms": tel.ATTR_FIRST_SENTENCE_MS,
+            "generation_ms": tel.ATTR_GENERATION_MS, "total_ms": tel.ATTR_CYCLE_TOTAL_MS,
+        }
+        return {mapping[k]: v for k, v in self.as_log_fields().items()}
 
 
 @dataclass
@@ -94,6 +147,7 @@ class TurnTrace:
     candidates: dict[str, str] = field(default_factory=dict)  # title_id -> name
     referenced_ids: set[str] = field(default_factory=set)
     rail_ids: list[str] = field(default_factory=list)
+    submitted: list[str] = field(default_factory=list)
 
     def spoken(self) -> str:
         return "".join(self.said).strip()

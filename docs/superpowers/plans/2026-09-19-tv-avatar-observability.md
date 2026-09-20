@@ -77,7 +77,7 @@ Attribute keys are constants in `src/tv_avatar/tracing.py` (Task 1); no task inv
 | `conversation` | root | Pipecat | *(inferred)* | **baggage on every span:** `langfuse.session.id`, `langfuse.user.id`, `langfuse.trace.name = tv-avatar-session`, `langfuse.trace.metadata.{avatar_id, language, agent_impl, half_duplex}` | `conversation.id` (Pipecat) |
 | `turn` | conversation | Pipecat | *(inferred)* | — | `turn.number`, `turn.was_interrupted`, `turn.user_bot_latency_seconds` (Pipecat) |
 | `stt` / `tts` | turn | pipecat-slng | *(inferred)* | — | Pipecat's (`transcript`, `metrics.ttfb_ms`, `voice_id`, `character_count`) |
-| `llm` | turn | `@traced_llm` on `_run_turn` | *(inferred: generation)* | `intent`, `cycles`, `fallback`, `interrupted`, `greeting` | from `TurnMetrics.as_span_attributes()`: `tv.turn.n_actions`, `tv.turn.recall_ms`, `tv.turn.ttft_ms`, `tv.turn.first_action_ms`, `tv.turn.total_ms`; from the service: `tv.turn_id`, `tv.turn.dropped_commands`, `tv.turn.offered_ids`; **input** = user text; **output** = `TurnTrace.spoken()`; plus `langfuse.trace.input` (session's first non-greeting user text) and `langfuse.trace.output` (last spoken, wins) for the trace-level view; Pipecat's `messages`, `gen_ai.usage.*` if any |
+| `llm` | turn | `@traced_llm` on `_run_turn` | `agent` (explicit; cycles are the generations) | `intent`, `cycles`, `fallback`, `interrupted`, `greeting` | from `TurnMetrics.as_span_attributes()`: `tv.turn.n_actions`, `tv.turn.recall_ms`, `tv.turn.ttft_ms`, `tv.turn.first_action_ms`, `tv.turn.total_ms`; from the service: `tv.turn_id`, `tv.turn.dropped_commands`, `tv.turn.offered_ids`; **input** = user text; **output** = `TurnTrace.spoken()`; plus `langfuse.trace.input` (session's first non-greeting user text) and `langfuse.trace.output` (last spoken, wins) for the trace-level view; Pipecat's `messages`, `gen_ai.usage.*` if any |
 | `agent.recall` | llm | Task 3 (`service.py`) | `retriever` | `source` = `prefetch_hit \| search \| stale \| empty` | `tv.memory.empty`, `tv.memory.stale`, `tv.memory.token_est`, `tv.history.chars`; **input** = user text; **output** = memory block render |
 | `agent.cycle` | llm | Task 3 (`loop.py`) | `generation` | `cycle` (number), `over_budget` | `tv.cycle.max`, `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.usage.input_tokens/output_tokens` (D21), `tv.cycle.ttft_ms`, `tv.cycle.budget_ms`, `tv.cycle.n_actions`, `tv.cycle.n_rejected`; **input** = the cycle's messages (JSON); **output** = raw envelope; a `tv.action.rejected` event per rejected element (`verb`, `reason`) — malformed, or an observation tool on the final cycle whose narrowed schema excludes it (`tv.cycle.n_skipped` was retired with the runtime cap skip, 2026-09-20) |
 | `agent.action` | agent.cycle | Task 3 (`service.py`) | `tool` | `verb`, `kind` = `internal \| tv`, `status` | `tv.action.awaits_result`, `tv.action.returns_observation` (was `earns_cycle`), `tv.action.ms`, `tv.action.n_titles`, `tv.action.matched`; **input** = args; **output** = result dict; bus `ValueError` → span status `ERROR` + `langfuse.observation.status_message` |
@@ -88,9 +88,33 @@ Attribute keys are constants in `src/tv_avatar/tracing.py` (Task 1); no task inv
 | `memory.finish_session` | root (detached; baggage supplies session/user) | Task 4 | `generation` | `trigger` = `session_end \| every_n_turns \| warmup` | `gen_ai.request.model`, `tv.memory.turns`, `tv.memory.profile_chars`; **input** = previous profile + transcript (content); **output** = new profile; failure → status `ERROR`, event `transcript kept for retry` |
 | `recs.recommend` | agent.action | Task 4 | `retriever` | `query_embed` = `hit \| miss \| timeout \| none` | `tv.recs.channels`, `tv.recs.n`, `tv.recs.limit`; **input** = `RecsContext` (query, filters); **output** = title ids + reasons |
 | `tv.command` | agent.action | Task 5 | `tool` | `verb`, `status` | `tv.command.id`, `tv.command.awaits_result` |
-| `tv.command_result` | root (baggage), linked to `tv.command` | Task 5 | `event` | `status` | `tv.command.id`, `tv.command.roundtrip_ms` |
+| `tv.command_result` | root (baggage), linked to `tv.command` | Task 5 | `event` | `status`, `reply_type`, `turn_id`, `cycle`, `action_index` | `tv.command.id`, `tv.command.roundtrip_ms`; search ack and result are independently recorded |
+| `tv.command_delivery` | root, linked to `tv.command` | bus/channel | `event` | `status` = `queued \| sent \| dropped \| send_failed`, `turn_id`, `cycle`, `action_index` | `tv.command.id`; sent means WebSocket submission, not viewer receipt |
+| `agent.plan` | agent.cycle | loop | `event` | `validation`, `turn_id`, `cycle` | **output** = validated plan, accepted/rejected actions with indexes, validation error paths/codes; diagnostic only |
+| `agent.speech` | agent.cycle or agent.fallback | loop | `event` | `source` = `model \| fallback`, `status`, `turn_id`, `cycle` | `tv.speech.sentence_index`; **output** = text submitted to TTS, not proof of playback |
+| `agent.feedback` | llm | loop | `event` | `turn_id`, `cycle` | **output** = exact tool feedback used by the next cycle |
 | `turn.latency` | turn | Task 6 | `event` | `n_errors` | `tv.latency.interim_to_context_ms`, `tv.latency.ttft_ms`, `tv.latency.turn_total_ms`, `tv.latency.pipecat_ttfb_ms`, `tv.latency.pipecat_processing_ms`, `tv.latency.interrupt_stop_ms`; `tv.error` events (`message`, `fatal`) |
 
+
+### Telemetry extension (2026-09-20)
+
+Every session observation also carries `langfuse.release` from `APP_REVISION` and
+`langfuse.observation.metadata.telemetry_version`. Agent work propagates `turn_id`,
+`cycle` and `action_index` where applicable. Cycle metadata adds `schema_name`,
+`schema_hash`, `final_cycle`, `provider`, `validation`, `stop_reason`, `finish_reason`
+(only when observed) and `usage_available`. Details add `tv.cycle.first_content_ms`,
+`tv.cycle.first_sentence_ms`, `tv.cycle.generation_ms`, `tv.cycle.total_ms`,
+`tv.cycle.envelope_complete`, `gen_ai.response.model/id` and `tv.provider.request_id`
+when available. The turn adds `tv.prompt.hash` for the static prompt and
+`tv.speech.submitted`, independently of its generated-text output and memory transcript.
+
+`TRACE_CONTENT=false` covers span inputs/outputs, events, links and error descriptions,
+including Pipecat's `input`/`system` aliases, both remote and console exporters, and
+application logs. Content-enabled exports mask configured credentials and bound values
+with explicit truncation markers (`TELEMETRY_MAX_CHARS`). JSON logs are opt-in via
+`LOG_FORMAT=json`; the bounded background sink drops on saturation rather than waiting
+on speech. Missing provider usage is not estimated, and streams are not drained just
+for telemetry. Langfuse retention/access policies remain deployment administration.
 
 ## Coordination with the existing branches
 

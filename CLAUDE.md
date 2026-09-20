@@ -27,6 +27,15 @@ dependency and the repo carries no ruff config, so `uv run ruff` fails — use `
 Scope it to `src tests tools`: a bare `ruff check .` also walks the vendored skills under
 `.claude/` and drowns the real findings in hundreds of third-party ones.
 
+## Telemetry verification
+
+`uv run python tools/langfuse_smoke.py --agent-fixture` sends a synthetic two-cycle
+search through the real agent and simulated TV, then verifies generations, parsed plans,
+speech submissions and command replies in Langfuse. It uses no model/speech APIs and
+no viewer data. Repeat with `TRACE_CONTENT=false` to verify metadata-only ingestion.
+`LOG_FORMAT=json` enables correlated structured logs; `TELEMETRY_MAX_CHARS` defaults to
+16384 per captured value, and `APP_REVISION` identifies the deployed revision.
+
 ## Platform
 
 **This is a GitHub repository — use `gh`, "pull request", GitHub Actions.**
@@ -48,7 +57,10 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   the wire format but not the agent. `pipeline/builder.py` knows Pipecat but not the
   protocol. Keep it that way.
 - **Commands are fire-and-forget.** Only `search_catalog` (`AWAITS_RESULT` in `commands.py`)
-  blocks an LLM turn, for at most 400 ms. Awaiting the TV app anywhere else stalls speech.
+  blocks an LLM turn, waiting for a result or turn cancellation with no default deadline.
+  Follow-up speech deadlines are also off by default (`CYCLE_FIRST_BYTE_S=0`); a positive
+  value opts back into the budget and templated fallback. Awaiting the TV app anywhere else
+  stalls speech. The `/demo/` console logs commands but does not answer catalog searches.
 - **The cycle cap is the schema's, not the loop's.** The last allowed cycle is decoded against
   `turn_plan_schema(final=True)`, whose actions union has no observation-returning tools, and
   `parse_action(final=True)` validates against the same union. The loop (`agent/loop.py`) only

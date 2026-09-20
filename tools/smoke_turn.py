@@ -71,7 +71,7 @@ class Sink(FrameProcessor):
 
 async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
     settings = SmokeSettings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, settings=settings)
     traced = setup_tracing(settings)
     runtime = build_runtime(settings)
     if runtime.catalog is None:

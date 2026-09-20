@@ -12,6 +12,7 @@ avatar stop together; the partial reply is still ingested into memory.
 """
 import asyncio
 import contextlib
+import hashlib
 import json
 import time
 from typing import Any
@@ -35,6 +36,7 @@ from pipecat.utils.text.base_text_aggregator import AggregationType
 from pipecat.utils.tracing.service_decorators import traced_llm
 from pydantic import BaseModel
 
+from tv_avatar import tracing as tel
 from tv_avatar.agent.envelope import REGISTRY
 from tv_avatar.agent.loop import MAX_TOKENS, TEMPERATURE, TurnRunner
 from tv_avatar.agent.prompt import (
@@ -196,7 +198,9 @@ class SGRAgentService(LLMService):
         turn_id = self._session.new_turn()
         self._turn_id = turn_id
         self._interrupted = False
-        self._turn_task = asyncio.create_task(self._turn(context, turn_id))
+        with tel.attribute_scope({tel.META_TURN_ID: turn_id}), logger.contextualize(
+                session_id=self._session.session_id, turn_id=turn_id):
+            self._turn_task = asyncio.create_task(self._turn(context, turn_id))
         try:
             await self._turn_task
         except asyncio.CancelledError:
@@ -230,7 +234,11 @@ class SGRAgentService(LLMService):
         # Kept locally too: on interruption `_cancel_turn` swaps `self._trace` out
         # for ingest before this coroutine's `finally` gets to run.
         turn_trace = self._trace = TurnTrace(user_text=user_text)
-        span.set_attributes({ATTR_TURN_ID: turn_id, META_GREETING: greeting, ATTR_OBS_INPUT: user_text})
+        span.set_attributes({ATTR_TURN_ID: turn_id, META_GREETING: greeting, ATTR_OBS_INPUT: user_text,
+                             tel.ATTR_OBS_TYPE: tel.OBS_TYPE_AGENT, tel.META_TURN_ID: turn_id,
+                             tel.META_STATUS: "running",
+                             tel.ATTR_PROMPT_HASH: hashlib.sha256(build_system_prompt(
+                                 self._session.persona.language).encode()).hexdigest()})
         if not greeting and not self._trace_input_set:
             self._trace_input_set = True
             span.set_attribute(ATTR_TRACE_INPUT, user_text)
@@ -271,14 +279,25 @@ class SGRAgentService(LLMService):
             log.debug("turn close", step="end", **metrics.as_log_fields())
             log.info("turn", **metrics.as_log_fields())
             self._schedule_ingest(interrupted=False)
+            span.set_attribute(tel.META_STATUS, "completed")
+        except asyncio.CancelledError:
+            span.set_attribute(tel.META_STATUS, "interrupted")
+            raise
+        except Exception as err:
+            span.set_attribute(tel.META_STATUS, "error")
+            span.set_attribute(tel.ATTR_ERROR_TYPE, type(err).__name__)
+            raise
         finally:
             # One producer, two sinks (D16): the `turn` log line above and the span.
             # Runs on interruption too, with what the turn had by then.
             spoken = turn_trace.spoken()
+            metrics.mark_once("total_ms", ctx.elapsed_ms())
+            log.info("agent.turn.completed", event="agent.turn.completed", **metrics.as_log_fields())
             set_attributes(span, {
                 **metrics.as_span_attributes(),
                 ATTR_TURN_OFFERED_IDS: turn_trace.offered_ids() or None,
                 ATTR_OBS_OUTPUT: spoken, ATTR_TRACE_OUTPUT: spoken,
+                tel.ATTR_SPEECH_SUBMITTED: " ".join(turn_trace.submitted),
             })
 
     def _record_offered(self, ctx: TurnContext) -> None:
@@ -353,8 +372,13 @@ class SGRAgentService(LLMService):
                 else:
                     log.info("tv command", verb=verb, status=result.get("status"),
                              ms=round((time.perf_counter() - t0) * 1000))
+            status = str(result.get("status", "ok"))
+            log.info("agent.action.completed", event="agent.action.completed", verb=verb,
+                     status=status, ms=round((time.perf_counter() - t0) * 1000))
+            if status in {"unavailable", "invalid", "error"}:
+                span.set_attribute(tel.ATTR_OBS_LEVEL, tel.LEVEL_WARNING)
             span.set_attributes({
-                META_STATUS: str(result.get("status", "ok")), ATTR_ACTION_MS: round((time.perf_counter() - t0) * 1000),
+                META_STATUS: status, ATTR_ACTION_MS: round((time.perf_counter() - t0) * 1000),
                 ATTR_OBS_OUTPUT: json.dumps(result, ensure_ascii=False, default=str),
             })
             return result

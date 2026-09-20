@@ -52,6 +52,30 @@ async def test_search_catalog_awaits_and_resolves():
     assert result["titles"][0]["name"] == "Big"
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_search_waits_past_the_old_deadline_until_reply_or_cancellation(cancel):
+    bus = CommandBus()
+    task = asyncio.create_task(
+        bus.dispatch("search_catalog", {"query": "Frozen"}, turn_id="turn_1")
+    )
+    try:
+        msg = await asyncio.wait_for(bus.next_outbound(), timeout=0.1)
+        await asyncio.sleep(0.5)
+        assert not task.done()
+        assert bus.pending_count() == 1
+        if cancel:
+            bus.cancel_turn("turn_1")
+            expected = {"status": "cancelled", "reason": "interrupted"}
+        else:
+            expected = {"titles": [{"title_id": "1", "name": "Frozen"}]}
+            bus.resolve(msg.id, expected)
+        assert await asyncio.wait_for(task, timeout=0.1) == expected
+        assert bus.pending_count() == 0
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_search_catalog_degrades_on_timeout():
     bus = CommandBus(search_timeout_s=0.05)
     result = await asyncio.wait_for(
@@ -85,6 +109,35 @@ async def test_cancel_turn_leaves_other_turns_searches_pending():
     assert bus.pending_count() == 1
     bus.resolve(msg.id, {"titles": []})
     assert (await asyncio.wait_for(task, timeout=0.1)) == {"titles": []}
+
+
+async def test_search_ack_and_result_both_keep_command_correlation(otel):
+    bus = CommandBus()
+    task = asyncio.create_task(bus.dispatch("search_catalog", {"query": "space"}, "turn_1"))
+    msg = await bus.next_outbound()
+    bus.mark_sent(msg.id)
+    bus.record_reply(msg.id, "ok", {"ok": True}, reply_type="ack")
+    bus.resolve(msg.id, {"titles": []})
+    bus.record_reply(msg.id, "ok", {"titles": []}, reply_type="result")
+    await task
+    replies = otel.spans()["tv.command_result"]
+    assert [s.attributes["langfuse.observation.metadata.reply_type"] for s in replies] == ["ack", "result"]
+    assert all(s.attributes["langfuse.observation.metadata.turn_id"] == "turn_1" for s in replies)
+    assert replies[0].links[0].context == replies[1].links[0].context
+    bus.record_reply(msg.id, "ok", {}, reply_type="result")
+    assert len(otel.spans()["tv.command_result"]) == 2
+
+
+async def test_command_lifecycle_distinguishes_queue_send_and_drop(otel):
+    bus = CommandBus()
+    await bus.dispatch("pause", {}, "turn_1")
+    await bus.dispatch("home", {}, "turn_1")
+    sent = await bus.next_outbound()
+    bus.mark_sent(sent.id)
+    assert bus.cancel_turn("turn_1") == 1
+    states = [s.attributes["langfuse.observation.metadata.status"]
+              for s in otel.spans()["tv.command_delivery"]]
+    assert states == ["queued", "queued", "sent", "dropped"]
 
 
 async def test_dispatch_opens_a_tv_command_span_that_covers_the_wait(otel):

@@ -84,6 +84,108 @@ def test_redacting_processor_strips_content_attrs():
     assert plain.attributes["tv.turn.ttft_ms"] == 3
 
 
+def test_redaction_covers_events_status_and_links():
+    from opentelemetry.trace import Link, Status, StatusCode
+
+    sink = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(RedactingSpanProcessor(SimpleSpanProcessor(sink)))
+    with provider.get_tracer("t").start_as_current_span("parent") as parent:
+        link = Link(parent.get_span_context(), {"text": "private-link"})
+        with provider.get_tracer("t").start_as_current_span("child", links=[link]) as span:
+            span.add_event("exception", {"exception.type": "ValueError",
+                                         "exception.message": "private-error",
+                                         "exception.stacktrace": "private-stack"})
+            span.add_event("speech", {"text": "private-speech", "index": 1})
+            span.set_status(Status(StatusCode.ERROR, "private-status"))
+    child = sink.get_finished_spans()[0]
+    assert "private" not in str(child.attributes)
+    assert "private" not in str([e.attributes for e in child.events])
+    assert "private" not in str([link.attributes for link in child.links])
+    assert child.status.description is None
+    assert child.status.status_code is StatusCode.ERROR
+    assert child.events[0].attributes["exception.type"] == "ValueError"
+    provider.shutdown()
+
+
+def test_content_policy_bounds_and_masks_payloads():
+    import json
+
+    from tv_avatar.telemetry import ContentPolicy
+
+    policy = ContentPolicy(content=True, max_chars=128, secrets=("test-credential",))
+    encoded = policy.encode({"text": "hello test-credential", "api_key": "hidden"})
+    assert "test-credential" not in encoded and "hidden" not in encoded
+    truncated = json.loads(policy.encode({"text": "x" * 1000}))
+    assert truncated["truncated"] is True
+    assert len(truncated["preview"]) <= 128
+    assert ContentPolicy(content=False).encode({"say": "private"}) is None
+
+
+def test_console_and_remote_exporters_share_the_content_policy(monkeypatch):
+    from tv_avatar import tracing
+
+    remote, console = InMemorySpanExporter(), InMemorySpanExporter()
+    monkeypatch.setattr(tracing, "_provider", None)
+    monkeypatch.setattr(tracing.trace, "set_tracer_provider", lambda provider: None)
+    monkeypatch.setattr(tracing, "ConsoleSpanExporter", lambda: console)
+    settings = _settings(trace_content=False, otel_console_export=True)
+    assert tracing.setup_tracing(settings, exporter=remote)
+    provider = tracing._provider
+    try:
+        with provider.get_tracer("t").start_as_current_span("probe") as span:
+            span.set_attribute("langfuse.observation.output", "private-output")
+            span.set_attribute("tv.speech.submitted", "private-speech")
+            span.add_event("exception", {"exception.message": "private-error"})
+        provider.force_flush()
+        for sink in (remote, console):
+            exported, = sink.get_finished_spans()
+            assert "private" not in exported.to_json()
+    finally:
+        tracing.shutdown_tracing()
+
+
+def test_exporter_failure_does_not_escape_into_application():
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+
+    class BrokenExporter(SpanExporter):
+        def export(self, spans):
+            raise ConnectionError("export offline")
+
+    provider = TracerProvider()
+    provider.add_span_processor(RedactingSpanProcessor(BatchSpanProcessor(BrokenExporter())))
+    with provider.get_tracer("t").start_as_current_span("work"):
+        pass
+    provider.force_flush()
+    provider.shutdown()
+
+
+async def test_synthetic_smoke_covers_agent_without_network(otel, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
+    from tools.langfuse_smoke import synthetic_turn
+
+    session_id, trace_id = await synthetic_turn(_settings())
+    spans = otel.spans()
+    root, = spans["telemetry.synthetic_turn"]
+    assert format(root.context.trace_id, "032x") == trace_id
+    assert len(spans["agent.cycle"]) == len(spans["agent.plan"]) == 2
+    assert all(s.context.trace_id == root.context.trace_id for s in spans["agent.cycle"])
+    assert root.attributes["langfuse.session.id"] == session_id
+    assert len(spans["tv.command_result"]) == 3
+    sink = InMemorySpanExporter()
+    processor = RedactingSpanProcessor(SimpleSpanProcessor(sink))
+    for group in spans.values():
+        for span in group:
+            processor.on_end(span)
+    exported = " ".join(span.to_json() for span in sink.get_finished_spans())
+    assert "Find a space film" not in exported, [
+        key for span in sink.get_finished_spans() for key, value in span.attributes.items()
+        if "Find a space film" in str(value)]
+    assert "I found Moon" not in exported
+
+
 def test_session_scope_puts_identity_on_every_span(otel):
     with (session_scope(_session(), _settings(), half_duplex=True),
           observation("outer", type="span"),

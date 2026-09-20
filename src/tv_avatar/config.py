@@ -2,7 +2,7 @@
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # A blank line in .env ("KEY=") reads as "", which str alone would accept.
@@ -115,11 +115,19 @@ class Settings(BaseSettings):
     #: measured sweet spot on a voice budget; every extra cycle is ~1 s of
     #: waiting the viewer hears.
     agent_max_cycles: int = Field(default=2, ge=1, le=4)
-    #: Every cycle after the first must produce its first `say` byte within this
-    #: budget or the tool results are spoken from a template instead.
+    #: Optional first `say` byte budget for follow-up cycles; zero disables it.
+    #: When enabled, overdue tool results are spoken from a template instead.
     cycle_first_byte_s: float = Field(
-        default=1.2, validation_alias=AliasChoices("CYCLE_FIRST_BYTE_S", "CYCLE2_FIRST_BYTE_S"))
+        default=0.0, ge=0, validation_alias=AliasChoices("CYCLE_FIRST_BYTE_S", "CYCLE2_FIRST_BYTE_S"))
     log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+    telemetry_max_chars: int = Field(default=16384, ge=128, le=262144)
+    app_revision: str = "unknown"
+
+    @field_validator("log_format", "telemetry_max_chars", "app_revision", mode="before")
+    @classmethod
+    def telemetry_defaults(cls, value: Any, info: ValidationInfo) -> Any:
+        return cls.model_fields[info.field_name].default if value == "" else value
 
     # Tracing — OpenTelemetry → Langfuse as an OTLP/HTTP sink (observability
     # plan D13, D17). Off by default; nothing is exported and nothing in the

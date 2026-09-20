@@ -11,9 +11,13 @@ import json
 import time
 import uuid
 from collections import OrderedDict, deque
+from dataclasses import dataclass, field
 
-from opentelemetry.trace import SpanContext
+from loguru import logger
+from opentelemetry import baggage
+from opentelemetry.trace import Link, SpanContext, StatusCode
 
+from tv_avatar import tracing as tel
 from tv_avatar.agent.commands import AWAITS_RESULT, parse_command
 from tv_avatar.control.protocol import CommandMsg, ServerMessage
 from tv_avatar.tracing import (
@@ -32,13 +36,23 @@ from tv_avatar.tracing import (
 MAX_ORIGINS = 256
 
 
+@dataclass
+class _CommandOrigin:
+    context: SpanContext
+    queued_at: float
+    turn_id: str
+    awaits: bool
+    attributes: dict
+    replies: set[str] = field(default_factory=set)
+
+
 class CommandBus:
-    def __init__(self, search_timeout_s: float = 0.4) -> None:
+    def __init__(self, search_timeout_s: float | None = None) -> None:
         self._outbound: deque[ServerMessage] = deque()
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
-        self._origins: OrderedDict[str, tuple[SpanContext, float]] = OrderedDict()
+        self._origins: OrderedDict[str, _CommandOrigin] = OrderedDict()
         self._search_timeout_s = search_timeout_s
 
     async def dispatch(self, verb: str, args: dict, turn_id: str) -> dict:
@@ -54,9 +68,12 @@ class CommandBus:
         # for the awaited one; the TV's reply becomes a linked `tv.command_result`.
         with observation("tv.command", type=OBS_TYPE_TOOL, **{
             META_VERB: msg.verb, ATTR_COMMAND_ID: msg.id, ATTR_COMMAND_AWAITS_RESULT: awaits,
+            tel.META_TURN_ID: turn_id,
             ATTR_OBS_INPUT: json.dumps(msg.args, ensure_ascii=False),
         }) as span:
-            self._origins[msg.id] = (span.get_span_context(), time.monotonic())
+            self._origins[msg.id] = _CommandOrigin(
+                span.get_span_context(), time.monotonic(), turn_id, awaits,
+                {**dict(baggage.get_all()), META_VERB: msg.verb, tel.META_TURN_ID: turn_id})
             while len(self._origins) > MAX_ORIGINS:
                 self._origins.popitem(last=False)
             result = await self._send(msg, turn_id, awaits)
@@ -83,7 +100,51 @@ class CommandBus:
 
     def origin(self, command_id: str) -> tuple[SpanContext, float] | None:
         """The `tv.command` span context and send time of a command, once."""
-        return self._origins.pop(command_id, None)
+        origin = self._origins.pop(command_id, None)
+        return (origin.context, origin.queued_at) if origin is not None else None
+
+    def has_origin(self, command_id: str) -> bool:
+        return command_id in self._origins
+
+    def mark_sent(self, command_id: str) -> None:
+        origin = self._origins.get(command_id)
+        if origin is not None:
+            self._delivery(command_id, "sent")
+
+    def mark_send_failed(self, command_id: str) -> None:
+        self._delivery(command_id, "send_failed")
+
+    def _delivery(self, command_id: str, status: str) -> None:
+        origin = self._origins.get(command_id)
+        if origin is None:
+            return
+        with tel.attribute_scope(origin.attributes), observation("tv.command_delivery", type=tel.OBS_TYPE_EVENT,
+                         parent_context=tel.detached_from_span(), links=(Link(origin.context),), **{
+            **origin.attributes, ATTR_COMMAND_ID: command_id, META_STATUS: status,
+        }) as span:
+            if status == "send_failed":
+                span.set_status(StatusCode.ERROR, "send_failed")
+            logger.info("tv.command.delivery", event="tv.command.delivery", command_id=command_id,
+                        turn_id=origin.turn_id, status=status)
+
+    def record_reply(self, command_id: str, status: str, payload: dict, *, reply_type: str) -> None:
+        origin = self._origins.get(command_id)
+        if origin is None or reply_type in origin.replies:
+            return
+        origin.replies.add(reply_type)
+        with tel.attribute_scope(origin.attributes), observation("tv.command_result", type=tel.OBS_TYPE_EVENT,
+                         parent_context=tel.detached_from_span(), links=(Link(origin.context),), **{
+            **origin.attributes, ATTR_COMMAND_ID: command_id, META_STATUS: status,
+            tel.META_REPLY_TYPE: reply_type,
+            tel.ATTR_COMMAND_ROUNDTRIP_MS: round((time.monotonic() - origin.queued_at) * 1000),
+            ATTR_OBS_OUTPUT: json.dumps(payload, ensure_ascii=False, default=str),
+        }) as span:
+            if status in {"failed", "error", "invalid"}:
+                span.set_status(StatusCode.ERROR, status)
+            logger.info("tv.command.reply", event="tv.command.reply", command_id=command_id,
+                        turn_id=origin.turn_id, status=status, reply_type=reply_type)
+        if not origin.awaits or origin.replies == {"ack", "result"}:
+            self._origins.pop(command_id, None)
 
     def publish(self, msg: ServerMessage) -> None:
         """Queue a non-command server message (agent_status, transcript).
@@ -94,6 +155,8 @@ class CommandBus:
 
     def _enqueue(self, msg: ServerMessage) -> None:
         self._outbound.append(msg)
+        if isinstance(msg, CommandMsg):
+            self._delivery(msg.id, "queued")
         self._ready.set()
 
     async def next_outbound(self) -> ServerMessage:
@@ -109,6 +172,10 @@ class CommandBus:
         (spec §9, rule 4). A ``search_catalog`` handler still awaiting its
         result is released immediately with ``{"status": "cancelled"}`` so
         the interrupted turn does not sit out the 400 ms timeout."""
+        for msg in self._outbound:
+            if isinstance(msg, CommandMsg) and msg.turn_id == turn_id:
+                self._delivery(msg.id, "dropped")
+                self._origins.pop(msg.id, None)
         keep = deque(
             m for m in self._outbound
             if not isinstance(m, CommandMsg) or m.turn_id != turn_id
