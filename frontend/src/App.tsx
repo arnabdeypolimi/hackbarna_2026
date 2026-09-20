@@ -24,6 +24,7 @@ import { Profiles } from './components/Profiles';
 import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
 import { WeatherTheme } from './weather/WeatherTheme';
+import { AmbientScene, useAmbient, useAmbientScreen, withAmbient } from './ambient';
 import { Toast, useToast } from './components/Toast';
 import { loadAvatarVideo, saveAvatarVideo, useAvatar } from './hooks/useAvatar';
 import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
@@ -120,6 +121,7 @@ export default function App() {
   useEffect(() => {
     if (viewerChosen && settled) setRoomOpen(true);
   }, [viewerChosen, settled]);
+  const ambient = useAmbient();
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -512,7 +514,7 @@ export default function App() {
     selectPoster(0);
   };
 
-  tv.current = {
+  tv.current = withAmbient({
     play: ({ title_id }) => {
       const t = fromWireId(title_id, catalog);
       if (!t) return `unknown title ${title_id}`;
@@ -549,7 +551,7 @@ export default function App() {
     show_titles: showTitles,
     search_catalog: ({ query: q, limit }) =>
       searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
-  };
+  }, ambient);
 
   // Dev only: `__tv.show_products({ title_id: '346698' })` from the console exercises a
   // verb without a voice session behind it. Stripped from production builds.
@@ -562,7 +564,8 @@ export default function App() {
     }),
     [tab, query, rail, row, selIdx, player, playback, shop, products],
   );
-  useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
+  const shown = useAmbientScreen(screen, ambient.scene);
+  useScreenStatePush(shown, avatar.send, avatar.phase === 'live');
 
   // One listener for the app's lifetime that always calls the latest handler.
   const keyHandler = useRef(onKey);
@@ -621,6 +624,7 @@ export default function App() {
       {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
       <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
       <WeatherTheme theme={theme} themeOpen={themeOpen} paused={!!player || status.kind === 'loading'} motion={tunes[theme.id].motion} />
+      <AmbientScene ambient={ambient} />
       {/* Any trailer, inline or full: while a moving image is on screen the room stands square. */}
       <Stage ref={stageRef} flat={!!player} solo={!roomOpen}>
         <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />

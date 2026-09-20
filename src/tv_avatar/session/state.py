@@ -53,6 +53,10 @@ class SessionState:
             lines.append(
                 f"Playback: {pb.state} {pb.title_id} at {pb.position_s:.0f}s"
             )
+        # Its own line, apart from Playback: the scene covers the screen but is
+        # not a title, and the pause/seek rules keyed on Playback must not apply.
+        if s.ambient:
+            lines.append(f"Ambient scene: {s.ambient} (full screen, looping)")
         lines.append("Shop shelves (title_id: items):\n" + get_shop().render_shelves())
         return "\n".join(lines)
 

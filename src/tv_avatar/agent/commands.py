@@ -9,6 +9,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from tv_avatar.ambient.scenes import SceneId
+
 
 class Verb(StrEnum):
     PLAY = "play"
@@ -24,6 +26,8 @@ class Verb(StrEnum):
     SHOW_PRODUCTS = "show_products"
     SEARCH_CATALOG = "search_catalog"
     SHOW_TITLES = "show_titles"
+    SHOW_AMBIENT = "show_ambient"
+    HIDE_AMBIENT = "hide_ambient"
 
 
 class Play(BaseModel):
@@ -101,9 +105,23 @@ class ShowTitles(BaseModel):
     label: str = Field(default="For you", min_length=1, max_length=60)
 
 
+class ShowAmbient(BaseModel):
+    """Put a relaxing scene on full screen, looping, with its own sound. The TV
+    opens with a starter clip it ships with, makes the full video behind it
+    (frontend/src/ambient) and keeps that for the next request, so nothing waits
+    on a session and a scene asked for again costs nothing."""
+    verb: Literal[Verb.SHOW_AMBIENT] = Verb.SHOW_AMBIENT
+    scene: SceneId
+
+
+class HideAmbient(BaseModel):
+    verb: Literal[Verb.HIDE_AMBIENT] = Verb.HIDE_AMBIENT
+
+
 CommandArgs = Annotated[
     Play | Pause | Resume | Seek | Navigate | Focus
-    | OpenDetails | Close | Back | Home | ShowProducts | SearchCatalog | ShowTitles,
+    | OpenDetails | Close | Back | Home | ShowProducts | SearchCatalog | ShowTitles
+    | ShowAmbient | HideAmbient,
     Field(discriminator="verb"),
 ]
 
@@ -121,6 +139,8 @@ COMMAND_MODELS: dict[Verb, type[BaseModel]] = {
     Verb.SHOW_PRODUCTS: ShowProducts,
     Verb.SEARCH_CATALOG: SearchCatalog,
     Verb.SHOW_TITLES: ShowTitles,
+    Verb.SHOW_AMBIENT: ShowAmbient,
+    Verb.HIDE_AMBIENT: HideAmbient,
 }
 
 #: Only these block the LLM turn awaiting a client response (spec §8).
