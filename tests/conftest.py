@@ -23,6 +23,9 @@ PERSONA = SessionPersona(
 @pytest.fixture(autouse=True)
 def _isolated_runtime_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_IMPL", "stub")
+    # The developer's .env may point tracing at a real Langfuse; tests export
+    # in memory only, through the `otel` fixture below.
+    monkeypatch.setenv("TRACING_ENABLED", "false")
     monkeypatch.setenv("CATALOG_PATH", str(tmp_path / "catalog.parquet"))
     monkeypatch.setenv("QDRANT_PATH", str(tmp_path / "qdrant_db"))
     monkeypatch.setenv("HISTORY_DB_PATH", str(tmp_path / "history.db"))

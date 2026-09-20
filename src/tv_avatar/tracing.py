@@ -196,7 +196,10 @@ def build_exporter(settings: Settings) -> SpanExporter:
 
 
 def setup_tracing(settings: Settings, *, exporter: SpanExporter | None = None) -> bool:
-    """Install the process-global provider once. False = tracing stays off.
+    """Install the process-global provider. True only when *this call* installed
+    it — the caller that gets True owns the matching ``shutdown_tracing()``, so
+    an app booted under an already-traced process (the test fixture) leaves
+    that provider alone.
 
     Built here rather than through ``pipecat.utils.tracing.setup`` because that
     helper registers its batch processor before returning, and the redacting
@@ -207,7 +210,7 @@ def setup_tracing(settings: Settings, *, exporter: SpanExporter | None = None) -
     if exporter is None and not tracing_wanted(settings):
         return False
     if _provider is not None:
-        return True
+        return False
     if exporter is None:
         exporter = build_exporter(settings)
     provider = TracerProvider(resource=Resource.create({

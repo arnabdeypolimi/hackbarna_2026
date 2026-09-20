@@ -115,3 +115,12 @@ def test_detached_context_is_root_but_keeps_baggage(otel):
     fold, = otel.spans()["fold"]
     assert fold.parent is None
     assert fold.attributes["langfuse.session.id"] == "sess_1"
+
+
+def test_an_app_booted_under_an_existing_provider_does_not_own_it(otel):
+    """create_app() with TRACING_ENABLED=true in a traced process (this test suite,
+    or an embedding host) must not shut the shared provider down on exit."""
+    from tv_avatar import tracing
+    on = _settings(tracing_enabled=True, langfuse_public_key="pk", langfuse_secret_key="sk")
+    assert tracing.setup_tracing(on) is False           # already installed by the fixture
+    assert tracing._provider is not None
