@@ -188,8 +188,9 @@ async def test_two_cycle_turn_is_ingested_once_with_a_space_between_cycles():
 
 @pytest.mark.parametrize("max_cycles", [1, 2, 3])
 async def test_cycles_are_capped_at_setting(max_cycles):
-    """The model asks for a tool on every cycle; the loop still ends at AGENT_MAX_CYCLES
-    and the last cycle's tool call is refused rather than run without a reply."""
+    """The model asks for a tool on every cycle; the loop still ends at AGENT_MAX_CYCLES.
+    A real decoder cannot emit the tool on the final cycle (narrowed schema); this
+    canned envelope still does, and is rejected rather than run without a reply."""
     settings = _settings().model_copy(update={"agent_max_cycles": max_cycles})
     tools, client = FakeTools(), FakeOpenAI([RECO_1] * 4)
     agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
@@ -202,19 +203,47 @@ async def test_cycles_are_capped_at_setting(max_cycles):
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
 
 
-async def test_feedback_tells_the_model_when_tools_are_still_allowed():
+async def test_final_cycle_is_decoded_against_the_narrowed_schema():
+    """The cap is the schema, not a prompt hint: only the last allowed cycle is
+    sent `turn_plan_final`, which cannot express an observation tool."""
     settings = _settings().model_copy(update={"agent_max_cycles": 3})
     client = FakeOpenAI([RECO_1, RECO_1, RECO_2])
     agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
                             SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend"))])
     assert len(client.calls) == 3
+    assert [c["response_format"]["json_schema"]["name"] for c in client.calls] == [
+        "turn_plan", "turn_plan", "turn_plan_final"]
     second, third = client.calls[1]["messages"][-1]["content"], client.calls[2]["messages"][-1]["content"]
     assert second.startswith("[tool results]") and third.startswith("[tool results]")
-    assert "Do not call internal tools again" not in second and "one more internal tool" in second
-    assert "Do not call internal tools again" in third
+    assert "Heat" in second and "Heat" in third
     # Every follow-up cycle carries the whole exchange so far: envelope, results, envelope, results.
     assert [m["role"] for m in client.calls[2]["messages"][-4:]] == ["assistant", "user", "assistant", "user"]
+
+
+async def test_turn_ends_when_a_cycle_yields_no_observation():
+    """The model, not the cap, ends the turn: with room for four cycles it stops
+    after the answer cycle because that one asked for nothing."""
+    settings = _settings().model_copy(update={"agent_max_cycles": 4})
+    client = FakeOpenAI([RECO_1, RECO_2, RECO_1, RECO_1])
+    agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
+    sink = TimingSink()
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
+    assert len(client.calls) == 2
+    assert _spoken(sink) == ["Let me look.", "Try Heat or Inception."]
+
+
+async def test_first_cycle_is_never_budgeted():
+    """Only follow-up cycles race the first-byte budget; a slow first cycle
+    still speaks — there is nothing to fall back to yet."""
+    settings = _settings().model_copy(update={"cycle_first_byte_s": 0.05})
+    client, sink, bus = FakeOpenAI([PLAY], delay_s=0.03), TimingSink(), RecordingBus()
+    agent = SGRAgentService(settings, bus, FakeMemoryLane(), None, None,
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("play it"))])
+    assert _spoken(sink) == ["On it."]
+    assert (await bus.next_outbound()).verb == "play"
 
 
 async def test_every_follow_up_cycle_is_budgeted():
@@ -637,7 +666,7 @@ async def test_turn_produces_llm_recall_cycle_action_spans(otel):
     assert action.attributes["langfuse.observation.metadata.verb"] == "play"
     assert action.attributes["langfuse.observation.metadata.kind"] == "tv"
     assert action.attributes["langfuse.observation.metadata.status"] == "dispatched"
-    assert action.attributes["tv.action.earns_cycle"] is False
+    assert action.attributes["tv.action.returns_observation"] is False
     assert action.parent.span_id == cycle.context.span_id
 
 
@@ -684,24 +713,25 @@ async def test_slow_follow_up_cycle_records_over_budget_and_fallback(otel):
 
 
 async def test_cycle_cap_refusal_and_parse_rejection_are_counted(otel):
-    """agent_max_cycles=1: recommend_titles is refused (cap), seek is rejected
-    (ValidationError), reject_title runs."""
+    """agent_max_cycles=1: the only cycle is the final one, so recommend_titles is
+    not in its union and is rejected exactly like the malformed seek; reject_title runs."""
     envelope = ('{"intent":"control","say":"ok","actions":['
                 '{"verb":"seek","to_seconds":1,"delta_seconds":2},'
                 '{"verb":"reject_title","title_id":"7"},'
                 '{"verb":"recommend_titles","query":"heist"}]}')
     settings = _settings().model_copy(update={"agent_max_cycles": 1})
+    client = FakeOpenAI([envelope])
     agent = SGRAgentService(settings, RecordingBus(), FakeMemoryLane(), None, None,
-                            SessionState("sess_t", "tok", 0, user_id="u1"),
-                            client=FakeOpenAI([envelope]), tools=FakeTools())
+                            SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
     _traced(agent)
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("seek"))])
     spans = otel.spans()
     cycle, = spans["agent.cycle"]
-    assert cycle.attributes["tv.cycle.n_skipped"] == 1 and cycle.attributes["tv.cycle.n_rejected"] == 1
+    assert client.calls[0]["response_format"]["json_schema"]["name"] == "turn_plan_final"
+    assert cycle.attributes["tv.cycle.n_rejected"] == 2 and "tv.cycle.n_skipped" not in cycle.attributes
     assert cycle.attributes["tv.cycle.n_actions"] == 1
-    assert [e.name for e in cycle.events] == ["tv.action.rejected"]
-    assert cycle.events[0].attributes["verb"] == "seek"
+    assert [e.name for e in cycle.events] == ["tv.action.rejected", "tv.action.rejected"]
+    assert [e.attributes["verb"] for e in cycle.events] == ["seek", "recommend_titles"]
     assert [a.attributes["langfuse.observation.metadata.verb"] for a in spans["agent.action"]] == ["reject_title"]
 
 

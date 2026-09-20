@@ -78,7 +78,7 @@ async def test_reject_title_records_history_without_awaiting_a_second_cycle(tmp_
     events = await store.recent_events("u1", EventKind.REC_REJECTED)
     assert [e.title_id for e in events] == ["346698"]
     assert await store.rejected_ids("u1") == {"346698"}
-    assert not REGISTRY["reject_title"].awaits_result and not REGISTRY["reject_title"].earns_cycle
+    assert not REGISTRY["reject_title"].awaits_result and not REGISTRY["reject_title"].returns_observation
     await store.close()
 
 

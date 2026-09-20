@@ -9,8 +9,13 @@ before the first spoken byte is silence the viewer hears. `intent` is the
 cascade's reasoning step.
 
 REGISTRY is the one place that says what each verb *is*: TV command or internal
-tool, whether the turn blocks on its result, whether that result earns another
-LLM cycle, and how the capability manifest describes it.
+tool, whether the turn blocks on its result, and how the capability manifest
+describes it. An internal awaited tool *returns an observation* — a reply the
+model must see, which is what buys the next cycle.
+
+The cycle cap is enforced by the schema, not the loop: the final cycle is decoded
+against `turn_plan_schema(final=True)`, whose actions union simply has no
+observation-returning tools, so constrained decoding cannot over-call.
 """
 from copy import deepcopy
 from dataclasses import dataclass
@@ -62,14 +67,13 @@ class ActionSpec:
     kind: Literal["tv", "internal"]
     #: The turn blocks on this action's reply (TV round-trip or internal tool).
     awaits_result: bool
-    #: The reply is fed back to the LLM for another cycle. Implies awaits_result.
-    #: A *failed* reply of any awaited action is fed back regardless (turn.py).
-    earns_cycle: bool
     doc: str
 
-    def __post_init__(self) -> None:
-        if self.earns_cycle and not self.awaits_result:
-            raise ValueError(f"{self.model.__name__}: a result must be awaited to earn a cycle")
+    @property
+    def returns_observation(self) -> bool:
+        """The reply is fed back to the LLM for another cycle. A *failed* reply of
+        any awaited action is fed back regardless (`ToolResult.is_observation`)."""
+        return self.kind == "internal" and self.awaits_result
 
 
 _TV_DOCS: dict[Verb, str] = {
@@ -88,23 +92,29 @@ _TV_DOCS: dict[Verb, str] = {
 }
 
 REGISTRY: dict[str, ActionSpec] = {
-    **{v.value: ActionSpec(m, "tv", awaits_result=v in AWAITS_RESULT, earns_cycle=False, doc=_TV_DOCS[v])
+    **{v.value: ActionSpec(m, "tv", awaits_result=v in AWAITS_RESULT, doc=_TV_DOCS[v])
        for v, m in COMMAND_MODELS.items()},
     "recommend_titles": ActionSpec(
-        RecommendTitles, "internal", awaits_result=True, earns_cycle=True,
+        RecommendTitles, "internal", awaits_result=True,
         doc="INTERNAL — ask the recommendation engine; you receive titles and then speak them"),
     "reject_title": ActionSpec(
-        RejectTitle, "internal", awaits_result=False, earns_cycle=False,
+        RejectTitle, "internal", awaits_result=False,
         doc="INTERNAL — the user declined a title you offered; it will not be offered again"),
 }
 
 ActionUnion = Annotated[Union[tuple(s.model for s in REGISTRY.values())], Field(discriminator="verb")]  # noqa: UP007
+#: The final cycle's vocabulary: everything that does not return an observation.
+FinalActionUnion = Annotated[
+    Union[tuple(s.model for s in REGISTRY.values() if not s.returns_observation)],  # noqa: UP007
+    Field(discriminator="verb")]
 _ACTION_ADAPTER: TypeAdapter = TypeAdapter(ActionUnion)
+_FINAL_ACTION_ADAPTER: TypeAdapter = TypeAdapter(FinalActionUnion)
 
 
-def parse_action(raw: dict[str, Any]) -> BaseModel:
-    """One streamed `actions[]` element → its typed model. Raises ValidationError."""
-    return _ACTION_ADAPTER.validate_python(raw)
+def parse_action(raw: dict[str, Any], *, final: bool = False) -> BaseModel:
+    """One streamed `actions[]` element → its typed model, validated against the
+    union the cycle was decoded with. Raises ValidationError."""
+    return (_FINAL_ACTION_ADAPTER if final else _ACTION_ADAPTER).validate_python(raw)
 
 Intent = Literal["control", "navigate", "recommend", "search", "answer", "chitchat", "clarify"]
 
@@ -113,6 +123,12 @@ class TurnPlan(BaseModel):
     intent: Intent
     say: str
     actions: list[ActionUnion] = Field(default_factory=list)
+
+
+class FinalTurnPlan(BaseModel):
+    intent: Intent
+    say: str
+    actions: list[FinalActionUnion] = Field(default_factory=list)
 
 
 # --- response_format schema ------------------------------------------------
@@ -140,9 +156,9 @@ def _strictify(node: Any) -> Any:
     return out
 
 
-def turn_plan_schema() -> dict:
-    schema = _strictify(deepcopy(TurnPlan.model_json_schema()))
-    return {"name": "turn_plan", "strict": True, "schema": schema}
+def turn_plan_schema(*, final: bool = False) -> dict:
+    model, name = (FinalTurnPlan, "turn_plan_final") if final else (TurnPlan, "turn_plan")
+    return {"name": name, "strict": True, "schema": _strictify(deepcopy(model.model_json_schema()))}
 
 
 # --- capability manifest ---------------------------------------------------

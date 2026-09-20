@@ -1,8 +1,8 @@
 """Typed state of one agent turn.
 
 A turn is one or more SGR cycles; each cycle streams one envelope and may
-dispatch actions whose results feed the next cycle. These types are what the
-loop passes around instead of positional parameters, a `marks` dict and
+dispatch actions whose *observations* feed the next cycle. These types are what
+the loop passes around instead of positional parameters, a `marks` dict and
 `(verb, dict)` tuples.
 """
 import json
@@ -87,11 +87,20 @@ class TurnTrace:
     then named or focused count as offered (see `offered_ids`)."""
     user_text: str = ""
     said: list[str] = field(default_factory=list)
+    #: The templated answer, when a cycle blew its budget. Deliberately not in
+    #: `said`: a template built from substitute results is not the agent's reply,
+    #: and memory must not learn the viewer "wanted" whatever came back.
+    fallback_said: str = ""
     candidates: dict[str, str] = field(default_factory=dict)  # title_id -> name
     referenced_ids: set[str] = field(default_factory=set)
 
     def spoken(self) -> str:
         return "".join(self.said).strip()
+
+    def begin_cycle(self) -> None:
+        """The memory transcript reads "Let me look. I found…", not "look.I found"."""
+        if self.said:
+            self.said.append(" ")
 
     def add_results(self, results: tuple["ToolResult", ...]) -> None:
         for r in results:
@@ -104,15 +113,16 @@ class TurnTrace:
         if after_results and verb in _OFFERING_VERBS and args.get("title_id"):
             self.referenced_ids.add(str(args["title_id"]))
 
-    def offered_ids(self, extra_spoken: str = "") -> list[str]:
-        """Candidates the agent focused/opened/played, or named in what it said.
-        Titles are spoken verbatim (persona rule), so a case-folded substring
-        match on the name is the deliberate, simple heuristic.
+    def offered_ids(self) -> list[str]:
+        """Candidates the agent focused/opened/played, or named in what it said
+        (the templated fallback counts as saying). Titles are spoken verbatim
+        (persona rule), so a case-folded substring match on the name is the
+        deliberate, simple heuristic.
 
         Pointed-at ids come first: `rec_shown` events of one turn share a
         timestamp and the greeting reopens with the first one rendered, so the
         title the agent actually focused must lead, not the tool's first hit."""
-        spoken = (self.spoken() + " " + extra_spoken).casefold()
+        spoken = (self.spoken() + " " + self.fallback_said).casefold()
         pointed = [tid for tid in self.candidates if tid in self.referenced_ids]
         named = [tid for tid, name in self.candidates.items()
                  if tid not in self.referenced_ids and name and name.casefold() in spoken]
@@ -136,28 +146,29 @@ class ToolResult:
         return self.payload.get("status") in FAILED_STATUSES
 
     @property
-    def earns_cycle(self) -> bool:
-        """Results the model must see. Cycle-earning tools always; an awaited TV
-        verb only when it failed — a successful `search_catalog` is answered by
-        the TV screen, but with no TV to answer (seen live, 2026-09-20) the
-        filler "Searching for X." was the whole turn and the viewer waited on
-        nothing. The failure is fed back so the agent says so."""
+    def is_observation(self) -> bool:
+        """A reply the model must see. Observation-returning tools always; an
+        awaited TV verb only when it failed — a successful `search_catalog` is
+        answered by the TV screen, but with no TV to answer (seen live,
+        2026-09-20) the filler "Searching for X." was the whole turn and the
+        viewer waited on nothing. The failure is fed back so the agent says so."""
         spec = REGISTRY.get(self.verb)
         if spec is None:
             return False
-        return spec.earns_cycle or (spec.awaits_result and self.failed)
+        return spec.returns_observation or (spec.awaits_result and self.failed)
 
 
 @dataclass(frozen=True)
 class CycleOutcome:
+    """What one cycle left for the next: the raw envelope and the observations
+    (only those — a successful TV reply is the screen's business, not the model's)."""
     raw: str
-    results: tuple[ToolResult, ...]
+    observations: tuple[ToolResult, ...]
 
     @property
-    def needs_another_cycle(self) -> bool:
-        """Any cycle-earning tool result — including a failed one, so the agent
-        speaks the fallback instead of stopping at the filler."""
-        return any(r.earns_cycle for r in self.results)
+    def done(self) -> bool:
+        """Nothing for the model to see: its `say` was the answer and the turn ends."""
+        return not self.observations
 
     def feedback(self) -> str:
-        return json.dumps({r.verb: r.payload for r in self.results}, ensure_ascii=False)
+        return json.dumps({r.verb: r.payload for r in self.observations}, ensure_ascii=False)

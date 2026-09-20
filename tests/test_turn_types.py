@@ -32,7 +32,18 @@ def test_offered_ids_match_names_case_insensitively_and_from_fallback_text():
     trace = TurnTrace()
     trace.add_results((_reco(("1", "The Nun II"), ("2", "Saw X")),))
     assert trace.offered_ids() == []
-    assert trace.offered_ids("How about THE NUN II from 2023?") == ["1"]
+    trace.fallback_said = "How about THE NUN II from 2023?"
+    assert trace.offered_ids() == ["1"]
+    assert trace.spoken() == ""  # the template is not the agent's reply
+
+
+def test_begin_cycle_separates_cycles_in_the_transcript():
+    trace = TurnTrace()
+    trace.begin_cycle()
+    trace.said.append("Let me look.")
+    trace.begin_cycle()
+    trace.said.append("Try Heat.")
+    assert trace.spoken() == "Let me look. Try Heat."
 
 
 def test_actions_before_results_do_not_count_as_offers():
@@ -69,31 +80,31 @@ def test_intent_is_the_first_cycles_routing_decision_not_the_answer_cycles():
     assert m.intent == "recommend"
 
 
-def test_tool_result_knows_whether_it_earns_a_cycle():
-    assert ToolResult("recommend_titles", {"titles": []}).earns_cycle
-    assert ToolResult("recommend_titles", {"status": "error"}).earns_cycle   # a failure still needs speaking
-    assert not ToolResult("search_catalog", {"status": "ok"}).earns_cycle
-    assert not ToolResult("search_catalog", {"titles": []}).earns_cycle      # the TV answered; it shows them
-    assert not ToolResult("reject_title", {}).earns_cycle
-    assert not ToolResult("not_a_verb", {}).earns_cycle
+def test_tool_result_knows_whether_it_is_an_observation():
+    assert ToolResult("recommend_titles", {"titles": []}).is_observation
+    assert ToolResult("recommend_titles", {"status": "error"}).is_observation   # a failure still needs speaking
+    assert not ToolResult("search_catalog", {"status": "ok"}).is_observation
+    assert not ToolResult("search_catalog", {"titles": []}).is_observation      # the TV answered; it shows them
+    assert not ToolResult("reject_title", {}).is_observation
+    assert not ToolResult("not_a_verb", {}).is_observation
 
 
-def test_failed_awaited_tv_verb_earns_a_cycle_so_the_viewer_hears_it():
-    assert ToolResult("search_catalog", {"status": "unavailable", "reason": "timeout"}).earns_cycle
-    assert ToolResult("search_catalog", {"status": "error", "reason": "boom"}).earns_cycle
-    assert ToolResult("search_catalog", {"status": "invalid", "reason": "bad args"}).earns_cycle
+def test_failed_awaited_tv_verb_is_an_observation_so_the_viewer_hears_it():
+    assert ToolResult("search_catalog", {"status": "unavailable", "reason": "timeout"}).is_observation
+    assert ToolResult("search_catalog", {"status": "error", "reason": "boom"}).is_observation
+    assert ToolResult("search_catalog", {"status": "invalid", "reason": "bad args"}).is_observation
     # A barge-in releases the wait with "cancelled": the turn is dying, do not speak again.
-    assert not ToolResult("search_catalog", {"status": "cancelled", "reason": "interrupted"}).earns_cycle
-    # Fire-and-forget verbs never enter the results; even a failure status does not earn a cycle.
-    assert not ToolResult("play", {"status": "invalid"}).earns_cycle
+    assert not ToolResult("search_catalog", {"status": "cancelled", "reason": "interrupted"}).is_observation
+    # Fire-and-forget verbs never enter the results; even a failure status is not an observation.
+    assert not ToolResult("play", {"status": "invalid"}).is_observation
 
 
-def test_cycle_outcome_feedback_is_keyed_by_verb():
-    outcome = CycleOutcome(raw="{}", results=(ToolResult("recommend_titles", {"titles": [1]}),
-                                              ToolResult("search_catalog", {"status": "ok"})))
-    assert outcome.needs_another_cycle
-    assert outcome.feedback() == '{"recommend_titles": {"titles": [1]}, "search_catalog": {"status": "ok"}}'
-    assert not CycleOutcome(raw="{}", results=()).needs_another_cycle
+def test_cycle_outcome_is_done_without_observations_and_feeds_them_back_by_verb():
+    outcome = CycleOutcome(raw="{}", observations=(ToolResult("recommend_titles", {"titles": [1]}),
+                                                   ToolResult("search_catalog", {"status": "unavailable"})))
+    assert not outcome.done
+    assert outcome.feedback() == '{"recommend_titles": {"titles": [1]}, "search_catalog": {"status": "unavailable"}}'
+    assert CycleOutcome(raw="{}", observations=()).done
 
 
 def test_turn_metrics_span_attributes_drop_none_and_prefix():

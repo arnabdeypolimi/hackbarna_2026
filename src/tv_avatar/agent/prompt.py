@@ -136,13 +136,11 @@ Actions run in parallel. Internal tools return results to you; TV commands do no
 in which case you receive its error: tell the viewer in one short sentence that it did not go through and offer to retry."""
 
 
-def tool_results_message(feedback: str, *, final: bool) -> str:
+def tool_results_message(feedback: str) -> str:
     """The observation step between SGR cycles: tool results as a user message.
-    On the last allowed cycle the model is told it must answer from them."""
-    tail = ("Now answer the user using these results. Do not call internal tools again." if final else
-            "Now answer the user using these results, or call one more internal tool only if you cannot "
-            "answer without it.")
-    return f"[tool results]\n{feedback}\n{tail}"
+    Whether another tool call is allowed is the schema's business (the final
+    cycle cannot express one), so the text does not have to say."""
+    return f"[tool results]\n{feedback}\nNow answer the user using these results."
 
 
 def build_system_prompt(language: LanguageProfile) -> str:

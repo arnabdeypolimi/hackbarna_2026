@@ -56,8 +56,8 @@ from tv_avatar.recs.engine import RecsEngine
 from tv_avatar.session.state import SessionState
 from tv_avatar.tracing import (
     ATTR_ACTION_AWAITS_RESULT,
-    ATTR_ACTION_EARNS_CYCLE,
     ATTR_ACTION_MS,
+    ATTR_ACTION_RETURNS_OBSERVATION,
     ATTR_HISTORY_CHARS,
     ATTR_MEMORY_EMPTY,
     ATTR_MEMORY_STALE,
@@ -263,10 +263,10 @@ class SGRAgentService(LLMService):
             log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
 
             await self.push_frame(LLMFullResponseStartFrame())
-            fallback_text = await self._runner.run(messages, ctx, metrics, turn_trace)
+            await self._runner.run(messages, ctx, metrics, turn_trace)
             await self.push_frame(LLMFullResponseEndFrame())
             await self.stop_processing_metrics()
-            self._record_offered(ctx, fallback_text)
+            self._record_offered(ctx)
             metrics.total_ms = ctx.elapsed_ms()
             log.debug("turn close", step="end", **metrics.as_log_fields())
             log.info("turn", **metrics.as_log_fields())
@@ -281,10 +281,10 @@ class SGRAgentService(LLMService):
                 ATTR_OBS_OUTPUT: spoken, ATTR_TRACE_OUTPUT: spoken,
             })
 
-    def _record_offered(self, ctx: TurnContext, fallback_text: str) -> None:
+    def _record_offered(self, ctx: TurnContext) -> None:
         """Viewing log: the recommendation candidates the agent actually named or
         focused this turn — not everything the tool returned. Off the turn."""
-        offered = self._trace.offered_ids(fallback_text)
+        offered = self._trace.offered_ids()
         if offered and self._recorder is not None:
             ctx.log.debug("recommendations offered", step="history", title_ids=offered)
             self._recorder.spawn(self._recorder.on_rec_shown(ctx.user_id, offered))
@@ -331,7 +331,8 @@ class SGRAgentService(LLMService):
         # A TV command is an action with a side effect, so both kinds are `tool` (D19).
         with observation("agent.action", type=OBS_TYPE_TOOL, **{
             META_VERB: verb, META_KIND: spec.kind, ATTR_ACTION_AWAITS_RESULT: spec.awaits_result,
-            ATTR_ACTION_EARNS_CYCLE: spec.earns_cycle, ATTR_OBS_INPUT: json.dumps(args, ensure_ascii=False),
+            ATTR_ACTION_RETURNS_OBSERVATION: spec.returns_observation,
+            ATTR_OBS_INPUT: json.dumps(args, ensure_ascii=False),
         }) as span:
             if spec.kind == "internal":
                 log.debug("dispatch internal", step="dispatch", verb=verb, args=args)

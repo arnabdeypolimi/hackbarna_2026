@@ -49,6 +49,11 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   protocol. Keep it that way.
 - **Commands are fire-and-forget.** Only `search_catalog` (`AWAITS_RESULT` in `commands.py`)
   blocks an LLM turn, for at most 400 ms. Awaiting the TV app anywhere else stalls speech.
+- **The cycle cap is the schema's, not the loop's.** The last allowed cycle is decoded against
+  `turn_plan_schema(final=True)`, whose actions union has no observation-returning tools, and
+  `parse_action(final=True)` validates against the same union. The loop (`agent/loop.py`) only
+  iterates: a cycle with no observation ends the turn. Never reintroduce a runtime "skip this
+  action because we are at the cap" branch or a prompt hint that stands in for it.
 - **Commands are turn-scoped.** Barge-in drops a turn's queued-but-unsent commands
   (`CommandBus.cancel_turn`). Commands already handed to the WebSocket are never rolled back.
 - **Every wire message carries `"v": 1`.** An unknown version is an explicit `error`, never
@@ -116,12 +121,14 @@ Each of these cost real debugging time; the code comments record them at the cal
 
 ## Current state
 
-M0–M2 are done (voice loop, avatar with interruption, control protocol + mock client).
-The agent is still `StubLLMService` for tests plus a plain `OpenAILLMService` in production:
-**no tool calls and no screen-state injection are wired yet.** That is phase 2 / M3, and the
-seam is the `TODO(phase 2)` in `pipeline/builder.py` — `ScreenContextInjector` belongs
-between the user aggregator and the LLM so `SessionState.render_for_prompt()` is injected
-fresh on every run.
+M0–M2 are done (voice loop, avatar with interruption, control protocol + mock client), and
+phase 2 is live under `AGENT_IMPL=sgr`: `SGRAgentService` (`agent/service.py`) is the Pipecat
+glue, `TurnRunner` (`agent/loop.py`) the Pipecat-free plan → act → observe loop. Each cycle
+streams one `{intent, say, actions[]}` envelope under constrained decoding; `say` reaches TTS
+sentence by sentence while actions dispatch; an internal tool's reply (or a failed awaited TV
+command) is the observation that buys the next cycle, up to `AGENT_MAX_CYCLES`. The agent is the
+only writer of the system prompt — `ScreenContextInjector` serves the `stub` pipeline only.
+`StubLLMService` remains for tests.
 
 ## The frontend
 
