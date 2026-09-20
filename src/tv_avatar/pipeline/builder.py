@@ -4,7 +4,7 @@ Pipecat is the only orchestrator; SLNG owns speech I/O (D12). Library
 services are wired from configuration; everything of ours is a
 FrameProcessor or an observer inserted at a fixed position:
 
-    input → STT → EchoTranscriptFilter → MemoryPrefetchTap → user_agg →
+    input → STT → [EchoTranscriptFilter, ECHO_FILTER only] → MemoryPrefetchTap → user_agg →
     [ScreenContextInjector, stub only] →
     agent → TTS → [Anam] → output → assistant_agg → [MemoryIngestTap, non-sgr only]
 
@@ -87,7 +87,6 @@ def build_pipeline(
         ),
     )
     agent = llm or build_agent(settings, runtime, session, bus)
-    spoken = SpokenWindow()
 
     # Spans opened from the media path (the prefetch task, the latency observer)
     # parent on Pipecat's current turn span, reachable only through the task
@@ -95,10 +94,13 @@ def build_pipeline(
     def turn_context():
         return task.turn_trace_observer.get_current_turn_context() if task.turn_trace_observer else None
 
-    stages = [
-        transport.input(),
-        build_stt(settings, language.pipecat),
-        EchoTranscriptFilter(spoken),
+    stages = [transport.input(), build_stt(settings, language.pipecat)]
+    observers = [SessionEventsObserver(bus), TurnLatencyObserver(session, turn_context=turn_context)]
+    if settings.echo_filter:
+        spoken = SpokenWindow()
+        stages.append(EchoTranscriptFilter(spoken))
+        observers.append(BotSpeechObserver(spoken))
+    stages += [
         MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs,
                           turn_context=turn_context),
         user_agg,
@@ -123,11 +125,10 @@ def build_pipeline(
     # turn 1 (observability plan D14). The identity attributes also travel as
     # baggage from `run_session`; passing them here as well guarantees the
     # trace-level view even if the conversation span is created outside it.
-    latency = TurnLatencyObserver(session, turn_context=turn_context)
     task = PipelineTask(
         Pipeline(stages),
         params=PipelineParams(enable_metrics=True),
-        observers=[SessionEventsObserver(bus), latency, BotSpeechObserver(spoken)],
+        observers=observers,
         enable_tracing=tracing_wanted(settings),
         conversation_id=session.session_id,
         additional_span_attributes=session_attributes(session, settings, half_duplex=half_duplex),

@@ -38,6 +38,13 @@ def test_stack_defaults_match_the_chosen_providers(monkeypatch):
     assert s.slng_tts_sample_rate == 24000
 
 
+def test_echo_guard_defaults_off_and_reads_the_env(monkeypatch):
+    _set_required(monkeypatch)
+    assert Settings(_env_file=None).echo_filter is False
+    monkeypatch.setenv("ECHO_FILTER", "true")
+    assert Settings(_env_file=None).echo_filter is True
+
+
 def test_missing_required_key_fails_fast(monkeypatch):
     for key in (*REQUIRED, "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)

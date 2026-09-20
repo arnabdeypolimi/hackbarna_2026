@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # many transcribed words a barge-in needs before it cuts the avatar off
     turn_silence_s: float = 0.5
     barge_in_min_words: int = 2
+    # Drop user transcripts that repeat what the avatar just said (pipeline/echo.py).
+    # Off: browser AEC is the only echo defence and the barge-in word count the
+    # only guard against the avatar cutting itself off. On: a short correction
+    # that reuses a title's words — "no, die hard" right after the avatar named
+    # "No Hard Feelings" — is lost as echo (2026-09-20).
+    echo_filter: bool = False
 
     control_token_ttl_s: int = 3600
 

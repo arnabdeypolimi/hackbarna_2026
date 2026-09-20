@@ -113,6 +113,7 @@ def create_app(
             "agent_impl": s.agent_impl,
             "llm_model": s.llm_model,
             "stt_model": s.slng_stt_model,
+            "echo_filter": s.echo_filter,
             "tts_model": s.slng_tts_model,
             "tts_sample_rate": s.slng_tts_sample_rate,
             "catalog_titles": len(rt.catalog) if rt is not None and rt.catalog is not None else 0,

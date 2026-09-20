@@ -136,6 +136,25 @@ def test_sgr_pipeline_has_no_injector(tmp_path):
     assert "MemoryIngestTap" not in names  # the agent ingests at turn end itself
 
 
+def test_echo_guard_is_off_by_default(tmp_path):
+    """It dropped "no die hard" as echo of "No Hard Feelings" (2026-09-20); the
+    whole guard — filter and the observer that feeds it — is now opt-in."""
+    from tv_avatar.pipeline.echo import BotSpeechObserver
+
+    task = _build_task(_settings(tmp_path))
+    assert "EchoTranscriptFilter" not in _processor_names(_settings(tmp_path))
+    assert not any(isinstance(o, BotSpeechObserver) for o in task._observer._observers)
+
+
+def test_echo_guard_is_wired_when_enabled(tmp_path):
+    from tv_avatar.pipeline.echo import BotSpeechObserver
+
+    on = _settings(tmp_path).model_copy(update={"echo_filter": True})
+    names = _processor_names(on)
+    assert names.index("EchoTranscriptFilter") < names.index("MemoryPrefetchTap"), names
+    assert any(isinstance(o, BotSpeechObserver) for o in _build_task(on)._observer._observers)
+
+
 def test_task_carries_tracing_flags_from_settings(tmp_path):
     """Pipecat's own tracing is switched per task (D14/D17); the private names
     are the PipelineTask attributes on 1.11.0 — a rename is the signal we want."""
