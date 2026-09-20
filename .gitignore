@@ -10,6 +10,6 @@ claude-setup.lock.json
 
 # Phase 2 — local data, never committed
 data/
-# ...but the TV app's static dataset and shop catalogue ship with it.
+# ...but the TV app's static dataset ships with it.
 !frontend/public/data/
 .DS_Store

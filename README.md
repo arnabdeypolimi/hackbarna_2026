@@ -115,6 +115,8 @@ missing key does.
 | `PATCH` | `/sessions/{id}/offer?token=` | Trickle ICE candidate |
 | `DELETE` | `/sessions/{id}` | Explicit hang-up; token in the `X-Control-Token` header |
 | `WS` | `/sessions/{id}/control?token=` | Control channel |
+| `GET` | `/shop` | The shop catalogue (`products.json`), for the TV to hold in memory |
+| `GET` | `/shop/{title_id}` | One title's shelf; 404 when there is nothing to shop |
 
 The offer endpoint takes two query flags: `avatar=false` runs the voice loop with no
 talking head, and `halfduplex=true` mutes the microphone while the avatar speaks. Half-duplex
@@ -282,8 +284,14 @@ Text-mode smoke, no speech keys needed:
 uv run python tools/smoke_turn.py --user couch_1 "something like Sicario" "no, not the first one"
 ```
 
+**M5** shoppable products: `show_products` slides a three-product shelf in under the TV's
+poster row, pulled only when the viewer asks ("what's that jacket?"). The catalogue is
+`products.json` at the repo root (override with `PRODUCTS_FILE`), served at `/shop`; tiles
+the TV can shop carry `shoppable: true` in the screen state and render in the prompt as
+`[shop: item price; ...]`, so the agent names the item while the shelf arrives.
+
 Not built yet: **M4** latency instrumentation beyond the console and the per-turn log line;
-**M5** shoppable products and persona polish. The session store is an in-memory dict —
+persona polish. The session store is an in-memory dict —
 swapping in Redis touches `SessionStore` and nothing else.
 
 ### The frontend
