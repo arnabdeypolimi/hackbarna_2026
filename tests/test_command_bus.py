@@ -85,3 +85,26 @@ async def test_cancel_turn_leaves_other_turns_searches_pending():
     assert bus.pending_count() == 1
     bus.resolve(msg.id, {"titles": []})
     assert (await asyncio.wait_for(task, timeout=0.1)) == {"titles": []}
+
+
+async def test_dispatch_opens_a_tv_command_span_that_covers_the_wait(otel):
+    bus = CommandBus()
+    await bus.dispatch("play", {"title_id": "1"}, turn_id="turn_1")
+    task = asyncio.create_task(bus.dispatch("search_catalog", {"query": "tom hanks"}, turn_id="turn_1"))
+    await asyncio.wait_for(bus.next_outbound(), timeout=0.1)          # play
+    msg = await asyncio.wait_for(bus.next_outbound(), timeout=0.1)    # search_catalog
+    await asyncio.sleep(0.02)
+    bus.resolve(msg.id, {"status": "ok", "titles": []})
+    await asyncio.wait_for(task, timeout=0.1)
+    play, search = otel.spans()["tv.command"]
+    assert play.attributes["langfuse.observation.type"] == "tool"
+    assert play.attributes["langfuse.observation.metadata.verb"] == "play"
+    assert play.attributes["langfuse.observation.metadata.status"] == "dispatched"
+    assert play.attributes["tv.command.awaits_result"] is False
+    assert play.attributes["langfuse.observation.input"] == '{"title_id": "1"}'
+    assert search.attributes["langfuse.observation.metadata.status"] == "ok"
+    assert search.attributes["tv.command.id"] == msg.id
+    assert (search.end_time - search.start_time) >= 20_000_000     # covered the 20 ms wait (ns)
+    origin, _ = bus.origin(msg.id)
+    assert origin.span_id == search.context.span_id
+    assert bus.origin(msg.id) is None                                # handed out once

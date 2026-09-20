@@ -219,7 +219,8 @@ def create_app(
         # The bus deliberately survives this call returning: a dropped control
         # socket is the Degraded state (spec §6) — commands queue until the TV
         # app reconnects with the same session id. Expiry or DELETE reaps it.
-        await ControlChannel(websocket, session, bus, recorder=recorder).run()
+        await ControlChannel(websocket, session, bus, recorder=recorder,
+                             settings=get_settings() if _settings_available() else None).run()
 
     @app.get("/catalog/sample")
     async def catalog_sample(limit: int = Query(default=8, ge=1, le=50)) -> dict:

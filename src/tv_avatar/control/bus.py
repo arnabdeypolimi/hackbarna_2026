@@ -7,11 +7,29 @@ Two rules from spec §8 and §9 live here:
     turn had queued but not yet sent.
 """
 import asyncio
+import json
+import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
+
+from opentelemetry.trace import SpanContext
 
 from tv_avatar.agent.commands import AWAITS_RESULT, parse_command
 from tv_avatar.control.protocol import CommandMsg, ServerMessage
+from tv_avatar.tracing import (
+    ATTR_COMMAND_AWAITS_RESULT,
+    ATTR_COMMAND_ID,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    META_STATUS,
+    META_VERB,
+    OBS_TYPE_TOOL,
+    observation,
+)
+
+#: Command origins remembered for the TV's reply to link back to (a session's
+#: worth of commands; the TV normally answers within a second).
+MAX_ORIGINS = 256
 
 
 class CommandBus:
@@ -20,6 +38,7 @@ class CommandBus:
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
+        self._origins: OrderedDict[str, tuple[SpanContext, float]] = OrderedDict()
         self._search_timeout_s = search_timeout_s
 
     async def dispatch(self, verb: str, args: dict, turn_id: str) -> dict:
@@ -30,8 +49,23 @@ class CommandBus:
             verb=command.verb.value,
             args=command.model_dump(exclude={"verb"}, exclude_none=True),
         )
+        awaits = command.verb in AWAITS_RESULT
+        # The span ends at enqueue for fire-and-forget verbs and covers the wait
+        # for the awaited one; the TV's reply becomes a linked `tv.command_result`.
+        with observation("tv.command", type=OBS_TYPE_TOOL, **{
+            META_VERB: msg.verb, ATTR_COMMAND_ID: msg.id, ATTR_COMMAND_AWAITS_RESULT: awaits,
+            ATTR_OBS_INPUT: json.dumps(msg.args, ensure_ascii=False),
+        }) as span:
+            self._origins[msg.id] = (span.get_span_context(), time.monotonic())
+            while len(self._origins) > MAX_ORIGINS:
+                self._origins.popitem(last=False)
+            result = await self._send(msg, turn_id, awaits)
+            span.set_attributes({META_STATUS: str(result.get("status")),
+                                 ATTR_OBS_OUTPUT: json.dumps(result, ensure_ascii=False, default=str)})
+            return result
 
-        if command.verb not in AWAITS_RESULT:
+    async def _send(self, msg: CommandMsg, turn_id: str, awaits: bool) -> dict:
+        if not awaits:
             self._enqueue(msg)
             return {"status": "dispatched"}
 
@@ -46,6 +80,10 @@ class CommandBus:
         finally:
             self._pending.pop(msg.id, None)
             self._pending_turn.pop(msg.id, None)
+
+    def origin(self, command_id: str) -> tuple[SpanContext, float] | None:
+        """The `tv.command` span context and send time of a command, once."""
+        return self._origins.pop(command_id, None)
 
     def publish(self, msg: ServerMessage) -> None:
         """Queue a non-command server message (agent_status, transcript).

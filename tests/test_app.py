@@ -229,3 +229,48 @@ def test_delete_session_requires_token_and_then_closes_everything():
         assert not app.state.manager.has(sid)
         with c.websocket_connect(f"/sessions/{sid}/control?token={tok}") as ws:
             assert ws.receive_json()["code"] == "unauthorized"
+
+
+def test_command_result_over_the_socket_is_a_linked_event_span(otel):
+    """The TV's reply closes the loop: a `tv.command_result` event linked to the
+    `tv.command` it answers, carrying the session id from the channel's own scope."""
+    from tv_avatar.config import Settings
+    from tv_avatar.control import channel as channel_module
+
+    settings = Settings(_env_file=None, slng_api_key="s", anam_api_key="a", nebius_api_key="n")
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions", json={"user_id": "couch_3"}).json()
+        bus = app.state.manager.bus_for(body["session_id"])
+        url = f"/sessions/{body['session_id']}/control?token={body['control_token']}"
+        original = channel_module.ControlChannel.__init__
+
+        def with_settings(self, *a, **kw):        # create_app() runs without a .env
+            kw["settings"] = settings
+            original(self, *a, **kw)
+
+        channel_module.ControlChannel.__init__ = with_settings
+        try:
+            with c.websocket_connect(url) as ws:
+                ws.receive_json()  # agent_status
+                c.portal.call(bus.dispatch, "home", {}, "turn_1")
+                cmd = ws.receive_json()
+                ws.send_text(json.dumps({"v": 1, "type": "ack", "command_id": cmd["id"], "ok": False,
+                                         "error": "no such view"}))
+                ws.send_text(json.dumps({"v": 1, "type": "ack", "command_id": "cmd_unknown", "ok": True}))
+                ws.send_text(json.dumps({"v": 99}))
+                assert ws.receive_json()["code"] == "unsupported_version"   # the reader has drained
+        finally:
+            channel_module.ControlChannel.__init__ = original
+    spans = otel.spans()
+    command, = spans["tv.command"]
+    result, = spans["tv.command_result"]                              # the unknown id made none
+    assert result.attributes["langfuse.observation.type"] == "event"
+    assert result.attributes["langfuse.observation.metadata.status"] == "failed"
+    assert result.attributes["tv.command.id"] == cmd["id"]
+    assert result.attributes["tv.command.roundtrip_ms"] >= 0
+    assert result.attributes["langfuse.session.id"] == body["session_id"]
+    assert result.attributes["langfuse.user.id"] == "couch_3"
+    assert result.parent is None
+    assert result.links[0].context.span_id == command.context.span_id
+    assert result.status.status_code.name == "ERROR"
