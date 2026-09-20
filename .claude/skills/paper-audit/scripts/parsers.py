@@ -85,16 +85,15 @@ def get_parser(
 
     if path_str.endswith(".typ"):
         return TypstParser()
-    elif path_str.endswith(".tex"):
+    if path_str.endswith(".tex"):
         return LatexParser()
-    elif path_str.endswith(".pdf"):
+    if path_str.endswith(".pdf"):
         from pdf_parser import PdfParser
 
         return PdfParser(mode=pdf_mode, heading_pt=heading_pt, body_pt=body_pt)
-    else:
-        raise ValueError(
-            f"Unsupported format: {Path(file_path).suffix}. Supported formats: .tex, .typ, .pdf"
-        )
+    raise ValueError(
+        f"Unsupported format: {Path(file_path).suffix}. Supported formats: .tex, .typ, .pdf"
+    )
 
 
 __all__ = [

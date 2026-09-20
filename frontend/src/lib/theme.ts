@@ -210,8 +210,9 @@ export function grainOf(alpha: number): string {
       ctx.putImageData(image, 0, 0);
       value = `url("${canvas.toDataURL('image/png')}")`;
     }
-  } catch {
+  } catch (err) {
     // No canvas on this set: the room keeps its sky and loses only the dither.
+    console.warn('[theme] grain disabled, canvas unavailable', err);
   }
   grainCache[key] = value;
   return value;
