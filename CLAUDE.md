@@ -17,6 +17,7 @@ uv run pytest tests/test_command_bus.py -k cancel    # single test
 uvx ruff check src tests tools                       # lint (see note below)
 uv run uvicorn tv_avatar.app:app --reload --port 8000
 uv run python tools/export_schemas.py                # regenerate contracts/
+uv run python tools/langfuse_smoke.py                # one span to Langfuse + read-back (needs keys)
 ```
 
 Always `uv run`; never invoke `.venv/bin/python` or bare `pip` directly.
@@ -58,6 +59,16 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   a new setting also goes into `.env.example` with a blank value.
 - **`SessionEventsObserver` is an observer, not a processor** — it must never sit in the
   media path and add latency to speech.
+- **Tracing is off the media path and off by default.** Spans are attribute writes; export is
+  batched on a background thread; there is no `if tracing_enabled` in business code —
+  `tracing.py`, `pipeline/builder.py` and `pipeline/runner.py` own the toggle and the session
+  scope. Tests never construct a network exporter: `tests/conftest.py::otel` is the only place
+  that installs a provider (OTel allows one per process).
+- **Every span declares a Langfuse observation type and puts filterable facts under
+  `langfuse.observation.metadata.*`.** Open spans through `tracing.observation()`, never
+  `tracer.start_span` directly, and take attribute keys from the constants in `tracing.py` —
+  the vocabulary table in `docs/superpowers/plans/2026-09-19-tv-avatar-observability.md` is
+  the contract.
 
 ## Gotchas
 
@@ -79,6 +90,19 @@ Each of these cost real debugging time; the code comments record them at the cal
 - **Tests run without API keys.** `create_app()` must keep starting with no `.env`;
   `_missing_settings()` absorbs only `ValidationError`, so keep other failures propagating.
 - **Pytest is `asyncio_mode = "auto"`** — async tests need no decorator.
+- **Langfuse ingests OTLP HTTP/protobuf only.** Never add `opentelemetry-exporter-otlp` (it
+  pulls the gRPC exporter). An explicit OTLP `endpoint=` needs `/v1/traces` appended — the
+  env-var path adds it, the constructor does not (`tracing.build_exporter`).
+- **`opentelemetry-semantic-conventions`, `-instrumentation` and `-processor-baggage` are
+  pre-releases.** Keep their explicit `>=0.54b0` markers in `pyproject.toml`; under
+  `prerelease = "explicit"` uv will not resolve them otherwise.
+- **Pipecat's `traced_llm` closes the `llm` span before the `InterruptionFrame` arrives** (it
+  cancels the frame task first), so the interruption stamp happens in `_run_turn`'s
+  cancellation handler, not in `_cancel_turn`. `AIService.setup()` also resets
+  `_tracing_enabled` from the StartFrame — tests re-apply it after setup (`_traced()`).
+- **A self-hosted Langfuse v3 serves `/api/public/traces` but `langfuse-cli` refuses it** as
+  deprecated, and the v4 `/api/public/v2/observations` 404s there. `tools/langfuse_smoke.py`
+  reads back over plain HTTP, trying both.
 
 ## Conventions
 
