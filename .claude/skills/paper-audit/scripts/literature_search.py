@@ -18,10 +18,31 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+
+# arXiv's Atom feed is untrusted network input. defusedxml rejects DTDs and entity
+# expansion outright; when it is not installed, fall back to the stdlib parser but
+# refuse any document that declares a DOCTYPE or ENTITY, which is where XXE lives.
+try:
+    from defusedxml import ElementTree as ET  # type: ignore[import-not-found]
+
+    _HAS_DEFUSED = True
+except ImportError:  # pragma: no cover - depends on the environment
+    import xml.etree.ElementTree as ET
+
+    _HAS_DEFUSED = False
+
+_XML_DECL_RE = re.compile(r"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
+
+
+def parse_xml_untrusted(xml_text: str):
+    """Parse XML from the network without external-entity or DTD processing."""
+    if not _HAS_DEFUSED and _XML_DECL_RE.search(xml_text):
+        raise ValueError("refusing XML with DOCTYPE/ENTITY declarations")
+    return ET.fromstring(xml_text)
+
 
 # --- Data Models ---
 
@@ -146,7 +167,7 @@ class ArxivClient:
 
         results: list[SearchResult] = []
         try:
-            root = ET.fromstring(xml_text)
+            root = parse_xml_untrusted(xml_text)
             for entry in root.findall("atom:entry", self.NS):
                 title_el = entry.find("atom:title", self.NS)
                 title = (

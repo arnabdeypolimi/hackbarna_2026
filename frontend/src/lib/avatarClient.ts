@@ -176,7 +176,10 @@ function openControl(session: SessionInfo, opts: ConnectOptions, parts: Parts): 
   const ws = new WebSocket(
     `${proto}://${location.host}${session.control_url}?token=${session.control_token}`,
   );
+  // The only peer this socket should ever hear from is the backend it dialled.
+  const expectedOrigin = `${proto}://${location.host}`;
   ws.onmessage = (ev) => {
+    if (ev.origin && ev.origin !== expectedOrigin) return;
     let msg: ServerMessage;
     try {
       msg = JSON.parse(ev.data as string) as ServerMessage;
