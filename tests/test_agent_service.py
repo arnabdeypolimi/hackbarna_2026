@@ -727,3 +727,16 @@ async def test_tracing_off_opens_no_spans(otel):
     agent = _agent(FakeOpenAI([PLAY]), RecordingBus())
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one"))])
     assert "llm" not in otel.spans()
+
+
+async def test_barge_in_after_a_finished_turn_does_not_touch_its_closed_span(otel, caplog):
+    """The viewer interrupts playback of a reply whose turn already ended: the
+    queued commands are still dropped, but nothing is written to the ended span."""
+    import logging
+    agent = _agent(FakeOpenAI([PLAY]), RecordingBus())
+    _traced(agent)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play the first one")), SleepFrame(0.05),
+                                     InterruptionFrame()])
+    llm, = otel.spans()["llm"]
+    assert "langfuse.observation.metadata.interrupted" not in llm.attributes
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "ended span" in r.getMessage()]

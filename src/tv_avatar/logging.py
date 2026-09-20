@@ -15,7 +15,21 @@ _FORMAT = (
     "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
     "{extra[ctx]}<cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>{extra[kv]}"
 )
+# The agent's own lines — intent, envelope, actions, the per-turn summary — in
+# dark purple so its reasoning stands out from pipeline and library chatter.
+_AGENT_COLOR = "fg #8700af"
+_AGENT_FORMAT = (
+    "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
+    f"{{extra[ctx]}}<{_AGENT_COLOR}>{{name}}:{{function}} - {{message}}{{extra[kv]}}</{_AGENT_COLOR}>"
+)
+_AGENT_MODULES = ("tv_avatar.agent.",)
 _CTX_KEYS = ("session_id", "user_id", "turn_id")
+
+
+def _format(record: dict) -> str:
+    # A callable format must supply the newline and exception slot itself.
+    fmt = _AGENT_FORMAT if (record["name"] or "").startswith(_AGENT_MODULES) else _FORMAT
+    return fmt + "\n{exception}"
 _INTERNAL_KEYS = frozenset(("ctx", "kv"))
 
 
@@ -45,7 +59,7 @@ def setup_logging(level: str = "INFO") -> None:
     """Idempotent: safe to call from ``create_app`` and from CLI tools."""
     logger.remove()
     logger.configure(patcher=_add_ctx)
-    logger.add(sys.stderr, level=level.upper(), format=_FORMAT, enqueue=False)
+    logger.add(sys.stderr, level=level.upper(), format=_format, enqueue=False)
     root = logging.getLogger()
     if not any(isinstance(h, InterceptHandler) for h in root.handlers):
         root.handlers = [InterceptHandler()]
@@ -60,7 +74,7 @@ def setup_logging(level: str = "INFO") -> None:
     # module so our own DEBUG trace stays readable. LOG_LEVEL=TRACE shows all.
     if level.upper() == "DEBUG":
         logger.remove()
-        logger.add(sys.stderr, level="DEBUG", format=_FORMAT, enqueue=False, filter=_quiet_pipecat)
+        logger.add(sys.stderr, level="DEBUG", format=_format, enqueue=False, filter=_quiet_pipecat)
 
 
 def _quiet_pipecat(record: dict) -> bool:

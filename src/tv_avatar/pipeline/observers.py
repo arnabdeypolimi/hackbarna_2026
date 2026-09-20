@@ -7,11 +7,10 @@ per hop; each observer reports it once.
 """
 import time
 from collections import deque
-from collections.abc import Callable
 
 from loguru import logger
 from opentelemetry import trace
-from opentelemetry.trace import NonRecordingSpan, SpanContext
+from opentelemetry.trace import NonRecordingSpan
 from pipecat.frames.frames import (
     AggregatedTextFrame,
     BotStartedSpeakingFrame,
@@ -42,12 +41,9 @@ from tv_avatar.tracing import (
     LEVEL_ERROR,
     META_N_ERRORS,
     OBS_TYPE_EVENT,
+    TurnContextFn,
     tracer,
 )
-
-#: Where the observer finds Pipecat's current turn span (D16): evaluated at emit
-#: time because the observer is built before the task that owns the turn tracker.
-TurnContextFn = Callable[[], SpanContext | None]
 
 
 class _DedupObserver(BaseObserver):

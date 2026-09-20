@@ -17,8 +17,9 @@ know nothing about the pipeline.
 from __future__ import annotations
 
 import base64
+import contextvars
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -33,11 +34,15 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SpanExporter,
 )
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import NonRecordingSpan, SpanContext, Tracer
 
 if TYPE_CHECKING:
     from tv_avatar.config import Settings
     from tv_avatar.session.state import SessionState
+
+#: Where media-path code finds Pipecat's current turn span: a callable, because
+#: the observers and taps are built before the task that owns the turn tracker.
+TurnContextFn = Callable[[], "SpanContext | None"]
 
 # --- Baggage: trace identity on every span (D14, D20) --------------------------
 BAGGAGE_SESSION_ID = "langfuse.session.id"
@@ -291,6 +296,17 @@ def observation(name: str, *, type: str, **attributes: Any) -> Iterator[Span]:
 def set_attributes(span: Span, attributes: dict[str, Any]) -> None:
     """``span.set_attributes`` minus ``None`` values, in one place."""
     span.set_attributes({k: v for k, v in attributes.items() if v is not None})
+
+
+def task_context(span_context: SpanContext | None) -> contextvars.Context:
+    """A ``contextvars.Context`` for ``create_task(context=...)`` whose current
+    span is ``span_context`` (baggage kept). For work fired from the media path
+    — observers and taps — which runs outside the turn's own context: without
+    this, each such task is a root span and shows up as its own trace."""
+    ctx = contextvars.copy_context()
+    if span_context is not None:
+        ctx.run(context.attach, trace.set_span_in_context(NonRecordingSpan(span_context)))
+    return ctx
 
 
 def detached_from_span() -> context.Context:

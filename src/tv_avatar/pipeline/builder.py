@@ -89,11 +89,18 @@ def build_pipeline(
     agent = llm or build_agent(settings, runtime, session, bus)
     spoken = SpokenWindow()
 
+    # Spans opened from the media path (the prefetch task, the latency observer)
+    # parent on Pipecat's current turn span, reachable only through the task
+    # that does not exist yet — hence the late-bound lookup.
+    def turn_context():
+        return task.turn_trace_observer.get_current_turn_context() if task.turn_trace_observer else None
+
     stages = [
         transport.input(),
         build_stt(settings, language.pipecat),
         EchoTranscriptFilter(spoken),
-        MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs),
+        MemoryPrefetchTap(runtime.lane, session, min_chars=settings.mem_prefetch_min_chars, recs=runtime.recs,
+                          turn_context=turn_context),
         user_agg,
     ]
     if settings.agent_impl == "stub":
@@ -116,10 +123,7 @@ def build_pipeline(
     # turn 1 (observability plan D14). The identity attributes also travel as
     # baggage from `run_session`; passing them here as well guarantees the
     # trace-level view even if the conversation span is created outside it.
-    # The latency observer parents its span on Pipecat's turn span, reachable only
-    # through the task that does not exist yet — hence the late-bound lookup.
-    latency = TurnLatencyObserver(session, turn_context=lambda: (
-        task.turn_trace_observer.get_current_turn_context() if task.turn_trace_observer else None))
+    latency = TurnLatencyObserver(session, turn_context=turn_context)
     task = PipelineTask(
         Pipeline(stages),
         params=PipelineParams(enable_metrics=True),

@@ -167,7 +167,10 @@ class SGRAgentService(LLMService):
         dropped = self._bus.cancel_turn(self._turn_id)
         logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
             "turn interrupted", dropped_commands=dropped)
-        self._turn_span.set_attributes({META_INTERRUPTED: True, ATTR_TURN_DROPPED_COMMANDS: dropped})
+        # A barge-in during playback of an already-finished turn still drops its
+        # queued commands, but that turn's span closed with the turn.
+        if self._turn_span.is_recording():
+            self._turn_span.set_attributes({META_INTERRUPTED: True, ATTR_TURN_DROPPED_COMMANDS: dropped})
         self._turn_id = None
 
     def _schedule_ingest(self, *, interrupted: bool) -> None:
