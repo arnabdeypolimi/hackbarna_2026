@@ -44,7 +44,8 @@ class SessionState:
             lines.append(f"Rail: {s.rail_id}")
         for tile in s.tiles:
             marker = " <- focused" if tile.position == s.focus_index else ""
-            lines.append(f"  [{tile.position}] {tile.name} (id={tile.title_id}){marker}")
+            shop = " [shop]" if tile.shoppable else ""
+            lines.append(f"  [{tile.position}] {tile.name} (id={tile.title_id}){shop}{marker}")
         pb = s.playback
         if pb.state == "stopped":
             lines.append("Playback: stopped")

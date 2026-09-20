@@ -88,6 +88,7 @@ function apply(msg) {
       playback = { state: "stopped", title_id: null, position_s: 0 };
       break;
     case "show_products":
+      log(`shop shelf for ${TITLES.find((t) => t.title_id === a.title_id)?.name || a.title_id}`);
       break;
     case "show_titles": {
       // The mock has no other rails: the picks replace the tiles, first one focused.

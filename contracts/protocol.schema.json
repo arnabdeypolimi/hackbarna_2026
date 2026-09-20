@@ -203,6 +203,11 @@
             "title": "Position",
             "type": "integer"
           },
+          "shoppable": {
+            "default": false,
+            "title": "Shoppable",
+            "type": "boolean"
+          },
           "title_id": {
             "title": "Title Id",
             "type": "string"
