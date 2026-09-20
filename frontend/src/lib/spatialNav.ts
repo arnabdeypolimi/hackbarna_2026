@@ -2,9 +2,16 @@ export type Dir = 'left' | 'right' | 'up' | 'down';
 
 export const DIRS: Record<number, Dir> = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
 
+/**
+ * A candidate the remote can actually land on. The rect test catches display: none and
+ * collapsed boxes; the visibility test catches the avatar panel while the room is still
+ * opening — it is `visibility: hidden` so it can fade in, and keeps a full rect over the
+ * widened browse panel. Blink refuses to focus a hidden element, so picking one is a dead
+ * press: Right from the tab bar's last button went to a "Talk to the avatar" nobody could see.
+ */
 export function isVisible(el: Element): boolean {
   const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
+  return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
 }
 
 /**

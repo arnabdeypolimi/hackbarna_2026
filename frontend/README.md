@@ -35,8 +35,9 @@ panel catches up in place.
 
 Two things worth knowing:
 
-- **The app connects on load.** Every reload, including a hot reload, opens a paid
-  Anam and Cartesia session. Stop the dev server when you are not using it.
+- **Picking a profile opens a paid session.** Every reload, including a hot reload, comes
+  back to "Who's watching?", and the first pick opens an Anam and Cartesia session. Stop the
+  dev server when you are not using it.
 - **On a real television it needs https.** `getUserMedia` is blocked on an insecure
   origin, so a plain `http://` LAN address cannot reach the microphone at all.
   Desktop development on `localhost` is exempt from that rule.
@@ -251,5 +252,5 @@ src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 - **The glass look avoids `backdrop-filter`.** Panels are semi-transparent over a pre-blurred background, which is much cheaper on 1–1.5 GB boards.
 - **Images** come from TMDB's image CDN. When one fails to load, a generated title card is shown instead.
 - **TMDB credit** is shown at the bottom of the screen. Turn it off with `SHOW_TMDB_CREDIT` in `src/config.ts` if you use other data.
-- **Fonts** load Sora from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
+- **Fonts** load Schibsted Grotesk from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
 - `src/types/sdk.d.ts` is Titan's published type file. Refresh it from https://sdk.titanos.tv/sdk/sdk.d.ts when the SDK changes.
