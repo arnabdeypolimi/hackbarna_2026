@@ -44,6 +44,13 @@ class CreateSessionRequest(BaseModel):
     language: LanguageCode | None = None
 
 
+class InjectTextRequest(BaseModel):
+    """What the viewer said, when it did not arrive as speech."""
+    # A cap, not a guess: this text reaches the LLM prompt, and an utterance no
+    # one could say in one breath is a client bug or an injection attempt.
+    text: str = Field(min_length=1, max_length=500)
+
+
 def create_app(
     store: SessionStore | None = None,
     runtime: Runtime | None = None,
@@ -174,7 +181,8 @@ def create_app(
                 session_id,
                 run_session(session, bus, transport, with_avatar=avatar,
                             half_duplex=halfduplex, runtime=app.state.runtime,
-                            settings=settings),
+                            settings=settings,
+                            on_injector=app.state.manager.injector_slot(session_id)),
             )
 
         answer = await webrtc.handle_web_request(request, on_connection)
@@ -190,6 +198,30 @@ def create_app(
     ) -> dict:
         _authenticated(session_id, token)
         await webrtc.handle_patch_request(request)
+        return {"status": "ok"}
+
+    @app.post("/sessions/{session_id}/text")
+    async def say(
+        session_id: str,
+        req: InjectTextRequest,
+        token: str = Header(default="", alias="X-Control-Token"),
+    ) -> dict:
+        """Take a turn from typed words instead of speech.
+
+        Titan OS exposes no microphone API (the whole SDK was checked), so on
+        shipping hardware the remote's keyboard is the fallback input — and it is
+        how the browser tests drive a turn without synthesising audio. The words
+        enter the pipeline where STT would have put them, so turn-taking,
+        barge-in, memory and the agent all run unchanged. Authenticated exactly
+        like the control socket: the token, never the session id.
+        """
+        _authenticated(session_id, token)
+        inject = app.state.manager.injector_for(session_id)
+        # The pipeline starts on the first WebRTC offer, so a session that has one
+        # but no media yet has nothing to say the words to.
+        if inject is None:
+            raise HTTPException(409, "no pipeline is running for this session")
+        await inject(req.text)
         return {"status": "ok"}
 
     @app.delete("/sessions/{session_id}", status_code=204)

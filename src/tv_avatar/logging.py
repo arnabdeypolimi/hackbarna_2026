@@ -181,11 +181,18 @@ def _add_ctx(record: dict) -> None:
 
 
 def setup_logging(level: str = "INFO", *, settings: "Settings | None" = None,
-                  json_output: bool = False, content: bool = True) -> None:
-    """Idempotent: safe to call from ``create_app`` and from CLI tools."""
+                  json_output: bool = False, content: bool = True,
+                  secrets: tuple[str, ...] = ()) -> None:
+    """Idempotent: safe to call from ``create_app`` and from CLI tools.
+
+    ``secrets`` is for tools that run on a subset of the app's settings and so
+    cannot use ``ContentPolicy.from_settings``; values shorter than 8 chars are
+    ignored, as there (an empty default is not a secret).
+    """
     global _policy, _sink
     logger.remove()
-    _policy = ContentPolicy.from_settings(settings) if settings else ContentPolicy(content=content)
+    _policy = (ContentPolicy.from_settings(settings) if settings
+               else ContentPolicy(content=content, secrets=tuple(s for s in secrets if len(s) >= 8)))
     json_output = settings.log_format == "json" if settings else json_output
     if _sink is not None:
         _sink.stop()  # otherwise every call leaks a worker thread

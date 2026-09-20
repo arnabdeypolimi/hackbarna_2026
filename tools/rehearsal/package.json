@@ -1,0 +1,15 @@
+{
+  "name": "tv-avatar-rehearsal",
+  "private": true,
+  "type": "module",
+  "description": "Drives the demo scripts against the running TV app and backend with Playwright.",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "a": "node rehearse.mjs --script A",
+    "b": "node rehearse.mjs --script B",
+    "ab": "node rehearse.mjs --script AB"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

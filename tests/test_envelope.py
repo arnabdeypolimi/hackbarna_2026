@@ -214,3 +214,14 @@ def test_recommend_titles_genres_are_constrained_to_tmdb_enum():
         RecommendTitles(genres=["crime thriller"])
     schema = json.dumps(turn_plan_schema()["schema"])
     assert '"Science Fiction"' in schema and '"exclude_genres"' in schema
+
+
+def test_a_follow_up_schema_pins_the_operation_the_viewer_asked_for():
+    """Results arriving in cycle 2 may resolve the title, never change the operation."""
+    pinned = turn_plan_schema(operation="discover")
+    assert pinned["name"] == "turn_plan_discover"
+    assert pinned["schema"]["$defs"]["Request"]["properties"]["operation"]["const"] == "discover"
+    assert "const" not in turn_plan_schema()["schema"]["$defs"]["Request"]["properties"]["operation"]
+    final = turn_plan_schema(final=True, operation="lookup")
+    assert final["name"] == "turn_plan_final_lookup"
+    assert final["schema"]["$defs"]["Request"]["properties"]["operation"]["const"] == "lookup"

@@ -290,6 +290,7 @@
     "additionalProperties": false,
     "properties": {
      "operation": {
+      "description": "play/open/shop need one specific movie the viewer named or pointed at on screen ('the second one'). A mood, a genre, 'you pick', 'surprise me' or 'something ...' is discover, even when they say 'put something on'.",
       "enum": [
        "play",
        "open",
@@ -309,7 +310,8 @@
        {
         "type": "null"
        }
-      ]
+      ],
+      "description": "The movie the viewer named, verbatim; null when they named none."
      },
      "title_id": {
       "anyOf": [
@@ -319,7 +321,8 @@
        {
         "type": "null"
        }
-      ]
+      ],
+      "description": "Its id when the Screen, Shop, Recent activity, Recommendations or a tool result lists it; null means search first, never guess."
      }
     },
     "required": [
@@ -378,7 +381,8 @@
        {
         "type": "null"
        }
-      ]
+      ],
+      "description": "Relative jump from where playback is: 'skip ahead thirty seconds' is 30, 'go back ten' is -10."
      },
      "to_seconds": {
       "anyOf": [
@@ -389,7 +393,8 @@
        {
         "type": "null"
        }
-      ]
+      ],
+      "description": "Absolute position: 'go to the two-minute mark', 'start over' (0)."
      },
      "verb": {
       "const": "seek",

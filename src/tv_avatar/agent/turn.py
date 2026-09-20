@@ -13,7 +13,7 @@ from typing import Any, ClassVar, Literal
 from pydantic import ValidationError
 
 from tv_avatar import tracing as tel
-from tv_avatar.agent.envelope import REGISTRY, FinalTurnPlan, TurnPlan
+from tv_avatar.agent.envelope import REGISTRY, FinalTurnPlan, Request, TurnPlan
 from tv_avatar.tracing import (
     ATTR_TURN_PREFIX,
     META_CYCLES,
@@ -222,6 +222,9 @@ class CycleOutcome:
     from awaited tools, including successful TV search replies."""
     raw: str
     observations: tuple[ToolResult, ...]
+    #: What the viewer asked for, as this cycle decoded it; the next cycle is
+    #: pinned to its operation.
+    request: Request | None = None
 
     @property
     def done(self) -> bool:

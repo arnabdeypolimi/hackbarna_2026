@@ -479,6 +479,7 @@
             }
           ],
           "default": null,
+          "description": "Relative jump from where playback is: 'skip ahead thirty seconds' is 30, 'go back ten' is -10.",
           "title": "Delta Seconds"
         },
         "to_seconds": {
@@ -492,6 +493,7 @@
             }
           ],
           "default": null,
+          "description": "Absolute position: 'go to the two-minute mark', 'start over' (0).",
           "title": "To Seconds"
         },
         "verb": {

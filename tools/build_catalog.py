@@ -87,7 +87,9 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = BuildSettings()
-    setup_logging(settings.log_level, settings=settings)
+    # Not `settings=`: ContentPolicy.from_settings reads the app's speech and
+    # Langfuse keys, which this offline job does not have. Redact the one it does.
+    setup_logging(settings.log_level, secrets=(settings.nebius_api_key,))
     ids = None
     if args.ids_from:
         ids = read_title_ids(args.ids_from)

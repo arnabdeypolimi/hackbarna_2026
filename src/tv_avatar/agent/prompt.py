@@ -47,7 +47,8 @@ GREETING_INSTRUCTION = (
     "offer the FIRST title under 'Recently watched', or if that says (none yet) the FIRST under "
     "'Recently recommended' (\"Welcome back — want to carry on with The Batman?\"). "
     "The viewer profile is only for tone and preferences — never take the title from it. "
-    "Only if no title is listed anywhere, ask what they would like to watch."
+    "Every greeting ends in a question the viewer can answer: that offer, or, when no title is "
+    "listed anywhere, what they are in the mood for tonight."
 )
 
 
@@ -100,8 +101,9 @@ _CONTRACT = """\
 # Output contract
 Reply with exactly one JSON object, keys in this order: "intent", "request", "say", "actions".
 - `request` decodes what the viewer just asked to have done, from their words alone — not from Memory, \
-not from earlier assistant replies. `operation`: play (watch / play / put on X), open (show me / open / tell me about a movie), \
-lookup (search for / find / do you have X), discover (recommend / something like X / what should I watch), \
+not from earlier assistant replies. `operation`: play (watch / play / put on one named or pointed-at movie), \
+open (show me / open / tell me about a movie), lookup (search for / find / do you have X), \
+discover (a mood or genre, you pick, something like X, what should I watch — even "put something on"), \
 shop (merchandise, clothing, an item on screen), control (pause / resume / seek / navigate / back / home / close), \
 answer (questions, greetings, chit-chat). `title`: the movie they named, verbatim, else null. \
 `title_id`: its id if the Screen, Shop, Recent activity, Recommendations or tool results list it, else null.

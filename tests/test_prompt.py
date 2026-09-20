@@ -98,7 +98,9 @@ def test_contract_decodes_the_request_before_say_and_maps_each_operation():
 
 def test_named_title_requests_are_not_discovery_or_shopping():
     prompt = _prompt()
-    assert "watch / play / put on X" in prompt and "show me / open / tell me about a movie" in prompt
+    assert "put on one named or pointed-at movie" in prompt and "show me / open / tell me about a movie" in prompt
+    # "You pick. Crime and thrillers, no horror." was decoded as play and autoplayed (rehearsal, 2026-09-20).
+    assert "a mood or genre, you pick" in prompt and 'even "put something on"' in prompt
     assert "A named title is not a request for similar titles" in prompt
     assert "a title being in Shop does not make the request shopping" in prompt
     assert "similar_to` takes a supplied title_id and EXCLUDES that movie" in prompt

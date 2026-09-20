@@ -334,8 +334,12 @@ async def test_final_cycle_is_decoded_against_the_narrowed_schema():
                             SessionState("sess_t", "tok", 0, user_id="u1"), client=client, tools=FakeTools())
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("recommend"))])
     assert len(client.calls) == 3
+    # Follow-up cycles are also pinned to cycle 1's operation (the suffix names it).
     assert [c["response_format"]["json_schema"]["name"] for c in client.calls] == [
-        "turn_plan", "turn_plan", "turn_plan_final"]
+        "turn_plan", "turn_plan_discover", "turn_plan_final_discover"]
+    for call in client.calls[1:]:
+        op = call["response_format"]["json_schema"]["schema"]["$defs"]["Request"]["properties"]["operation"]
+        assert op["const"] == "discover"
     second, third = client.calls[1]["messages"][-1]["content"], client.calls[2]["messages"][-1]["content"]
     assert second.startswith("[tool results]") and third.startswith("[tool results]")
     assert "Heat" in second and "Heat" in third
@@ -1042,6 +1046,22 @@ async def test_a_title_directed_action_without_a_decoded_id_is_dropped():
     agent = _agent(FakeOpenAI([lookup, then_play]), bus)
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("Search for Moon."))])
     assert bus.dispatched == ["search_catalog", "show_titles"]   # a lookup never autoplays
+
+
+async def test_a_follow_up_cycle_cannot_turn_discovery_into_playback():
+    """Rehearsal, 2026-09-20: "You pick. Crime and thrillers, no horror." decoded as
+    discover, then the cycle that received the recommendations re-decoded it as
+    play and started the top hit. The operation is the viewer's, fixed in cycle 1:
+    a follow-up envelope claiming otherwise is held to it and its play is dropped."""
+    bus, tools = RecordingBus(), FakeTools()
+    autoplay = ('{"intent":"control","request":{"operation":"play","title":null,"title_id":"949"},'
+                '"say":"On it — Heat is ready to play.","actions":[{"verb":"play","title_id":"949"},'
+                '{"verb":"show_titles","title_ids":["949","27205"],"label":"Tense picks"}]}')
+    client = FakeOpenAI([RECO_1, autoplay])
+    agent = _agent(client, bus, tools=tools)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("You pick. Crime and thrillers, no horror."))])
+    assert bus.dispatched == ["show_titles"]
+    assert client.calls[1]["response_format"]["json_schema"]["name"] == "turn_plan_final_discover"
 
 
 async def test_incomplete_envelope_is_diagnostic_not_a_successful_plan(otel):

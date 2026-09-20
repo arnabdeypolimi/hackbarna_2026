@@ -13,3 +13,7 @@ data/
 # ...but the TV app's static dataset ships with it.
 !frontend/public/data/
 .DS_Store
+
+# Playwright rehearsal harness — deps and run output are local
+tools/rehearsal/node_modules/
+tools/rehearsal/last-run.json

@@ -85,7 +85,8 @@ _TV_DOCS: dict[Verb, str] = {
     Verb.PLAY: "start playback of a title by title_id",
     Verb.PAUSE: "pause playback",
     Verb.RESUME: "resume playback",
-    Verb.SEEK: "jump to an absolute time or by a delta",
+    Verb.SEEK: "skip ahead/back N seconds -> delta_seconds (never add it to the position); "
+               "go to a time -> to_seconds",
     Verb.NAVIGATE: "move the focus up/down/left/right",
     Verb.FOCUS: "highlight a tile by title_id",
     Verb.OPEN_DETAILS: "open a title's details page, on or off screen",
@@ -129,12 +130,19 @@ Operation = Literal["play", "open", "lookup", "discover", "shop", "control", "an
 
 
 class Request(BaseModel):
-    operation: Operation
+    # The descriptions ride into the decoding schema: the model reads them at the
+    # moment it commits to the operation, which is where "you pick" went wrong.
+    operation: Operation = Field(description=(
+        "play/open/shop need one specific movie the viewer named or pointed at on screen "
+        "('the second one'). A mood, a genre, 'you pick', 'surprise me' or 'something ...' "
+        "is discover, even when they say 'put something on'."))
     #: The movie named by the viewer, verbatim; None when they named none.
-    title: str | None
+    title: str | None = Field(description="The movie the viewer named, verbatim; null when they named none.")
     #: Its catalog id when a supplied section or tool result lists it, else
     #: None — the cue to search rather than guess or substitute.
-    title_id: str | None
+    title_id: str | None = Field(description=(
+        "Its id when the Screen, Shop, Recent activity, Recommendations or a tool result lists it; "
+        "null means search first, never guess."))
 
 
 class TurnPlan(BaseModel):
@@ -194,9 +202,27 @@ def plan_violations(plan: TurnPlan | FinalTurnPlan) -> list[str]:
 
 # --- response_format schema ------------------------------------------------
 
-def turn_plan_schema(*, final: bool = False) -> dict:
+def turn_plan_schema(*, final: bool = False, operation: str | None = None) -> dict:
+    """The decoding contract for one cycle.
+
+    ``operation`` pins ``request.operation`` to a single value for a follow-up
+    cycle: the viewer asked once, in cycle 1, and the results coming back cannot
+    change what they asked for. Seen live: "You pick. Crime and thrillers" decoded
+    as discover, then the cycle that received the recommendations re-decoded the
+    request as play and started the top hit. With the const in the schema that
+    envelope is undecodable; the request gate then holds against the pin as well.
+    """
     model, name = (FinalTurnPlan, "turn_plan_final") if final else (TurnPlan, "turn_plan")
-    return response_format(model, name)
+    schema = response_format(model, name)
+    if operation is not None:
+        # `request` is a $ref into $defs (Pydantic emits nested models that way);
+        # the const goes on the definition, and the plan's own field description
+        # is kept so the model still reads why the operation is what it is.
+        schema["schema"]["$defs"]["Request"]["properties"]["operation"] = {
+            "const": operation, "type": "string",
+            "description": f"Fixed for this turn: the viewer asked to {operation}."}
+        schema["name"] = f"{name}_{operation}"
+    return schema
 
 
 # --- capability manifest ---------------------------------------------------

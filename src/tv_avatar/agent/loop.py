@@ -113,6 +113,11 @@ class _Cycle:
     n_rejected: int = 0
     first_say_pending: bool = True
     request: Request | None = None
+    #: Cycle 1's operation, when this is a follow-up: the schema already forbids
+    #: any other, and the gate holds to it should an envelope arrive unconstrained.
+    pinned_operation: str | None = None
+    #: This cycle's decoding contract (final or not, pinned or not).
+    schema: dict = field(default_factory=dict)
     telemetry: CycleTelemetry = field(default_factory=CycleTelemetry)
 
     def ms(self) -> int:
@@ -124,9 +129,16 @@ class TurnRunner:
         self._client = client
         self._cfg = cfg
         self._host = host
-        self._schemas = {final: turn_plan_schema(final=final) for final in (False, True)}
-        self._schema_hashes = {final: hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
-                               for final, schema in self._schemas.items()}
+        # Keyed by (final, pinned operation); built on first use, a handful at most.
+        self._schemas: dict[tuple[bool, str | None], tuple[dict, str]] = {}
+
+    def _schema(self, *, final: bool, operation: str | None) -> tuple[dict, str]:
+        key = (final, operation)
+        if key not in self._schemas:
+            schema = turn_plan_schema(final=final, operation=operation)
+            self._schemas[key] = (schema, hashlib.sha256(
+                json.dumps(schema, sort_keys=True).encode()).hexdigest())
+        return self._schemas[key]
 
     async def run(self, messages: list[dict], ctx: TurnContext, metrics: TurnMetrics, trace: TurnTrace) -> None:
         max_cycles = self._cfg.agent_max_cycles
@@ -135,9 +147,12 @@ class TurnRunner:
             budget_s = None if cycle == 1 else self._cfg.cycle_first_byte_s or None
             ctx.log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages),
                           budget_ms=None if budget_s is None else round(budget_s * 1000))
+            # The viewer asked once. Results arriving in a later cycle refine the
+            # title and its id, never the operation — the schema pins it.
+            pinned = previous.request.operation if previous is not None and previous.request else None
             try:
                 outcome = await self._cycle(messages, ctx, cycle, metrics, trace,
-                                            final=cycle == max_cycles, budget_s=budget_s)
+                                            final=cycle == max_cycles, budget_s=budget_s, operation=pinned)
             except CycleOverBudget:
                 metrics.fallback = True
                 assert previous is not None  # cycle 1 has no budget
@@ -177,22 +192,23 @@ class TurnRunner:
                     await self._host.dispatch_action(parse_action({"verb": verb, **args}), ctx)
 
     async def _cycle(self, messages: list[dict], ctx: TurnContext, cycle: int, metrics: TurnMetrics,
-                     trace: TurnTrace, *, final: bool, budget_s: float | None) -> CycleOutcome:
+                     trace: TurnTrace, *, final: bool, budget_s: float | None,
+                     operation: str | None = None) -> CycleOutcome:
         # One LLM call = one `generation` (D19). The raw envelope is recorded in
         # the `finally` so a budget-cancelled cycle still shows what it streamed.
         raw: list[str] = []
-        schema = self._schemas[final]
+        schema, schema_hash = self._schema(final=final, operation=operation)
         with tel.attribute_scope({tel.META_TURN_ID: ctx.turn_id, META_CYCLE: cycle}), \
                 observation("agent.cycle", type=OBS_TYPE_GENERATION, **{
             META_CYCLE: cycle, ATTR_CYCLE_MAX: self._cfg.agent_max_cycles,
             tel.META_TURN_ID: ctx.turn_id, tel.META_FINAL_CYCLE: final,
             tel.META_SCHEMA_NAME: schema["name"],
-            tel.META_SCHEMA_HASH: self._schema_hashes[final],
+            tel.META_SCHEMA_HASH: schema_hash,
             tel.META_PROVIDER: urlsplit(self._cfg.nebius_base_url).hostname or "unknown",
             ATTR_GENAI_MODEL: self._cfg.llm_model, ATTR_GENAI_TEMPERATURE: TEMPERATURE,
             ATTR_GENAI_MAX_TOKENS: MAX_TOKENS, ATTR_OBS_INPUT: json.dumps(messages, ensure_ascii=False),
         }) as span:
-            state = _Cycle(ctx, cycle, final, span)
+            state = _Cycle(ctx, cycle, final, span, pinned_operation=operation, schema=schema)
             try:
                 return await self._run_cycle(messages, state, metrics, trace, raw, budget_s)
             except asyncio.CancelledError:
@@ -272,7 +288,7 @@ class TurnRunner:
                         awaited=len(c.awaited), fire_and_forget=len(c.fire), ms=c.ms())
         c.span.set_attributes({ATTR_CYCLE_N_ACTIONS: len(c.awaited) + len(c.fire),
                                ATTR_CYCLE_N_REJECTED: c.n_rejected})
-        return CycleOutcome("".join(raw), await self._observe(c))
+        return CycleOutcome("".join(raw), await self._observe(c), request=c.request)
 
     async def _stream(self, messages: list[dict], c: _Cycle, raw: list[str]) -> AsyncIterator[Event]:
         """The LLM call as envelope events. Knows the wire, not the product."""
@@ -282,7 +298,7 @@ class TurnRunner:
             stream = await self._client.chat.completions.create(
                 model=self._cfg.llm_model, messages=messages, stream=True,
                 temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
-                response_format={"type": "json_schema", "json_schema": self._schemas[c.final]},
+                response_format={"type": "json_schema", "json_schema": c.schema},
                 extra_body=self._cfg.llm_extra_body or None,
             )
             request_id = getattr(stream, "_request_id", None)
@@ -382,6 +398,11 @@ class TurnRunner:
             c.ctx.log.warning("undecodable request", step="request", cycle=c.n,
                               reason=str(err).splitlines()[0])
             return
+        if c.pinned_operation is not None and c.request.operation != c.pinned_operation:
+            c.ctx.log.warning("follow-up cycle changed the operation; holding to the request",
+                              step="request", cycle=c.n, decoded=c.request.operation,
+                              pinned=c.pinned_operation)
+            c.request = c.request.model_copy(update={"operation": c.pinned_operation})
         metrics.mark_once("operation", c.request.operation)
         c.span.set_attribute(tel.META_OPERATION, c.request.operation)
         c.ctx.log.debug("request", step="request", cycle=c.n, ms=c.ms(),

@@ -76,7 +76,7 @@
   the profile fold, history writes, status events, spans — is fired and never awaited.</p>
 
   <div class="frame">
-  <svg viewBox="0 0 1060 926" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TV voice agent v3 system map: WebRTC media plane through the Pipecat frame graph with echo filter and prefetch tap, the control plane and the thirteen-verb command bus, internal tools and the recommendation engine, the rolling memory profile, the viewing log and the shop shelves">
+  <svg viewBox="0 0 1060 946" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TV voice agent v3 system map: WebRTC media plane through the Pipecat frame graph with echo filter and prefetch tap, the control plane and the thirteen-verb command bus, internal tools and the recommendation engine, the rolling memory profile, the viewing log and the shop shelves">
     <defs>
       <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)"/>
@@ -154,6 +154,7 @@
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
       <text x="23" y="146">turn end: 0.2 s VAD stop + 0.5 s silence timer, 2 s phantom-turn cap</text>
       <text x="972" y="146" text-anchor="end">barge-in: 2 transcribed words cancel LLM, TTS and avatar</text>
+      <text x="1037" y="164" text-anchor="end">typed input: POST /sessions/:id/text queues the same TranscriptionFrame</text>
     </g>
 
     <!-- agent to the right column -->
@@ -226,7 +227,7 @@
     <text x="869" y="698" fill="var(--muted)" font-size="10" text-anchor="middle" font-family="inherit">TMDB parquet + embedded Qdrant · local E5-small, 384 dims</text>
 
     <!-- memory lane -->
-    <rect x="23" y="300" width="597" height="232" rx="14" stroke="var(--line)" stroke-dasharray="7 5" fill="var(--fill-soft)"/>
+    <rect x="23" y="300" width="597" height="250" rx="14" stroke="var(--line)" stroke-dasharray="7 5" fill="var(--fill-soft)"/>
     <text x="39" y="326" fill="var(--ink)" font-size="13" font-weight="600" font-family="inherit">Memory lane</text>
     <text x="604" y="326" fill="var(--muted)" font-size="10.5" text-anchor="end" font-family="inherit">one rolling profile per viewer · prefetch before the turn, recall at open, fold after</text>
 
@@ -249,8 +250,9 @@
       <text x="467" y="478" fill="var(--muted)" font-size="10">a crash is folded in at the next warmup</text>
     </g>
 
-    <rect x="39" y="498" width="565" height="26" rx="8" stroke="var(--line)" stroke-dasharray="5 4" fill="none"/>
+    <rect x="39" y="498" width="565" height="44" rx="8" stroke="var(--line)" stroke-dasharray="5 4" fill="none"/>
     <text x="321" y="515" fill="var(--muted)" font-size="11" text-anchor="middle" font-family="inherit">finish_session rewrites the profile in one LLM call — at session end, and every 6 ingests</text>
+    <text x="321" y="533" fill="var(--muted)" font-size="10.5" text-anchor="middle" font-family="inherit">schema-guided: every fact names its source and quotes its evidence, or it is dropped</text>
 
     <!-- viewing log -->
     <rect x="23" y="552" width="597" height="176" rx="12" stroke="var(--line)" fill="var(--fill-soft)"/>
@@ -270,8 +272,8 @@
     <text x="39" y="770" fill="var(--ink)" font-size="13" font-weight="600" font-family="inherit">Shop shelves, shop.yaml — the backend owns them</text>
     <text x="604" y="770" fill="var(--muted)" font-size="10.5" text-anchor="end" font-family="inherit">pull, never push</text>
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
-      <text x="39" y="789">→ prompt: # Shop — every shelf by title_id with its catalogue name, its items and their prices; # Screen marks those tiles [shop]</text>
-      <text x="39" y="806">show_products slides a shelf in under the row, for a named title even off screen — never for a title without one, never unasked</text>
+      <text x="39" y="789">→ prompt: # Shop — each shelf by title_id, its items and prices; Screen marks those tiles [shop]</text>
+      <text x="39" y="806">show_products slides a shelf in under the row, even for a title that is off screen — never unasked</text>
     </g>
 
     <g font-size="11.5" font-family="inherit" fill="var(--muted)">
@@ -279,6 +281,7 @@
       <text x="23" y="866">The model resolves “the second one” from the # Screen tiles itself; the bus validates and never guesses.</text>
       <text x="23" y="886">Everything off the turn — ingest, the profile fold, history writes, status events — is a create_task, never awaited.</text>
       <text x="23" y="906">The echo filter is the one optional stage, and it is off: it also swallowed “no, die hard” right after the avatar said “No Hard Feelings”.</text>
+      <text x="23" y="926">Typed words are the second door, never a second path: Titan OS exposes no microphone API, so the remote's keyboard enters where STT would.</text>
     </g>
   </svg>
   </div>
@@ -294,9 +297,10 @@
   <code>TurnRunner.run</code>: recall, prompt, cycle 1, then a follow-up cycle for every observation that earns one, up
   to <code>AGENT_MAX_CYCLES</code>. <code>say</code> leaves the model before <code>actions[]</code>, so the viewer hears
   “On it.” or “Let me look.” while the command or the tool is still on its way — there is no canned filler any more.
-  The follow-up cycle carries the <em>original request</em> next to the results, so a lookup finishes the request it
-  came from: “watch Moon” ends in <code>play</code>, “show me Moon” in <code>open_details</code>, “do you have Moon” in
-  <code>show_titles</code> and nothing else.</p>
+  Before <code>say</code> the envelope decodes <code>request</code> — <code>{operation, title, title_id}</code> — and
+  every action is then checked against it, so a lookup finishes the request it came from: “watch Moon” ends in
+  <code>play</code>, “show me Moon” in <code>open_details</code>, “do you have Moon” in <code>show_titles</code>, and
+  an action that serves some other operation never reaches the TV.</p>
 
   <div class="frame">
   <svg viewBox="0 0 1060 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The agent turn: turn opens, recall and history, build the prompt, cycle 1 streams the TurnPlan envelope; say goes to TTS, TV verbs go to the bus, awaited actions are collected; an observation or a failed awaited action buys a next cycle that carries the original request, or a templated fallback when the optional budget is enabled; the turn closes with an off-turn memory ingest; barge-in cancels at any point">
@@ -327,8 +331,8 @@
       <text x="646" y="99" fill="var(--muted)" font-size="10.5">arrived in the system slot is replaced</text>
 
       <text x="916" y="66" fill="var(--ink)" font-size="13" font-weight="600">Cycle 1: stream TurnPlan</text>
-      <text x="916" y="84" fill="var(--muted)" font-size="10.5">strict json_schema, keys in order:</text>
-      <text x="916" y="99" fill="var(--muted)" font-size="10.5">intent → say → actions[]</text>
+      <text x="916" y="84" fill="var(--muted)" font-size="10.5">strict json_schema, the cascade in key order:</text>
+      <text x="916" y="99" fill="var(--muted)" font-size="10.5">intent → request → say → actions[]</text>
     </g>
     <g stroke="var(--line)" fill="none" marker-end="url(#bh)">
       <path d="M 213 76 L 233 76"/>
@@ -340,7 +344,8 @@
     <path d="M 916 108 L 916 140 L 176 140 L 176 166" stroke="var(--line)" fill="none" marker-end="url(#bh)"/>
     <path d="M 522 140 L 522 166" stroke="var(--line)" fill="none" marker-end="url(#bh)"/>
     <path d="M 876 140 L 876 166" stroke="var(--line)" fill="none" marker-end="url(#bh)"/>
-    <text x="700" y="134" fill="var(--muted)" font-size="10" text-anchor="middle" font-family="inherit">streamed events, each validated against this cycle's union and dispatched the moment it closes</text>
+    <text x="620" y="120" fill="var(--muted)" font-size="10" text-anchor="middle" font-family="inherit">request closes first — operation ∈ play · open · lookup · discover · shop · control · answer, with the title and its id</text>
+    <text x="620" y="133" fill="var(--muted)" font-size="10" text-anchor="middle" font-family="inherit">every action is then checked against it and against this cycle's union; what survives dispatches the moment it closes</text>
     <g font-family="inherit" font-size="10" fill="var(--muted)">
       <text x="184" y="160">SayDelta, SayDone</text>
       <text x="530" y="160">ActionReady — a TV verb</text>
@@ -361,21 +366,21 @@
       <text x="39" y="259">“Let me look.” covers the tool round-trip</text>
       <text x="39" y="274">measured TTFT 452–528 ms warm, 884 ms cold</text>
     </g>
-    <text x="371" y="193" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">TV verb → CommandBus, not awaited</text>
+    <text x="371" y="193" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">TV verb → request gate → CommandBus</text>
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
-      <text x="371" y="214">parse_command validates against the 13 verb models</text>
-      <text x="371" y="229">invalid → status invalid, handed back to the model</text>
-      <text x="371" y="244">CommandMsg (id, turn_id, verb, args) over the socket</text>
-      <text x="371" y="259">search_catalog alone awaits — no deadline; it ends when</text>
-      <text x="371" y="274">the TV answers, fails, or the turn is cancelled</text>
+      <text x="371" y="214">action_violation first: play for a lookup, or an id the</text>
+      <text x="371" y="229">request did not decode → dropped, never sent</text>
+      <text x="371" y="244">parse_command then validates the 13 verb models;</text>
+      <text x="371" y="259">invalid → status invalid, handed back to the model</text>
+      <text x="371" y="274">search_catalog alone awaits — no deadline, cancellable</text>
     </g>
     <text x="731" y="193" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">internal tool → awaited, 400 ms</text>
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
       <text x="731" y="214">recommend_titles → RecsEngine, for discovery only: typed</text>
       <text x="731" y="229">genres, years, similar_to (which excludes that title)</text>
       <text x="731" y="244">reject_title → the viewing log; no result, no cycle</text>
-      <text x="731" y="259">timeout or error → status unavailable | error</text>
-      <text x="731" y="274">recall_memory is gone: it returned what # Memory had</text>
+      <text x="731" y="259">timeout or error → status unavailable | error, spoken</text>
+      <text x="731" y="274">the same gate drops recommend_titles for a play request</text>
     </g>
 
     <!-- B3 -> C1 -->
@@ -390,18 +395,18 @@
     </g>
     <text x="39" y="363" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">Which results earn a cycle?</text>
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
-      <text x="39" y="384">every awaited reply the model must see: a tool's</text>
-      <text x="39" y="399">titles, a successful search, and any awaited action</text>
-      <text x="39" y="414">that failed — so the viewer is told instead of</text>
-      <text x="39" y="429">hearing only the filler. cancelled never counts</text>
-      <text x="39" y="444">nothing → the turn closes after cycle 1</text>
+      <text x="39" y="384">every awaited reply, whatever it says: the tool's</text>
+      <text x="39" y="399">titles, a search hit, a search miss, an error — the</text>
+      <text x="39" y="414">viewer hears what came back, not only the filler</text>
+      <text x="39" y="429">cancelled alone is not an observation (barge-in)</text>
+      <text x="39" y="444">nothing awaited → the turn closes after cycle 1</text>
     </g>
     <text x="371" y="363" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">Next cycle: speak the results</text>
     <g font-family="inherit" font-size="10.5" fill="var(--muted)">
       <text x="371" y="384">tool_results_message: {original_request, results} as</text>
-      <text x="371" y="399">one user message — data, not instructions; the request</text>
-      <text x="371" y="414">decides the follow-up (play / open_details / show_titles),</text>
-      <text x="371" y="429">many matches → clarify, none → say so and act on nothing</text>
+      <text x="371" y="399">one user message — data, not instructions</text>
+      <text x="371" y="414">the cycle decodes request again: one match → the asked-for</text>
+      <text x="371" y="429">action with its id, several → clarify, none → not found</text>
       <text x="371" y="444">AGENT_MAX_CYCLES = 2 (1–4) · the last cycle's schema caps</text>
     </g>
     <text x="731" y="363" fill="var(--ink)" font-size="12.5" font-weight="600" font-family="inherit">Over budget → templated answer</text>
@@ -471,7 +476,9 @@
   <p class="sub">OpenTelemetry is the only instrumentation API; Langfuse is an OTLP/HTTP sink, never an SDK. Pipecat
   emits <code>conversation → turn → stt / tts</code>; everything of ours hangs underneath through one
   <code>observation()</code> helper, so no span can forget to declare its Langfuse type. Off by default, and never on
-  the media path: a span is an attribute write, export is batched on a background thread.</p>
+  the media path: a span is an attribute write, and both the batching and the content redaction happen on the export
+  thread — the redactor is a <code>SpanExporter</code> inside the batch processor, not a processor that would rebuild
+  every span inside <code>span.end()</code> on the turn's own task.</p>
 
   <div class="frame">
   <svg viewBox="0 0 1060 568" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trace tree: conversation, turn, llm, and under llm the agent.recall with memory.prefetch and memory.recall, agent.cycle with agent.plan, agent.speech and agent.action, and under agent.action recs.recommend and tv.command, then agent.feedback, agent.fallback and memory.ingest, with turn.latency under the turn and tv.command_delivery, tv.command_result and memory.finish_session as linked roots">
@@ -535,7 +542,7 @@
       <text x="556" y="132">memory.empty / .stale / .token_est, history.chars</text>
       <text x="556" y="154">fired from an STT partial, parented on this turn</text>
       <text x="556" y="176">source: prefetch_hit | search | stale | empty</text>
-      <text x="556" y="198">model, schema name + hash, the raw envelope, usage, stop_reason</text>
+      <text x="556" y="198">model, schema name + hash, operation, the envelope, stop_reason</text>
       <text x="556" y="220">the parsed plan, validation, accepted and rejected actions</text>
       <text x="556" y="242">one sentence handed to TTS: submitting → submitted | cancelled</text>
       <text x="556" y="264">verb, kind, awaits_result, returns_observation, ms</text>
@@ -572,6 +579,18 @@
     <code>search_catalog</code> likewise waits with no default deadline — a TV that never answers is the TV's bug to
     show, and a barge-in releases the wait as <code>cancelled</code>, which is never an observation.</p>
 
+    <p><b>The request is decoded, not inferred.</b> The cascade is the field order:
+    <code>intent</code>, then <code>request</code> — <code>operation</code> (play, open, lookup, discover, shop,
+    control, answer), the <code>title</code> the viewer named verbatim, and its <code>title_id</code> if any supplied
+    section or tool result lists it — then <code>say</code>, then <code>actions[]</code>. Because
+    <code>request</code> closes before the first action streams, <code>action_violation</code> can check each action
+    against it in code: <code>play</code> does not serve a lookup, <code>show_products</code> does not serve a watch,
+    and <code>play</code> / <code>open_details</code> / <code>show_products</code> need the id the request decoded —
+    a null <code>title_id</code> means “search first”, never “guess”. A violating action is rejected exactly like an
+    unparseable one: the viewer hears <code>say</code>, and nothing they did not ask for happens. This replaced ~4 KB of
+    prose that restated the same policy three times and was ignored on the very cases it was written for — “I want to
+    watch Barbie” answered with recommendations.</p>
+
     <p><b>One registry, two kinds of action.</b> <code>agent/envelope.py</code> holds one <code>ActionSpec</code> per
     verb — TV or internal, whether the turn blocks on the reply, whether that reply is an observation the model must see, and how the prompt's
     capability manifest describes it. Thirteen TV verbs and two internal tools today. The envelope's
@@ -607,8 +626,24 @@
       <code>CYCLE_FIRST_BYTE_S</code> brings <code>render_fallback</code> back.</li>
       <li><b>The profile reaches the prompt as quoted data.</b> <code># Memory</code> holds
       <code>{"viewer_profile": …}</code> and the rules say to ignore instructions inside it, because a profile that had
-      once recorded “should offer similar animated picks” kept steering later turns. The summariser is also told to
-      strip directives it finds in the previous profile rather than copy them forward.</li>
+      once recorded “should offer similar animated picks” kept steering later turns.</li>
+      <li><b>The summariser is schema-guided too.</b> It no longer writes the file: it returns
+      <code>ProfileFact(source, evidence, section, fact)</code> — the source named before the claim, the words quoted —
+      and <code>verified_facts</code> drops any whose evidence is not literally in the viewer's own lines or in the
+      previous profile, plus anything that reads as an instruction. <code>render_profile</code> writes the same
+      editable Markdown as before. An unsupported preference is now unrepresentable rather than merely discouraged, and
+      a reply that is not a draft is a failed fold: the transcript stays pending for the retry.</li>
+      <li><b>One SGR helper, two callers.</b> <code>sgr.py</code> owns <code>strictify</code> and
+      <code>response_format</code>, so the turn envelope and the memory draft cannot drift in how “strict” is spelled.
+      It also knows that inside <code>properties</code> a field named <code>title</code> is a field, not the schema
+      annotation to strip — the <code>request.title</code> slot would otherwise vanish from the contract.</li>
+      <li><b>Typed text is a second door, not a second path.</b> Titan OS exposes no microphone API, so
+      <code>POST /sessions/:id/text</code> — authenticated by the control token, like the socket — queues the very
+      <code>TranscriptionFrame</code> STT would have produced. Turn-taking, barge-in, memory and the agent stay on one
+      code path, and the browser tests drive a turn without synthesising audio.</li>
+      <li><b>Redaction moved off the turn.</b> It is a <code>SpanExporter</code> wrapped inside the batch processor
+      instead of a <code>SpanProcessor</code> around it, so the per-span rebuild (the whole prompt on
+      <code>agent.cycle</code>) runs on the export thread rather than inside <code>span.end()</code>.</li>
       <li><b>The shop is the backend's.</b> <code>shop.yaml</code> behind <code>/shop</code> renders
       <code># Shop</code> — every shelf by <code>title_id</code>, with items and prices — and
       <code>show_products</code> slides it in. Pull, never push: a title appearing in <code>#&nbsp;Shop</code> does not
@@ -654,8 +689,10 @@
       <li><b>Tracing exists</b> (third panel), and is off by default.</li>
     </ul>
 
-    <p><b>Where this comes from.</b> Structure from <code>src/tv_avatar/{agent,memory,recs,history,control,pipeline}</code>;
-    the numbers from <code>docs/findings/2026-09-19-phase2-agent-memory-recs.md</code>. The Mermaid twin of the first
+    <p><b>Where this comes from.</b> Structure from
+    <code>src/tv_avatar/{agent,memory,recs,history,control,pipeline}</code> and <code>sgr.py</code>;
+    the numbers from <code>docs/findings/2026-09-19-phase2-agent-memory-recs.md</code>; the routing behaviour from
+    <code>tools/routing_eval.py</code>. The Mermaid twin of the first
     panel is <code>tv-buddy-architecture.mmd</code>; <code>tv-buddy-architecture.html</code> (v1) and
     <code>-v2.html</code> are kept as history.</p>
   </div>

@@ -42,8 +42,13 @@ class Resume(BaseModel):
 
 class Seek(BaseModel):
     verb: Literal[Verb.SEEK] = Verb.SEEK
-    to_seconds: float | None = Field(default=None, ge=0)
-    delta_seconds: float | None = None
+    to_seconds: float | None = Field(
+        default=None, ge=0,
+        description="Absolute position: 'go to the two-minute mark', 'start over' (0).")
+    delta_seconds: float | None = Field(
+        default=None,
+        description="Relative jump from where playback is: 'skip ahead thirty seconds' is 30, "
+                    "'go back ten' is -10.")
 
     @model_validator(mode="after")
     def exactly_one_target(self) -> Self:
