@@ -183,7 +183,7 @@ class CommandBus:
     async def next_outbound(self) -> ServerMessage:
         """Take the next message. See ``peek_outbound`` for the socket writer."""
         msg = await self.peek_outbound()
-        self.pop_outbound()
+        self.pop_outbound(msg)
         return msg
 
     async def peek_outbound(self) -> ServerMessage:
@@ -195,8 +195,12 @@ class CommandBus:
             await self._ready.wait()
         return self._outbound[0]
 
-    def pop_outbound(self) -> None:
-        if not self._outbound:
+    def pop_outbound(self, sent: ServerMessage) -> None:
+        """Remove ``sent`` once it is on the wire — only if it is still the head.
+        While the send was in flight a barge-in (``cancel_turn``) or the event cap
+        may have removed it already; popping blindly would then discard the
+        message behind it, which nobody has sent."""
+        if not self._outbound or self._outbound[0] is not sent:
             return
         if not isinstance(self._outbound.popleft(), CommandMsg):
             self._queued_events -= 1

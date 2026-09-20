@@ -123,6 +123,6 @@ class ControlChannel:
                 if isinstance(message, CommandMsg):
                     self._bus.mark_send_failed(message.id)
                 raise
-            self._bus.pop_outbound()
+            self._bus.pop_outbound(message)
             if isinstance(message, CommandMsg):
                 self._bus.mark_sent(message.id)

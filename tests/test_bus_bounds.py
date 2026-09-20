@@ -44,6 +44,27 @@ async def test_peek_leaves_the_message_for_a_retry():
     first = await bus.peek_outbound()
     second = await bus.peek_outbound()
     assert first is second
-    bus.pop_outbound()
+    bus.pop_outbound(first)
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(bus.peek_outbound(), timeout=0.05)
+
+
+async def test_pop_after_a_barge_in_removed_the_in_flight_command_keeps_the_next_message():
+    """The writer peeked `home`, and while the send was in flight the turn was cancelled.
+    The pop must not take `resume` (the next turn's command) in its place."""
+    bus = CommandBus()
+    await bus.dispatch("home", {}, turn_id="t1")
+    in_flight = await bus.peek_outbound()
+    await bus.dispatch("resume", {}, turn_id="t2")
+    assert bus.cancel_turn("t1") == 1
+    bus.pop_outbound(in_flight)
+    assert (await bus.next_outbound()).verb == "resume"
+
+
+async def test_pop_after_the_event_cap_dropped_the_in_flight_event_keeps_the_next_message():
+    bus = CommandBus(max_queued_events=1)
+    bus.publish(_event(0))
+    in_flight = await bus.peek_outbound()
+    bus.publish(_event(1))  # cap: drops the in-flight event 0 from the queue
+    bus.pop_outbound(in_flight)
+    assert (await bus.next_outbound()).text == "partial 1"
