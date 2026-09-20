@@ -163,3 +163,18 @@ Shop context is rendered by the shared `agent/prompt.py` helpers: `SGRAgentServi
 `# Shop` and `[shop]` markers in `# Screen`; neither path may depend on the other's prompt.
 A failed command acknowledgment releases a pending search with an error observation;
 a successful acknowledgment still waits for the catalog result.
+
+## Routing verification
+
+`uv run python tools/smoke_turn.py --routing-suite --repeat 3 --max-requests 72`
+runs the real configured text model against isolated synthetic catalog, memory and TV
+fixtures. It does not open the app's Runtime, write viewer profiles, or start voice/avatar
+sessions. It is opt-in and incurs text inference charges; provider retries are disabled
+and the request cap is enforced before each call. A wrong action exits nonzero even when
+the generated JSON is valid. Use `--case watch_shop_id --ablate-context --max-requests 8`
+with `--routing-suite` to compare clean/history-only/memory-only/combined contexts.
+
+The smoke TV consumes commands concurrently with inference. Never move catalog replies
+after the turn finishes: an awaited search cannot finish until the TV answers it.
+Routing assertions with canned model outputs prove plumbing only, not model behavior;
+real-model failures must remain visible rather than relaxing the expected action sequences.

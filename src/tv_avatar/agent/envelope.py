@@ -1,12 +1,17 @@
 """The SGR turn envelope: one Pydantic schema IS the turn contract (D8).
 
-`intent` routes, `say` is the spoken reply (ordered before actions so filler
-reaches TTS while actions generate), `actions[]` is a discriminated union built
-from COMMAND_MODELS plus the internal tools — phase 1's no-drift rule holds.
+The cascade is the field order: `intent` routes, `request` decodes what the
+viewer asked to have done (operation, named title, its id if known), `say` is
+the spoken reply (ahead of actions so filler reaches TTS while actions
+generate), `actions[]` is a discriminated union built from COMMAND_MODELS plus
+the internal tools — phase 1's no-drift rule holds.
 
 There is deliberately no free-text "thoughts" slot ahead of `say`: every token
-before the first spoken byte is silence the viewer hears. `intent` is the
-cascade's reasoning step.
+before the first spoken byte is silence the viewer hears. `intent` and
+`request` are the cascade's reasoning steps, and `request` is checked against
+every action as it streams (`action_violation`): a valid envelope whose actions
+serve a *different* operation was the field failure — "watch Barbie" answered
+with recommendations (2026-09-20).
 
 REGISTRY is the one place that says what each verb *is*: TV command or internal
 tool, whether the turn blocks on its result, and how the capability manifest
@@ -17,13 +22,13 @@ The cycle cap is enforced by the schema, not the loop: the final cycle is decode
 against `turn_plan_schema(final=True)`, whose actions union simply has no
 observation-returning tools, so constrained decoding cannot over-call.
 """
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, TypeAdapter
 
 from tv_avatar.agent.commands import AWAITS_RESULT, COMMAND_MODELS, Verb
+from tv_avatar.sgr import response_format
 
 Genre = Literal[
     "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family",
@@ -77,19 +82,19 @@ class ActionSpec:
 
 
 _TV_DOCS: dict[Verb, str] = {
-    Verb.PLAY: "start playing a title from the screen or a recommendation",
+    Verb.PLAY: "start playback of a title by title_id",
     Verb.PAUSE: "pause playback",
     Verb.RESUME: "resume playback",
     Verb.SEEK: "jump to an absolute time or by a delta",
     Verb.NAVIGATE: "move the focus up/down/left/right",
     Verb.FOCUS: "highlight a tile by title_id",
-    Verb.OPEN_DETAILS: "open the details page of a title",
+    Verb.OPEN_DETAILS: "open a title's details page, on or off screen",
     Verb.CLOSE: "close the current overlay/details",
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
-    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title — its outfits and merchandise; only for title_ids listed in the Shop section",
-    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
-    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
+    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title; only for title_ids listed in the Shop section",
+    Verb.SEARCH_CATALOG: "find catalog titles by name or words; results come back to you",
+    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused",
 }
 
 REGISTRY: dict[str, ActionSpec] = {
@@ -97,7 +102,7 @@ REGISTRY: dict[str, ActionSpec] = {
        for v, m in COMMAND_MODELS.items()},
     "recommend_titles": ActionSpec(
         RecommendTitles, "internal", awaits_result=True,
-        doc="INTERNAL — ask the recommendation engine; you receive titles and then speak them"),
+        doc="INTERNAL — discover titles; similar_to EXCLUDES that movie; results come back to you"),
     "reject_title": ActionSpec(
         RejectTitle, "internal", awaits_result=False,
         doc="INTERNAL — the user declined a title you offered; it will not be offered again"),
@@ -119,47 +124,79 @@ def parse_action(raw: dict[str, Any], *, final: bool = False) -> BaseModel:
 
 Intent = Literal["control", "navigate", "recommend", "search", "answer", "chitchat", "clarify"]
 
+#: What the viewer asked to have done, decoded before `say` so it steers what follows.
+Operation = Literal["play", "open", "lookup", "discover", "shop", "control", "answer"]
+
+
+class Request(BaseModel):
+    operation: Operation
+    #: The movie named by the viewer, verbatim; None when they named none.
+    title: str | None
+    #: Its catalog id when a supplied section or tool result lists it, else
+    #: None — the cue to search rather than guess or substitute.
+    title_id: str | None
+
 
 class TurnPlan(BaseModel):
     intent: Intent
+    request: Request
     say: str
     actions: list[ActionUnion] = Field(default_factory=list)
 
 
 class FinalTurnPlan(BaseModel):
     intent: Intent
+    request: Request
     say: str
     actions: list[FinalActionUnion] = Field(default_factory=list)
 
 
+#: Verbs with a consequence the viewer did not ask for unless the request
+#: licenses them. Everything else (search, rails, focus, transport) is free:
+#: a rail of candidates or a focus move is harmless whatever the request.
+_LICENSED_BY: dict[str, frozenset[str]] = {
+    "play": frozenset({"play"}),
+    "open_details": frozenset({"open", "lookup"}),
+    "show_products": frozenset({"shop"}),
+    "recommend_titles": frozenset({"discover"}),
+    "reject_title": frozenset({"discover"}),
+}
+#: Title-directed verbs must target the id the request decoded — and there
+#: must be one: a null `title_id` means "search first", never "guess".
+_TITLE_DIRECTED = frozenset({"play", "open_details", "show_products"})
+
+
+def action_violation(request: Request, action: BaseModel) -> str | None:
+    """Why this action does not serve the decoded request, or None if it does.
+
+    Checked per action as it streams (the cascade puts `request` before
+    `actions`, so it is known by then). The schema cannot express "these
+    actions match that operation", so this is the SGR validation step that
+    makes the decoded request binding rather than advisory.
+    """
+    verb = str(action.verb)
+    licensed = _LICENSED_BY.get(verb)
+    if licensed is not None and request.operation not in licensed:
+        article = "an" if request.operation in ("open", "answer") else "a"
+        return f"{verb} does not serve {article} {request.operation} request"
+    if verb in _TITLE_DIRECTED:
+        target = getattr(action, "title_id", None)
+        if request.title_id is None:
+            return f"{verb} before the title's id is known"
+        if target != request.title_id:
+            return f"{verb} targets {target}, not the requested {request.title_id}"
+    return None
+
+
+def plan_violations(plan: TurnPlan | FinalTurnPlan) -> list[str]:
+    return [reason for a in plan.actions if (reason := action_violation(plan.request, a))]
+
+
 # --- response_format schema ------------------------------------------------
-
-_DROP_KEYS = frozenset({"title", "default", "discriminator"})
-
-
-def _strictify(node: Any) -> Any:
-    """Make a pydantic schema acceptable to strict constrained decoders:
-    every object closed and fully required, oneOf → anyOf, no defaults/titles."""
-    if isinstance(node, list):
-        return [_strictify(n) for n in node]
-    if not isinstance(node, dict):
-        return node
-    out: dict[str, Any] = {}
-    for key, value in node.items():
-        if key in _DROP_KEYS:
-            continue
-        if key == "oneOf":
-            key = "anyOf"
-        out[key] = _strictify(value)
-    if out.get("type") == "object" and "properties" in out:
-        out["additionalProperties"] = False
-        out["required"] = list(out["properties"])
-    return out
-
 
 def turn_plan_schema(*, final: bool = False) -> dict:
     model, name = (FinalTurnPlan, "turn_plan_final") if final else (TurnPlan, "turn_plan")
-    return {"name": name, "strict": True, "schema": _strictify(deepcopy(model.model_json_schema()))}
+    return response_format(model, name)
 
 
 # --- capability manifest ---------------------------------------------------

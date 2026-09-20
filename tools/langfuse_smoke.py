@@ -145,9 +145,9 @@ async def synthetic_turn(settings: Settings) -> tuple[str, str]:
                            user_id="telemetry-smoke")
     bus = CommandBus()
     scripts = iter([
-        {"intent": "search", "say": "Let me look.",
+        {"intent": "search", "request": {"operation": "lookup", "title": None, "title_id": None}, "say": "Let me look.",
          "actions": [{"verb": "search_catalog", "query": "space"}]},
-        {"intent": "search", "say": "I found Moon.",
+        {"intent": "search", "request": {"operation": "lookup", "title": None, "title_id": "17431"}, "say": "I found Moon.",
          "actions": [{"verb": "show_titles", "title_ids": ["17431"], "label": "Space films"}]},
     ])
 

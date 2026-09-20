@@ -15,10 +15,15 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from loguru import logger
-from pipecat.frames.frames import AggregatedTextFrame, LLMContextFrame
+from pipecat.frames.frames import (
+    AggregatedTextFrame,
+    LLMContextFrame,
+    LLMFullResponseEndFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameProcessor
@@ -36,7 +41,7 @@ from tv_avatar.control.protocol import (
     ScreenState,
     Tile,
 )
-from tv_avatar.logging import setup_logging
+from tv_avatar.logging import flush_logging, setup_logging
 from tv_avatar.runtime import build_runtime
 from tv_avatar.session.state import SessionState
 from tv_avatar.tracing import session_scope, setup_tracing, shutdown_tracing
@@ -57,15 +62,76 @@ class SmokeSettings(Settings):
     agent_impl: str = "sgr"
 
 
+class SimulatedTV:
+    def __init__(self, bus: CommandBus, session: SessionState, titles: list[Tile],
+                 *, recorder=None) -> None:
+        self.bus, self.session, self.titles, self.recorder = bus, session, titles, recorder
+        self.commands: list[CommandMsg] = []
+        self.closing = False
+        self.task: asyncio.Task | None = None
+
+    async def __aenter__(self):
+        self.task = asyncio.create_task(self._consume())
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.closing = True
+        try:
+            if exc_type is None:
+                await self.task
+        finally:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+
+    async def _consume(self) -> None:
+        while True:
+            try:
+                msg = await asyncio.wait_for(self.bus.next_outbound(), timeout=0.01)
+            except TimeoutError:
+                if self.closing:
+                    return
+                continue
+            if not isinstance(msg, CommandMsg):
+                continue
+            self.commands.append(msg)
+            self.bus.mark_sent(msg.id)
+            if msg.verb == "search_catalog":
+                query = msg.args["query"].casefold().strip()
+                result = {"titles": [{"title_id": t.title_id, "name": t.name}
+                                     for t in self.titles if query in t.name.casefold()]
+                          [:msg.args.get("limit", 10)]}
+                self.bus.record_reply(msg.id, "ok", {"ok": True}, reply_type="ack")
+                self.bus.resolve(msg.id, result)
+                self.bus.record_reply(msg.id, "ok", result, reply_type="result")
+                continue
+            old = self.session.screen
+            if msg.verb == "play" and old is not None:
+                self.session.update_screen(old.model_copy(update={
+                    "view": "player", "playback": Playback(state="playing", title_id=msg.args["title_id"])}))
+                if self.recorder is not None:
+                    await self.recorder.on_screen_transition(self.session.user_id, old, self.session.screen)
+            elif msg.verb == "show_titles" and old is not None:
+                by_id = {t.title_id: t for t in self.titles}
+                tiles = [by_id[tid].model_copy(update={"position": i})
+                         for i, tid in enumerate(msg.args["title_ids"]) if tid in by_id]
+                self.session.update_screen(old.model_copy(update={
+                    "view": "grid", "tiles": tiles, "focus_index": 0 if tiles else None,
+                    "rail_id": "agent:" + msg.args["label"]}))
+            self.bus.record_reply(msg.id, "ok", {"ok": True}, reply_type="ack")
+
+
 class Sink(FrameProcessor):
     def __init__(self) -> None:
         super().__init__()
         self.said: list[str] = []
+        self.completed = False
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, AggregatedTextFrame):
             self.said.append(frame.text)
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self.completed = True
         await self.push_frame(frame, direction)
 
 
@@ -132,23 +198,15 @@ async def _run_turns(agent, bus, context, runtime, session, turns, user_id) -> N
             runtime.recs.prefetch_query(user_id, text)
         await runtime.lane.prefetch(user_id, partial)
         t0 = time.perf_counter()
-        await run_test(Pipeline([agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
-                       expected_down_frames=None, start_timeout=5)
+        titles = [Tile(title_id=t.title_id, name=t.name, position=i)
+                  for i, t in enumerate(runtime.catalog.sample(len(runtime.catalog)))]
+        async with asyncio.timeout(60), SimulatedTV(bus, session, titles, recorder=runtime.recorder) as tv:
+            await run_test(Pipeline([agent, sink]), frames_to_send=[LLMContextFrame(context=context)],
+                           expected_down_frames=None, start_timeout=5)
         elapsed = round((time.perf_counter() - t0) * 1000)
         said = " ".join(sink.said)
         context.add_message({"role": "assistant", "content": said})
-        commands: list[CommandMsg] = []
-        while True:
-            try:
-                msg = await asyncio.wait_for(bus.next_outbound(), timeout=0.05)
-            except TimeoutError:
-                break
-            if isinstance(msg, CommandMsg):
-                commands.append(msg)
-                if msg.verb == "play":
-                    session.update_screen(session.screen.model_copy(update={
-                        "view": "player", "playback": Playback(state="playing", title_id=msg.args["title_id"])}))
-                    await runtime.recorder.on_screen_transition(user_id, None, session.screen)
+        commands = tv.commands
         print(f"> {text}")
         print(f"  said: {said!r}")
         print(f"  commands: {[(c.verb, c.args) for c in commands]}   ({elapsed} ms)\n")
@@ -163,5 +221,21 @@ if __name__ == "__main__":
     parser.add_argument("--greet", action="store_true",
                         help="open with the synthetic greeting turn, as the pipeline does on connect")
     parser.add_argument("turns", nargs="*", default=DEFAULT_TURNS)
+    parser.add_argument("--routing-suite", action="store_true")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--max-requests", type=int, default=24)
+    parser.add_argument("--case", action="append", dest="case_ids")
+    parser.add_argument("--ablate-context", action="store_true")
     args = parser.parse_args()
+    if args.routing_suite:
+        from tools.routing_eval import run_suite
+
+        settings = SmokeSettings()
+        setup_logging("INFO", settings=settings)
+        try:
+            exit_code = asyncio.run(run_suite(settings, repeat=args.repeat, max_requests=args.max_requests,
+                                               case_ids=args.case_ids, ablate_context=args.ablate_context))
+        finally:
+            flush_logging()
+        raise SystemExit(exit_code)
     raise SystemExit(asyncio.run(main(args.user, args.turns, greet=args.greet)))

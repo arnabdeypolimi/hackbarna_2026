@@ -24,16 +24,17 @@ flowchart LR
   subgraph TURN["one turn — TurnRunner, a bounded SGR loop, agent/loop.py"]
     direction TB
     STATE["# Screen<br/>SessionState, newest wins<br/>tiles with ids, focus marked"]
-    PROF["# Memory<br/>profile.md, 200 words up<br/>verbatim, or stale at 0.35 s"]
+    PROF["# Memory<br/>profile.md, 200 words up<br/>quoted as data, or stale at 0.35 s"]
+    SHOP["# Shop<br/>shop.yaml, the backend's shelves<br/>items and prices, by title_id"]
     REND["# Recent activity<br/>rendered from the viewing log:<br/>watched and recommended, each<br/>with its id and how long ago"]
     PROMPT["build the prompt<br/>static: persona, manifest,<br/>rules, output contract"]
     CYCLE["cycle N: one TurnPlan<br/>strict json_schema, in order:<br/>intent, say, actions"]
     SAY["say to TTS, per sentence<br/>the model's own 'On it.'<br/>is the filler now"]
     DISPATCH["dispatch as each closes<br/>routed on the typed union,<br/>not on a verb string"]
-    TVV["12 TV verbs, Pydantic<br/>play, pause, resume, seek, navigate,<br/>focus, open_details, close, back,<br/>home, show_products, and<br/>search_catalog, which alone awaits"]
+    TVV["13 TV verbs, Pydantic<br/>play, pause, resume, seek, navigate,<br/>focus, open_details, close, back, home,<br/>show_titles, show_products, and<br/>search_catalog, which alone awaits —<br/>with no deadline, released on barge-in"]
     INT["2 internal tools<br/>recommend_titles — returns an observation<br/>reject_title — fire-and-forget"]
-    OBSERVE["observation step<br/>observations back as a user msg;<br/>the last cycle is decoded against<br/>a schema with no internal tools"]
-    FB["render_fallback<br/>a template, no LLM call<br/>kept out of the transcript"]
+    OBSERVE["observation step<br/>original_request + results back as<br/>a user msg; the last cycle is decoded<br/>against a schema with no awaited tools"]
+    FB["render_fallback<br/>a template, no LLM call, off by default<br/>CYCLE_FIRST_BYTE_S=0; kept out<br/>of the memory transcript"]
   end
 
   BUS["CommandBus — its own WebSocket<br/>a turn-scoped queue that outlives<br/>the socket; invalid is never queued<br/>barge-in drops what is unsent"]
@@ -46,13 +47,14 @@ flowchart LR
     CAT["catalog<br/>TMDB parquet + Qdrant<br/>local E5-small, 384 dims"]
   end
 
-  TRACE["tracing — OpenTelemetry to Langfuse, off by default, never on the media path<br/>conversation, turn, llm, then agent.recall, agent.cycle, agent.action, agent.fallback,<br/>memory.*, recs.recommend, tv.command, turn.latency — spans are attribute writes,<br/>export is batched on a background thread"]
+  TRACE["tracing — OpenTelemetry to Langfuse, off by default, never on the media path<br/>conversation, turn, llm, then agent.recall, agent.cycle with agent.plan, agent.speech and<br/>agent.action, then agent.feedback, agent.fallback, memory.*, recs.recommend, tv.command,<br/>turn.latency — spans are attribute writes, export is batched on a background thread"]
 
   MIC --> STT --> ECHO --> TAP --> AGG --> AGENT --> OUT
 
   AGENT --> PROMPT
   STATE -.-> PROMPT
   PROF -.-> PROMPT
+  SHOP -.-> PROMPT
   REND -.-> PROMPT
   TAP -. "prefetch" .-> PROF
   TAP -. "warm the embed" .-> RECS
@@ -64,8 +66,8 @@ flowchart LR
   DISPATCH --> INT
   TVV -.-> OBSERVE
   INT -.-> OBSERVE
-  OBSERVE -- "max 2 cycles, 1.2 s" --> CYCLE
-  OBSERVE -. "over budget" .-> FB
+  OBSERVE -- "max 2 cycles, the schema caps" --> CYCLE
+  OBSERVE -. "over budget, only if enabled" .-> FB
 
   TVV --> BUS
   INT --> RECS

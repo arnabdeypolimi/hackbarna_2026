@@ -30,7 +30,13 @@ from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 from pydantic import BaseModel, ValidationError
 
 from tv_avatar import tracing as tel
-from tv_avatar.agent.envelope import REGISTRY, parse_action, turn_plan_schema
+from tv_avatar.agent.envelope import (
+    REGISTRY,
+    Request,
+    action_violation,
+    parse_action,
+    turn_plan_schema,
+)
 from tv_avatar.agent.fallback import render_fallback
 from tv_avatar.agent.prompt import tool_results_message
 from tv_avatar.agent.stream_parse import (
@@ -39,6 +45,7 @@ from tv_avatar.agent.stream_parse import (
     EnvelopeStreamer,
     Event,
     IntentReady,
+    RequestReady,
     SayDelta,
     SayDone,
 )
@@ -105,6 +112,7 @@ class _Cycle:
     fire: list[asyncio.Task] = field(default_factory=list)
     n_rejected: int = 0
     first_say_pending: bool = True
+    request: Request | None = None
     telemetry: CycleTelemetry = field(default_factory=CycleTelemetry)
 
     def ms(self) -> int:
@@ -147,7 +155,8 @@ class TurnRunner:
             }):
                 pass
             messages = [*messages, {"role": "assistant", "content": outcome.raw},
-                        {"role": "user", "content": tool_results_message(feedback)}]
+                        {"role": "user", "content": tool_results_message(
+                            feedback, original_request=trace.user_text)}]
             previous = outcome
 
     async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext,
@@ -240,6 +249,8 @@ class TurnRunner:
                     case IntentReady(intent=intent):
                         metrics.mark_once("intent", intent)
                         c.ctx.log.debug("intent", step="intent", cycle=c.n, intent=intent, ms=c.ms())
+                    case RequestReady(request=raw_request):
+                        self._decode_request(raw_request, c, metrics)
                     case SayDelta(text=text):
                         if c.first_say_pending:
                             deadline.reschedule(None)
@@ -361,22 +372,38 @@ class TurnRunner:
             ctx.log.debug("agent.speech.submitted", event="agent.speech.submitted", cycle=cycle,
                           source=source, sentence_index=index, text=text.strip())
 
+    def _decode_request(self, raw_request: dict, c: _Cycle, metrics: TurnMetrics) -> None:
+        """The cascade's second step. Constrained decoding guarantees the shape,
+        so a failure here is a canned or truncated envelope: the actions then run
+        unchecked and the plan is reported invalid at the end of the cycle."""
+        try:
+            c.request = Request.model_validate(raw_request)
+        except ValidationError as err:
+            c.ctx.log.warning("undecodable request", step="request", cycle=c.n,
+                              reason=str(err).splitlines()[0])
+            return
+        metrics.mark_once("operation", c.request.operation)
+        c.span.set_attribute(tel.META_OPERATION, c.request.operation)
+        c.ctx.log.debug("request", step="request", cycle=c.n, ms=c.ms(),
+                        **c.request.model_dump(exclude_none=True))
+
     def _start_action(self, raw_action: dict, c: _Cycle, metrics: TurnMetrics, trace: TurnTrace) -> None:
-        """Validate against the union this cycle was decoded with and dispatch.
-        On the final cycle an observation tool is unrepresentable for the
-        decoder; a canned envelope that still carries one is rejected here."""
+        """Validate against the union this cycle was decoded with, then against
+        the decoded request, and dispatch. On the final cycle an observation
+        tool is unrepresentable for the decoder; a canned envelope that still
+        carries one is rejected here. An action the request does not license
+        (`play` for a lookup, `show_products` for a watch) is rejected the same
+        way: the viewer hears `say`, and nothing they did not ask for happens."""
         index = len(c.telemetry.accepted) + len(c.telemetry.rejected)
         try:
             action = parse_action(raw_action, final=c.final)
         except ValidationError as err:
-            reason = str(err).splitlines()[0]
-            c.ctx.log.warning("rejected action", verb=raw_action.get("verb"), reason=reason)
-            c.n_rejected += 1
-            c.telemetry.rejected.append({"action_index": index, "action": raw_action,
-                "errors": [{"path": list(e["loc"]), "code": e["type"]}
-                           for e in err.errors(include_input=False, include_context=False)]})
-            c.span.add_event(EVENT_ACTION_REJECTED, {"verb": str(raw_action.get("verb")),
-                                                     "reason": reason, tel.META_ACTION_INDEX: index})
+            errors = [{"path": list(e["loc"]), "code": e["type"]}
+                      for e in err.errors(include_input=False, include_context=False)]
+            self._reject(raw_action, c, index, str(err).splitlines()[0], errors)
+            return
+        if c.request is not None and (reason := action_violation(c.request, action)):
+            self._reject(raw_action, c, index, reason, [{"path": ["actions", index], "code": "off_request"}])
             return
         verb, spec = str(action.verb), REGISTRY[str(action.verb)]
         args = action.model_dump(exclude={"verb"}, exclude_none=True)
@@ -391,6 +418,13 @@ class TurnRunner:
         else:
             c.fire.append(task)
         metrics.mark_once("first_action_ms", c.ctx.elapsed_ms())
+
+    def _reject(self, raw_action: dict, c: _Cycle, index: int, reason: str, errors: list[dict]) -> None:
+        c.ctx.log.warning("rejected action", verb=raw_action.get("verb"), reason=reason)
+        c.n_rejected += 1
+        c.telemetry.rejected.append({"action_index": index, "action": raw_action, "errors": errors})
+        c.span.add_event(EVENT_ACTION_REJECTED, {"verb": str(raw_action.get("verb")),
+                                                 "reason": reason, tel.META_ACTION_INDEX: index})
 
     async def _observe(self, c: _Cycle) -> tuple[ToolResult, ...]:
         """Collect the awaited replies; keep the ones the model must see."""

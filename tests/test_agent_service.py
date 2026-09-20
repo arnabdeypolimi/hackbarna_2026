@@ -25,9 +25,9 @@ from tv_avatar.memory.fake import FakeMemoryLane
 from tv_avatar.memory.lane import MemoryBlock
 from tv_avatar.session.state import SessionState
 
-PLAY = '{"intent":"control","say":"On it.","actions":[{"verb":"play","title_id":"1"}]}'
-RECO_1 = '{"intent":"recommend","say":"Let me look.","actions":[{"verb":"recommend_titles","query":"heist"}]}'
-RECO_2 = '{"intent":"recommend","say":"Try Heat or Inception.","actions":[{"verb":"focus","title_id":"949"}]}'
+PLAY = '{"intent":"control","request":{"operation":"play","title":null,"title_id":"1"},"say":"On it.","actions":[{"verb":"play","title_id":"1"}]}'
+RECO_1 = '{"intent":"recommend","request":{"operation":"discover","title":null,"title_id":null},"say":"Let me look.","actions":[{"verb":"recommend_titles","query":"heist"}]}'
+RECO_2 = '{"intent":"recommend","request":{"operation":"discover","title":null,"title_id":null},"say":"Try Heat or Inception.","actions":[{"verb":"focus","title_id":"949"}]}'
 
 
 class FakeStream:
@@ -61,9 +61,11 @@ class RecordingBus(CommandBus):
     def __init__(self) -> None:
         super().__init__()
         self.first_dispatch_at: float | None = None
+        self.dispatched: list[str] = []
 
     async def dispatch(self, verb, args, turn_id):
         self.first_dispatch_at = self.first_dispatch_at or time.perf_counter()
+        self.dispatched.append(verb)
         return await super().dispatch(verb, args, turn_id)
 
 
@@ -150,8 +152,8 @@ async def test_say_reaches_tts_as_sentences_before_actions_dispatch():
     assert (await bus.next_outbound()).verb == "play"
 
 
-SPACE_SEARCH_1 = '{"intent":"search","say":"Let me look.","actions":[{"verb":"search_catalog","query":"space"}]}'
-SPACE_SEARCH_2 = ('{"intent":"search","say":"I found Gravity and Moon.",'
+SPACE_SEARCH_1 = '{"intent":"search","request":{"operation":"lookup","title":null,"title_id":null},"say":"Let me look.","actions":[{"verb":"search_catalog","query":"space"}]}'
+SPACE_SEARCH_2 = ('{"intent":"search","request":{"operation":"lookup","title":null,"title_id":null},"say":"I found Gravity and Moon.",'
                   '"actions":[{"verb":"show_titles","title_ids":["49047","17431"],"label":"Search results"}]}')
 TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17431", "name": "Moon"}]}
 
@@ -159,12 +161,7 @@ TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17
 class AnsweringBus(RecordingBus):
     """A TV that answers search_catalog straight away, like the frontend does."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.dispatched: list[str] = []
-
     async def dispatch(self, verb, args, turn_id):
-        self.dispatched.append(verb)
         if verb == "search_catalog":
             async def answer():
                 msg = await self.next_outbound()
@@ -189,9 +186,63 @@ async def test_search_catalog_result_is_fed_back_for_a_second_cycle():
     assert command.args["title_ids"] == ["49047", "17431"]
 
 
+@pytest.mark.parametrize("verb,user_request", [
+    ("play", "I want to watch Moon."),
+    ("open_details", "Show me Moon."),
+])
+async def test_lookup_continuation_keeps_the_original_request(verb, user_request):
+    import json
+
+    operation = "play" if verb == "play" else "open"
+    first = json.dumps({"intent": "control", "request": {"operation": operation, "title": "Moon", "title_id": None},
+                        "say": "Let me look.", "actions": [{"verb": "search_catalog", "query": "Moon"}]})
+    second = json.dumps({"intent": "control", "request": {"operation": operation, "title": "Moon", "title_id": "17431"},
+                         "say": "On it.", "actions": [{"verb": verb, "title_id": "17431"}]})
+    client, bus, lane = FakeOpenAI([first, second]), AnsweringBus(), FakeMemoryLane()
+    agent = _agent(client, bus, lane=lane)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(user_request))])
+    feedback = client.calls[1]["messages"][-1]["content"]
+    payload = json.loads(feedback.splitlines()[1])
+    assert payload["original_request"] == user_request
+    assert payload["results"]["search_catalog"] == TV_HITS
+    command = await bus.next_outbound()
+    assert (command.verb, command.args["title_id"]) == (verb, "17431")
+    assert bus.dispatched == ["search_catalog", verb]
+    await asyncio.sleep(0)
+    assert lane.ingests == [("u1", user_request, "Let me look. On it.")]
+
+
+async def test_cancelled_lookup_cannot_play_after_the_next_request():
+    first = '{"intent":"control","request":{"operation":"play","title":"Moon","title_id":null},"say":"Let me look.","actions":[{"verb":"search_catalog","query":"Moon"}]}'
+    second = '{"intent":"control","request":{"operation":"play","title":"Inception","title_id":"27205"},"say":"On it.","actions":[{"verb":"play","title_id":"27205"}]}'
+    client, bus = FakeOpenAI([first, second]), RecordingBus()
+    agent = _agent(client, bus)
+    handed_off = asyncio.create_task(bus.next_outbound())
+    try:
+        await _run(agent, TimingSink(), [
+            LLMContextFrame(context=_ctx("Watch Moon.")), SleepFrame(0.05),
+            InterruptionFrame(), LLMContextFrame(context=_ctx("Watch Inception instead.")),
+        ])
+        search = await asyncio.wait_for(handed_off, 0.5)
+        assert search.verb == "search_catalog"
+        bus.resolve(search.id, {"titles": [{"title_id": "17431", "name": "Moon"}]})
+        await asyncio.sleep(0)
+        assert len(client.calls) == 2
+        assert client.calls[1]["messages"][-1]["content"] == "Watch Inception instead."
+        command = await asyncio.wait_for(bus.next_outbound(), 0.5)
+        assert (command.verb, command.args["title_id"]) == ("play", "27205")
+        assert command.turn_id != search.turn_id
+        assert bus.pending_count() == 0
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(bus.next_outbound(), 0.02)
+    finally:
+        handed_off.cancel()
+        await asyncio.gather(handed_off, return_exceptions=True)
+
+
 async def test_second_cycle_search_is_skipped_not_awaited():
     """Cycle 2 has no cycle 3 to speak a result, so a search there must not block the turn."""
-    again = '{"intent":"search","say":"Let me check once more.","actions":[{"verb":"search_catalog","query":"moon"}]}'
+    again = '{"intent":"search","request":{"operation":"lookup","title":null,"title_id":null},"say":"Let me check once more.","actions":[{"verb":"search_catalog","query":"moon"}]}'
     bus, sink = AnsweringBus(), TimingSink()
     agent = _agent(FakeOpenAI([SPACE_SEARCH_1, again]), bus)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
@@ -223,7 +274,7 @@ def test_search_fallback_respects_the_rail_size_limit():
 
 async def test_multi_sentence_say_is_split_and_streamed_per_sentence():
     sink = TimingSink()
-    agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
+    agent = _agent(FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
                    RecordingBus())
     await _run(agent, sink, [LLMContextFrame(context=_ctx("something depressing"))])
     # The trailing fragment has no terminal punctuation: it must still be spoken.
@@ -351,7 +402,7 @@ async def test_every_follow_up_cycle_is_budgeted():
 
 async def test_interruption_frame_cancels_stream_and_queued_commands():
     bus, sink = RecordingBus(), TimingSink()
-    slow = FakeOpenAI(['{"intent":"control","say":"Sure thing, one moment please.","actions":[{"verb":"home"},{"verb":"pause"}]}'],
+    slow = FakeOpenAI(['{"intent":"control","request":{"operation":"control","title":null,"title_id":null},"say":"Sure thing, one moment please.","actions":[{"verb":"home"},{"verb":"pause"}]}'],
                       delay_s=0.05)
     agent = _agent(slow, bus)
     await _run(agent, sink, [LLMContextFrame(context=_ctx("go home")), SleepFrame(0.12), InterruptionFrame()])
@@ -427,7 +478,7 @@ async def test_shop_context_reaches_sgr_without_the_injector(monkeypatch, screen
         "price": "€89", "image": "products/bomber.jpg",
     }]})
     monkeypatch.setattr("tv_avatar.agent.prompt.get_shop", lambda: shop)
-    reply = ('{"intent":"control","say":"The jacket is eighty-nine euros.",'
+    reply = ('{"intent":"control","request":{"operation":"shop","title":null,"title_id":"346698"},"say":"The jacket is eighty-nine euros.",'
              '"actions":[{"verb":"show_products","title_id":"346698"}]}')
     client, bus, sink = FakeOpenAI([reply]), RecordingBus(), TimingSink()
     agent = _agent(client, bus)
@@ -502,7 +553,7 @@ async def test_invalid_verb_args_are_rejected_not_raised():
     """A malformed element is dropped at parse time; the valid one next to it
     still dispatches and the turn ends cleanly."""
     bus, tools = RecordingBus(), FakeTools()
-    envelope = ('{"intent":"control","say":"ok","actions":['
+    envelope = ('{"intent":"control","request":{"operation":"discover","title":null,"title_id":null},"say":"ok","actions":['
                 '{"verb":"seek","to_seconds":1,"delta_seconds":2},'
                 '{"verb":"reject_title","title_id":"7"},'
                 '{"verb":"focus","title_id":"27205"}]}')
@@ -526,10 +577,10 @@ async def test_turn_end_ingests_user_text_and_full_reply():
 
 async def test_interrupted_turn_still_ingests_user_text_with_partial_reply():
     lane = FakeMemoryLane()
-    slow = FakeOpenAI(['{"intent":"chitchat","say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
-                      delay_s=0.05)  # 7-char chunks: say starts ~0.2 s in, ends ~0.6 s in
+    slow = FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
+                      delay_s=0.05)  # 7-char chunks: say starts ~0.6 s in, ends ~1.0 s in
     agent = _agent(slow, RecordingBus(), lane=lane)
-    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.4), InterruptionFrame()])
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.8), InterruptionFrame()])
     await asyncio.sleep(0.02)
     assert len(lane.ingests) == 1
     user_id, user_text, said = lane.ingests[0]
@@ -540,7 +591,7 @@ async def test_interrupted_turn_still_ingests_user_text_with_partial_reply():
 async def test_greeting_instruction_is_never_ingested():
     from tv_avatar.agent.prompt import greeting_instruction
     lane = FakeMemoryLane()
-    agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Hi!","actions":[]}']), RecordingBus(), lane=lane)
+    agent = _agent(FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"Hi!","actions":[]}']), RecordingBus(), lane=lane)
     greeting = greeting_instruction(agent._session.persona.language)
     await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx(greeting))])
     await asyncio.sleep(0.02)
@@ -553,8 +604,8 @@ async def test_greeting_instruction_leaves_the_history_after_the_greeting_turn()
     not something the viewer said, so later turns must not see it — while the
     greeting turn itself still gets the brief in its place."""
     from tv_avatar.agent.prompt import GREETING_PREFIX, greeting_instruction
-    client = FakeOpenAI(['{"intent":"chitchat","say":"Welcome back!","actions":[]}',
-                         '{"intent":"chitchat","say":"Hello there.","actions":[]}'])
+    client = FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"Welcome back!","actions":[]}',
+                         '{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"Hello there.","actions":[]}'])
     agent = _agent(client, RecordingBus())
     ctx = LLMContext()
     ctx.add_message({"role": "user", "content": greeting_instruction(agent._session.persona.language)})
@@ -585,7 +636,7 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     history = HistoryStore(str(tmp_path / "h.db"))
     await history.record(Event(user_id="u1", kind=EventKind.REC_SHOWN, title_id="155", ts=_t.time() - 86400 - 60))
     lane = FakeMemoryLane({"u1": MemoryBlock.from_lines(["loves Batman films"], [])})
-    client = FakeOpenAI(['{"intent":"chitchat","say":"Welcome back, want to carry on with The Dark Knight?","actions":[]}'])
+    client = FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"Welcome back, want to carry on with The Dark Knight?","actions":[]}'])
     session = SessionState("sess_new", "tok", 0, user_id="u1")  # new session, same user
     agent = SGRAgentService(_settings(), RecordingBus(), lane, None, history, session,
                             catalog=Cat(), client=client, tools=FakeTools())
@@ -599,7 +650,7 @@ async def test_greeting_in_new_session_sees_last_sessions_history_and_memory(tmp
     assert user.startswith(greeting) and "Greet them in English" in user
     assert "Recently recommended: The Dark Knight (2008) (id=155, yesterday)" in user
     # The rules let the agent act on that id next turn ("yes, play it").
-    assert "Recent activity" in system.split("Only reference title_ids")[1].split("\n")[0]
+    assert "Recent activity" in system.split("`title_id`: its id if the")[1].split("\n")[0]
     assert "loves Batman films" in user
     # History decides the title, the profile only the tone — and it says so, in that order.
     assert user.index("Recent activity (newest first)") < user.index("Viewer profile (tone only)")
@@ -726,9 +777,9 @@ def test_render_fallback_shapes():
     assert "couldn't find" in render_fallback((ToolResult("search_catalog", {"titles": []}),))[0]
 
 
-SEARCH_1 = ('{"intent":"search","say":"Searching for Jurassic World.",'
+SEARCH_1 = ('{"intent":"search","request":{"operation":"lookup","title":"Jurassic World","title_id":null},"say":"Searching for Jurassic World.",'
             '"actions":[{"verb":"search_catalog","query":"Jurassic World"}]}')
-SEARCH_2 = '{"intent":"answer","say":"The search did not go through. Try again?","actions":[]}'
+SEARCH_2 = '{"intent":"answer","request":{"operation":"answer","title":null,"title_id":null},"say":"The search did not go through. Try again?","actions":[]}'
 
 
 async def test_search_nobody_answers_is_spoken_not_swallowed():
@@ -884,7 +935,7 @@ async def test_slow_follow_up_cycle_records_over_budget_and_fallback(otel):
 async def test_cycle_cap_refusal_and_parse_rejection_are_counted(otel):
     """agent_max_cycles=1: the only cycle is the final one, so recommend_titles is
     not in its union and is rejected exactly like the malformed seek; reject_title runs."""
-    envelope = ('{"intent":"control","say":"ok","actions":['
+    envelope = ('{"intent":"control","request":{"operation":"discover","title":null,"title_id":null},"say":"ok","actions":['
                 '{"verb":"seek","to_seconds":1,"delta_seconds":2},'
                 '{"verb":"reject_title","title_id":"7"},'
                 '{"verb":"recommend_titles","query":"heist"}]}')
@@ -905,11 +956,11 @@ async def test_cycle_cap_refusal_and_parse_rejection_are_counted(otel):
 
 
 async def test_interruption_records_partial_turn(otel):
-    slow = FakeOpenAI(['{"intent":"chitchat","say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
+    slow = FakeOpenAI(['{"intent":"chitchat","request":{"operation":"answer","title":null,"title_id":null},"say":"I love that you love sci-fi, let me think about it some more.","actions":[]}'],
                       delay_s=0.05)
     agent = _agent(slow, RecordingBus())
     _traced(agent)
-    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.4), InterruptionFrame()])
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I love sci-fi")), SleepFrame(0.8), InterruptionFrame()])
     spans = otel.spans()
     llm, = spans["llm"]
     assert llm.attributes["langfuse.observation.metadata.interrupted"] is True
@@ -941,6 +992,56 @@ async def test_cycle_records_validated_plan_and_speech_submission(otel):
     assert speech.attributes["langfuse.observation.output"] == "On it."
     assert spans["llm"][0].attributes["langfuse.observation.type"] == "agent"
     assert spans["agent.action"][0].attributes[meta + "action_index"] == 0
+    assert cycle.attributes[meta + "operation"] == "play"
+    assert spans["llm"][0].attributes[meta + "operation"] == "play"
+
+
+async def test_actions_the_decoded_request_does_not_license_are_dropped(otel):
+    """The 2026-09-20 incident as a canned envelope: "I want to watch Barbie"
+    decoded as a play request, yet the model also asked for recommendations.
+    The recommendation is rejected at the action boundary — so the turn does
+    not buy a second cycle either — and the play goes through."""
+    import json
+
+    bus, tools = RecordingBus(), FakeTools()
+    envelope = ('{"intent":"control","request":{"operation":"play","title":"Barbie","title_id":"346698"},'
+                '"say":"On it.","actions":[{"verb":"recommend_titles","similar_to":"346698","query":"fun"},'
+                '{"verb":"show_products","title_id":"346698"},{"verb":"play","title_id":"27205"},'
+                '{"verb":"play","title_id":"346698"}]}')
+    client = FakeOpenAI([envelope, RECO_2])
+    agent = _traced(_agent(client, bus, tools=tools))
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("I want to watch Barbie."))])
+    assert bus.dispatched == ["play"]
+    assert (await bus.next_outbound()).args["title_id"] == "346698"
+    assert tools.calls == [] and len(client.calls) == 1
+    cycle, = otel.spans()["agent.cycle"]
+    assert cycle.attributes["tv.cycle.n_rejected"] == 3
+    reasons = [e.attributes["reason"] for e in cycle.events if e.name == "tv.action.rejected"]
+    assert reasons == ["recommend_titles does not serve a play request",
+                       "show_products does not serve a play request",
+                       "play targets 27205, not the requested 346698"]
+    plan, = otel.spans()["agent.plan"]
+    rejected = json.loads(plan.attributes["langfuse.observation.output"])["rejected_actions"]
+    assert [r["errors"][0]["code"] for r in rejected] == ["off_request"] * 3
+
+
+async def test_a_title_directed_action_without_a_decoded_id_is_dropped():
+    """`title_id: null` means "search first"; a `play` next to it is a guess."""
+    bus = RecordingBus()
+    guess = ('{"intent":"control","request":{"operation":"play","title":"Moon","title_id":null},'
+             '"say":"On it.","actions":[{"verb":"play","title_id":"17431"}]}')
+    agent = _agent(FakeOpenAI([guess]), bus)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("Watch Moon."))])
+    assert bus.dispatched == []
+    lookup = ('{"intent":"search","request":{"operation":"lookup","title":"Moon","title_id":null},'
+              '"say":"Let me look.","actions":[{"verb":"search_catalog","query":"Moon"}]}')
+    then_play = ('{"intent":"search","request":{"operation":"lookup","title":"Moon","title_id":"17431"},'
+                 '"say":"Found Moon.","actions":[{"verb":"play","title_id":"17431"},'
+                 '{"verb":"show_titles","title_ids":["17431"],"label":"Moon"}]}')
+    bus = AnsweringBus()
+    agent = _agent(FakeOpenAI([lookup, then_play]), bus)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("Search for Moon."))])
+    assert bus.dispatched == ["search_catalog", "show_titles"]   # a lookup never autoplays
 
 
 async def test_incomplete_envelope_is_diagnostic_not_a_successful_plan(otel):
