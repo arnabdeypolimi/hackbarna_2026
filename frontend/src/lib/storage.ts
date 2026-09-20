@@ -11,7 +11,8 @@ export function readJSON<T>(key: string, fallback: T): T {
 export function writeJSON(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch {
+  } catch (err) {
     // Storage unavailable: the app keeps working without persistence.
+    console.warn('[storage] write failed', key, err);
   }
 }

@@ -97,7 +97,8 @@ class RecsEngine:
         return vec
 
     async def _query_vector(self, ctx: RecsContext) -> list[float] | None:
-        assert ctx.query_text is not None
+        if ctx.query_text is None:
+            return None
         key = (ctx.user_id, _norm_query(ctx.query_text))
         log = logger.bind(user_id=ctx.user_id)
         span = trace.get_current_span()  # the `recs.recommend` span (gather copies the context)

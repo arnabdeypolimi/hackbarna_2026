@@ -534,10 +534,11 @@ export default function App() {
   }, []);
 
   // ---------- render ----------
-  const heading = status.kind !== 'ready' ? 'Recommended'
-    : query ? `Results for "${query}"`
-    : rail ? rail.label
-    : TAB_TITLES[tab];
+  const heading = (() => {
+    if (status.kind !== 'ready') return 'Recommended';
+    if (query) return `Results for "${query}"`;
+    return rail ? rail.label : TAB_TITLES[tab];
+  })();
 
   const emptyRow =
     profile.kind === 'kids' && items.length > 0 && !catalog.length ? (
