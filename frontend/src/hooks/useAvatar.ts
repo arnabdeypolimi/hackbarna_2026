@@ -4,7 +4,7 @@ import {
   connect, fetchConfig, type AgentState, type AvatarSession, type BackendConfig, type Outbound,
 } from '../lib/avatarClient';
 import { readJSON, writeJSON } from '../lib/storage';
-import type { AvatarView, Phase } from '../components/AvatarPanel';
+import { EMPTY_CAPTIONS, type AvatarView, type Captions, type Phase } from '../components/AvatarPanel';
 import { dispatchCommand, type CommandHandler } from './useTvControl';
 
 // A property of the television, not of a profile: whoever sits down next hears the
@@ -26,8 +26,12 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
   const [phase, setPhase] = useState<Phase>('off');
   const [message, setMessage] = useState('Starting…');
   const [status, setStatus] = useState<AgentState>('idle');
-  const [lastLine, setLastLine] = useState('');
+  const [captions, setCaptions] = useState<Captions>(EMPTY_CAPTIONS);
   const [language, setLanguageState] = useState(() => readJSON<string>(LANG_KEY, ''));
+  // The avatar's reply arrives one spoken sentence at a time, each marked final; nothing
+  // in the stream says where one reply ends and the next begins. A committed user
+  // utterance is that boundary: the next assistant sentence after it starts a new reply.
+  const newReply = useRef(true);
 
   const session = useRef<AvatarSession | null>(null);
   // One connection at a time. A language switch supersedes whatever the previous
@@ -51,7 +55,8 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     session.current?.close();
     session.current = null;
     setStatus('idle');
-    setLastLine('');
+    setCaptions(EMPTY_CAPTIONS);
+    newReply.current = true;
 
     const who = avatarForLanguage(cfg, code);
     if (!who) {
@@ -75,7 +80,18 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
         language: code,
         userId: user.current,
         onStatus: (s) => { if (mineStill()) setStatus(s); },
-        onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
+        onTranscript: (m) => {
+          const text = m.text.trim();
+          if (!mineStill() || !text) return;
+          if (m.role === 'user') {
+            if (m.final) newReply.current = true;
+            setCaptions((c) => ({ ...c, heard: text, settled: m.final }));
+          } else {
+            const fresh = newReply.current;
+            newReply.current = false;
+            setCaptions((c) => ({ ...c, reply: fresh ? text : `${c.reply} ${text}` }));
+          }
+        },
         onCommand: (m) => {
           // A superseded session's late command must not reach the current screen. The
           // socket is opened inside connect(), so by the time a command can arrive
@@ -222,7 +238,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     message,
     avatar: config ? avatarForLanguage(config, language) : null,
     status,
-    lastLine,
+    captions,
     languages: config ? languageOptions(config) : [],
     language,
     setLanguage,
