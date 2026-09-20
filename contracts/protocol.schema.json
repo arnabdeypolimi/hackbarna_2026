@@ -115,6 +115,18 @@
       },
       "ScreenState": {
         "properties": {
+          "ambient": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ambient"
+          },
           "focus_index": {
             "anyOf": [
               {
@@ -320,6 +332,18 @@
       "title": "Focus",
       "type": "object"
     },
+    "hide_ambient": {
+      "properties": {
+        "verb": {
+          "const": "hide_ambient",
+          "default": "hide_ambient",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "HideAmbient",
+      "type": "object"
+    },
     "home": {
       "properties": {
         "verb": {
@@ -502,6 +526,31 @@
         }
       },
       "title": "Seek",
+      "type": "object"
+    },
+    "show_ambient": {
+      "description": "Put a relaxing scene on full screen, looping, with its own sound. The TV\nopens with a starter clip it ships with, makes the full video behind it\n(frontend/src/ambient) and keeps that for the next request, so nothing waits\non a session and a scene asked for again costs nothing.",
+      "properties": {
+        "scene": {
+          "enum": [
+            "garden",
+            "beach",
+            "fireplace"
+          ],
+          "title": "Scene",
+          "type": "string"
+        },
+        "verb": {
+          "const": "show_ambient",
+          "default": "show_ambient",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "title": "ShowAmbient",
       "type": "object"
     },
     "show_products": {

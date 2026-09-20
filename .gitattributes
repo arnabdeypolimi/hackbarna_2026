@@ -1,1 +1,2 @@
 frontend/public/sky/*.mp4 filter=lfs diff=lfs merge=lfs -text
+frontend/public/ambient/*.mp4 filter=lfs diff=lfs merge=lfs -text

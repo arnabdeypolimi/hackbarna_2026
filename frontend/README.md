@@ -64,6 +64,7 @@ command with an `ack` — `ok: false` carries a reason the agent can speak, such
 | "search for space movies" | `search_catalog` | filters the loaded CSV with the search bar's matcher and returns the hits |
 | "show me the products" | `show_products` | acked `ok: false`: not supported on this TV |
 | "what should I watch?" (after the agent picks) | `show_titles` | the picks replace the row under the agent's label, first one focused; Back or a tab dismisses it |
+| "show me a fireplace", "put the beach on" | `show_ambient`, `hide_ambient` | a relaxing scene fills the screen with its own sound at once — a starter clip shipped with the app — while fal Director makes the full minute behind it and keeps it for next time; Back or "close it" takes it down. See [src/ambient/README.md](src/ambient/README.md) |
 
 In return the app reports what is on screen (`screen_state`) whenever it changes —
 the rail, a window of tiles around the focus, and playback — so the agent can resolve

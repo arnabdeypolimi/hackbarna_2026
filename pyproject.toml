@@ -22,6 +22,7 @@ dependencies = [
     "opentelemetry-semantic-conventions>=0.54b0",
     "opentelemetry-processor-baggage>=0.54b0",
     "opentelemetry-instrumentation>=0.54b0",
+    "httpx>=0.27",
 ]
 
 [dependency-groups]
