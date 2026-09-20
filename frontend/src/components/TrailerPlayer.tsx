@@ -1,5 +1,6 @@
 import {
-  forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type RefObject,
+  forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState,
+  type KeyboardEvent, type RefObject,
 } from 'react';
 import type { Rect, Title } from '../types/title';
 import type { PlaybackReport } from '../lib/tvBridge';
@@ -74,6 +75,14 @@ export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function Tra
 
   useEffect(() => { playRef.current?.focus(); }, []);
 
+  // The big play button unmounts the moment playback starts, and a control that unmounts while
+  // focused drops the remote on <body>, where spatial navigation has nothing to score and the
+  // viewer is stranded. The transport's play button is the safe home. Checked after every
+  // render rather than on one dependency, because the agent's resume() can start playback too.
+  useLayoutEffect(() => {
+    if (document.activeElement === document.body) playRef.current?.focus();
+  });
+
   // One frame at the tile's size, then let CSS carry it up to fill the panel.
   useEffect(() => {
     const id = requestAnimationFrame(() => setGrown(true));
@@ -147,12 +156,17 @@ export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function Tra
       <div className="playerbox">
         <div className="playerframe" ref={frameRef} />
         <div className="playertop">
-          <h4>{item.title}</h4>
+          <h2>{item.title}</h2>
           <Chips values={full ? ['Trailer', ...chips] : chips} />
         </div>
 
         {ready && !playing && (
-          <button className="bigplay f" aria-label={`Play trailer for ${item.title}`} onClick={toggle}>
+          <button
+            className="bigplay f"
+            aria-label={`Play trailer for ${item.title}`}
+            // Focus moves before the press takes effect, so it never has to be rescued above.
+            onClick={() => { playRef.current?.focus(); toggle(); }}
+          >
             <PlayIcon />
           </button>
         )}

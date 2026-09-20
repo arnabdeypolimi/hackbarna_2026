@@ -126,11 +126,16 @@ The whole UI is a frosted-glass language — but `backdrop-filter` is a per-fram
 everything behind a panel, and it will melt a TV board.
 
 Instead: a `.room` layer of pre-blurred radial gradients sits behind the panels, and the
-panels are simply semi-transparent white with a 1.5 px light edge.
+panels are simply semi-transparent smoke with a 1.5 px light edge.
 
 ```css
-.panel { background: rgba(255,255,255,0.15); border: 1.5px solid rgba(255,255,255,0.3); }
+.panel { background: var(--glass); border: 1.5px solid var(--glass-edge); }
 ```
+
+The fill is not a fixed value. `lib/theme.ts` mixes it from the sky's own deepest stop —
+70 % of the way to black, at 0.6 alpha — so spring's panels are a deep violet glass,
+autumn's a burnt umber and winter's an ink. It used to be a flat `rgba(255,255,255,0.15)`
+white, which read as grey against every sky and as a smear against the light ones.
 
 | | |
 | --- | --- |
@@ -320,18 +325,50 @@ deletes a character.
 
 ## 5. Visual design language
 
-**Type** — Sora (400/500/600/700) with system fallbacks. Sizes are 10-foot sizes: H1
-56 px, panel headings 34–40 px, body 19–24 px, metadata 17 px. Nothing below 15 px.
+**Type** — Schibsted Grotesk (400/600/700) with system fallbacks, on a seven-step scale of tokens:
+
+| Token | Size | Use |
+| --- | --- | --- |
+| `--t-1` | 72 px | a profile's initials |
+| `--t-2` | 56 px | panel heading, "Who's watching?" |
+| `--t-3` | 40 px | section heads: a title, a dialog, the full-screen player |
+| `--t-4` | 32 px | sub-heads, the lead line of an empty state |
+| `--t-5` | 24 px | synopsis lead, typed fields |
+| `--t-6` | 20 px | every control: buttons, tabs, chips, the toast |
+| `--t-7` | 17 px | metadata, and the floor |
+
+Seven steps, not the seventeen sizes this used to carry. Eight of those seventeen sat
+inside an 8 px span and were handed to roles meant to differ — at ten feet a 4 px
+difference is below what the eye resolves, which is the same reason the spacing steps are
+far apart. Two steps in the first pass still broke that rule: 15 against 17 and 56 against
+64, 1.13× and 1.14× apart, which is not a step anyone sees. The 15 is gone — the clock and
+the kids tag read better at 17 anyway, and 17 is a better floor for a screen ten feet away
+— and the top step moved to 72. No adjacent pair is now closer than 1.18×.
+
+**Weight** — three, by role: `--w-body` 400, `--w-control` and `--w-head` 600,
+`--w-display` 700. There was a 500 between body and head; it did no work that size was not
+already doing, since controls are 20 px and heads 32 px and up, and at ten feet 400 against
+500 is barely a difference. Dropping it is one font file fewer at startup.
+
+The sizes on the generated poster cards are deliberately not on this scale:
+`posterFontSize()` fits each title to its card, so it computes whatever makes the longest
+word fit, and the text is hidden the moment real artwork lands.
 
 **Colour** — everything is a token in `:root`:
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--glass` | `rgba(255,255,255,.15)` | panel fill |
+| `--glass` | sky's deepest stop → black, 0.6α | panel fill |
 | `--glass-edge` | `rgba(255,255,255,.30)` | 1.5 px panel edge |
-| `--chip` | `rgba(255,255,255,.16)` | chips, buttons |
+| `--primary` / `--chip` / `--chip-quiet` | white at .28 / .16 / .10 | controls, by rank |
 | `--ink` / `--ink-2` / `--ink-3` | `#fff` / 78% / 60% | three-level text hierarchy |
-| `--focus-bg` / `--focus-ink` | `#fff` / `#23211f` | focus inversion |
+| `--focus-bg` / `--focus-ink` | `#fff` / sky's stop → black 0.4 | focus inversion |
+| `--key-red` / `--key-yellow` / `--kids` / `--alert` | fixed | the four meaning-bearing colours |
+
+The tinted rows are regenerated per sky by `tokensOf()`; the rest never change. Anything
+that sits on the room or the glass goes through a token — a literal there stays the colour
+of whichever sky happened to be on screen when it was written. The four white alphas that
+had drifted outside the ladder (.18, .20, .22, .24) are gone.
 
 **Focus** — the most important visual state on a TV, and unmissable by design. Two
 treatments: buttons **invert to solid white**; images take a **5 px white ring**. The
@@ -344,9 +381,17 @@ reads as the same size as the flat browse panel beside it, so it stands flat and
 
 **Radii** — large and consistent: 48 px panels, 24–30 px cards, full pills on buttons.
 
-**Motion** — 320 ms row glide, 700 ms player expansion, 250 ms toasts, all on
-`cubic-bezier(.22,1,.36,1)`. The row's easing is *disabled* during free scroll, because
-easing a continuous scroll feels like lag. All of it respects `prefers-reduced-motion`.
+**Motion** — one curve and four lengths, as tokens: `--ease` is
+`cubic-bezier(.22,1,.36,1)`, an exponential ease-out, and the lengths are `--t-quick`
+250 ms (toasts, a poster taking focus), `--t-base` 320 ms (the row's glide, the avatar's
+first frame), `--t-slow` 700 ms (the player opening) and `--t-veil` 1200 ms (the moving sky
+arriving over the still one). The 450 ms delay on the player's chrome is tied to the 700 ms
+expansion rather than to a step on the scale, so it stays a literal.
+
+This claimed to be one curve long before it was: five easings were in use, two of them the
+browser's own `ease`, which decelerates too early. The row's easing is *disabled* during
+free scroll, because easing a continuous scroll feels like lag. All of it respects
+`prefers-reduced-motion`.
 
 ---
 
@@ -398,8 +443,8 @@ environment or a `.env` file.
 
 | | |
 | --- | --- |
-| JS bundle | **164 KB** (React included), compiled to Chrome 84 |
-| CSS bundle | **10 KB** |
+| JS bundle | **196 KB** (React included), compiled to Chrome 84 |
+| CSS bundle | **19.8 KB** (4.4 KB gzipped) |
 | Dataset | 280 KB / 600 titles |
 | Runtime dependencies | 2 (`react`, `react-dom`) |
 | DOM nodes in the row | ≤ 30 posters |

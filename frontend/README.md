@@ -251,5 +251,5 @@ src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 - **The glass look avoids `backdrop-filter`.** Panels are semi-transparent over a pre-blurred background, which is much cheaper on 1–1.5 GB boards.
 - **Images** come from TMDB's image CDN. When one fails to load, a generated title card is shown instead.
 - **TMDB credit** is shown at the bottom of the screen. Turn it off with `SHOW_TMDB_CREDIT` in `src/config.ts` if you use other data.
-- **Fonts** load Sora from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
+- **Fonts** load Schibsted Grotesk from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
 - `src/types/sdk.d.ts` is Titan's published type file. Refresh it from https://sdk.titanos.tv/sdk/sdk.d.ts when the SDK changes.

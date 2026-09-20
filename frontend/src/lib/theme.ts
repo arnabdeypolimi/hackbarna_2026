@@ -47,9 +47,12 @@ export interface Theme {
    * against the lightest thing the room ever shows: the still gradient's first stop, which is
    * the room under reduced motion, under Sky: Still, and on every start until the loop plays,
    * or the lightest patch of the loop when that is lighter. The ring holds 3:1 there under the
-   * brightest light, and ink-3 on the glass over it 4.17:1, which is what the original grey
-   * room measured. Nothing else writes directly on the room. scripts/render_sky.py checks both
-   * whenever a loop is cut.
+   * brightest light (3.09 on ink, 3.90-3.93 on the rest), and ink-3 on the glass over it 4.68:1
+   * or better, which is the 4.5:1 AA needs for the 17px metadata that uses it. It was graded to
+   * 4.17 — what the original grey room measured — which was under that bar on three of the four
+   * skies; --ink-3 went from 0.6 to 0.66 white rather than the scrim going deeper, so the room
+   * is no dimmer than it was. Nothing else writes directly on the room. scripts/render_sky.py
+   * checks both whenever a loop is cut.
    */
   shade: number;
   /**

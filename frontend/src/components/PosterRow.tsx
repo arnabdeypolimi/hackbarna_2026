@@ -12,7 +12,6 @@ interface Props {
   empty: ReactNode;
 }
 
-const PAD = 56; // matches .track padding
 const PEEK = 80; // how much of the previous poster stays visible
 const HOVER_ZONE = 0.16; // fraction of the row at each end that scrolls on hover
 const HOVER_SPEED = 11; // px per frame while the pointer rests in a zone
@@ -23,6 +22,16 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
   const [offset, setOffset] = useState(0);
   const [glide, setGlide] = useState(true); // eased only when the selection moved us
   const [drift, setDrift] = useState(0);
+
+  /** The track's own left padding, read from --pad-text rather than copied as a number here:
+      the row's scroll maths is in stage units and a token that moved without this moving with
+      it would put every poster a few pixels off its mark. Cached: it cannot change at runtime. */
+  const pad = useRef(-1);
+  const padLeft = () => {
+    const track = trackRef.current;
+    if (pad.current < 0 && track) pad.current = parseFloat(getComputedStyle(track).paddingLeft) || 0;
+    return Math.max(0, pad.current);
+  };
 
   /** Furthest the track can travel before its last poster is flush with the right edge. */
   const limit = () => {
@@ -37,8 +46,13 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
     const track = trackRef.current;
     const poster = track?.children[sel] as HTMLElement | undefined;
     setGlide(true);
+    // A focused child outside an overflow: hidden box still gets revealed by the browser
+    // scrolling that box, and nothing here ever puts it back — the track would then be
+    // displaced by however far it scrolled, with the selected poster off screen and the
+    // detail panel describing a title nobody can see. The transform is the only transport.
+    if (wrapRef.current) wrapRef.current.scrollLeft = 0;
     if (!track || !poster) return setOffset(0);
-    setOffset(Math.min(limit(), Math.max(0, poster.offsetLeft - PAD - (sel ? PEEK : 0))));
+    setOffset(Math.min(limit(), Math.max(0, poster.offsetLeft - padLeft() - (sel ? PEEK : 0))));
   }, [sel, items]);
 
   // Free scrolling: the row moves under a fixed selection, so browsing costs nothing.

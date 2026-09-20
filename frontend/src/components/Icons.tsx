@@ -1,7 +1,7 @@
 const base = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
 
 export const PlayIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M7 4.5v15l12-7.5z" /></svg>
+  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M7 4.5v15l12-7.5z" /></svg>
 );
 export const HeartIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></svg>
@@ -16,7 +16,7 @@ export const UploadIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
 );
 export const CloseIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="m7 7 10 10M17 7 7 17" /></svg>
+  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="m7 7 10 10M17 7 7 17" /></svg>
 );
 export const PauseIcon = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" {...base}><path d="M9 5v14M15 5v14" /></svg>
