@@ -110,3 +110,22 @@ async def test_genres_none_is_a_hard_exclusion(engine):
         assert "Horror" not in engine._catalog.lookup(r.title_id).genres
     popular = await engine.recommend(RecsContext(user_id="nobody", constraints=CatalogFilter(genres_none={"Horror"})))
     assert popular and all("Horror" not in engine._catalog.lookup(r.title_id).genres for r in popular)
+
+
+async def test_recommend_span_reports_channels_and_query_embed(catalog, history, u1_with_history, otel):
+    engine = RecsEngine(catalog, history, FakeEmbedder(dims=DIMS), tool_timeout_s=0.4)
+    await engine.recommend(RecsContext(user_id="u1", query_text="space", limit=3))
+    slow = RecsEngine(catalog, history, FakeEmbedder(DIMS, delay_s=0.3), tool_timeout_s=0.05)
+    await slow.recommend(RecsContext(user_id="u1", query_text="space"))
+    await engine.recommend(RecsContext(user_id="new_user", limit=5))
+    fast, timed_out, cold = otel.spans()["recs.recommend"]
+    assert fast.attributes["langfuse.observation.type"] == "retriever"
+    assert fast.attributes["langfuse.observation.metadata.query_embed"] == "hit"
+    assert "match" in fast.attributes["tv.recs.channels"]
+    assert fast.attributes["tv.recs.n"] == 3 and fast.attributes["tv.recs.limit"] == 3
+    assert '"query_text":"space"' in fast.attributes["langfuse.observation.input"]
+    assert '"title_id"' in fast.attributes["langfuse.observation.output"]
+    assert timed_out.attributes["langfuse.observation.metadata.query_embed"] == "timeout"
+    assert "match" not in timed_out.attributes["tv.recs.channels"]
+    assert cold.attributes["langfuse.observation.metadata.query_embed"] == "none"
+    assert list(cold.attributes["tv.recs.channels"]) == ["popular"]

@@ -16,14 +16,30 @@ never from here, so a stray line can shade the tone but not pick the film.
 import asyncio
 import json
 import time
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI
+from opentelemetry import context as otel_context
+from opentelemetry.trace import StatusCode
 
 from tv_avatar.config import Settings
 from tv_avatar.memory.lane import BaseMemoryLane, MemoryBlock
+from tv_avatar.tracing import (
+    ATTR_GENAI_MODEL,
+    ATTR_MEMORY_PROFILE_CHARS,
+    ATTR_MEMORY_TURNS,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    ATTR_OBS_STATUS_MESSAGE,
+    BAGGAGE_USER_ID,
+    META_TRIGGER,
+    OBS_TYPE_GENERATION,
+    detached_from_span,
+    observation,
+)
 
 PROFILE_FILE = "profile.md"
 PENDING_FILE = "pending.jsonl"
@@ -137,15 +153,25 @@ class SummaryMemoryLane(BaseMemoryLane):
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         await asyncio.to_thread(append)
-        self._since_refresh[user_id] = self._since_refresh.get(user_id, 0) + 1
-        if self._refresh_every and self._since_refresh[user_id] >= self._refresh_every:
+        pending = self._since_refresh[user_id] = self._since_refresh.get(user_id, 0) + 1
+        refresh = bool(self._refresh_every) and pending >= self._refresh_every
+        if refresh:
             self._since_refresh[user_id] = 0
-            task = asyncio.create_task(self.finish_session(user_id))
+            # Created inside the turn's context, so the fold would parent on an
+            # `llm` span long gone by the time it ends: detach the span, keep the
+            # baggage, and it is a root that still carries the session id.
+            ctx = copy_context()
+            ctx.run(otel_context.attach, detached_from_span())
+            task = asyncio.create_task(self.finish_session(user_id, trigger="every_n_turns"), context=ctx)
             task.add_done_callback(_log_failure)
-        return {"facts": [], "memory_ids": [], "pending": True}
+        return {"facts": [], "memory_ids": [], "pending": True,
+                "pending_turns": pending, "refresh_triggered": refresh}
 
-    async def finish_session(self, user_id: str) -> None:
-        """Fold the pending transcript into the profile. Safe to call with nothing pending."""
+    async def finish_session(self, user_id: str, *, trigger: str = "session_end") -> None:
+        """Fold the pending transcript into the profile. Safe to call with nothing pending.
+
+        ``trigger`` names the caller for the trace: the runner at session end,
+        ``ingest_turn`` every N turns, ``warmup`` for a crashed session."""
         async with self._lock(user_id):
             lines = self._pending_lines(user_id)
             turns = self._parse_turns(lines)
@@ -154,13 +180,23 @@ class SummaryMemoryLane(BaseMemoryLane):
             log = logger.bind(user_id=user_id)
             t0 = time.perf_counter()
             previous = self.read_profile(user_id)
-            try:
-                profile = await self._summarise(previous, turns)
-            except Exception as err:  # noqa: BLE001 — the transcript stays pending for the next attempt
-                log.opt(exception=err).warning("memory summary failed; transcript kept for retry",
-                                               turns=len(turns))
-                return
-            await asyncio.to_thread(self._commit, user_id, profile, consumed=len(lines))
+            # One LLM call: a `generation`, with the profile before and after (D19).
+            with observation("memory.finish_session", type=OBS_TYPE_GENERATION, **{
+                META_TRIGGER: trigger, ATTR_GENAI_MODEL: self._model, ATTR_MEMORY_TURNS: len(turns),
+                ATTR_OBS_INPUT: f"# Previous profile\n{previous}\n\n# Session transcript\n{_render_transcript(turns)}",
+                **({BAGGAGE_USER_ID: user_id} if trigger == "warmup" else {}),  # no session baggage at boot
+            }) as span:
+                try:
+                    profile = await self._summarise(previous, turns)
+                except Exception as err:  # noqa: BLE001 — the transcript stays pending for the next attempt
+                    log.opt(exception=err).warning("memory summary failed; transcript kept for retry",
+                                                   turns=len(turns))
+                    span.set_status(StatusCode.ERROR, type(err).__name__)
+                    span.set_attribute(ATTR_OBS_STATUS_MESSAGE, type(err).__name__)
+                    span.add_event("transcript kept for retry")
+                    return
+                await asyncio.to_thread(self._commit, user_id, profile, consumed=len(lines))
+                span.set_attributes({ATTR_MEMORY_PROFILE_CHARS: len(profile), ATTR_OBS_OUTPUT: profile})
             log.info("memory profile updated", turns=len(turns), chars=len(profile),
                      ms=round((time.perf_counter() - t0) * 1000))
 
@@ -170,7 +206,7 @@ class SummaryMemoryLane(BaseMemoryLane):
             return
         users = [p.name for p in self._root.iterdir() if (p / PENDING_FILE).exists()]
         for user_id in users:
-            await self.finish_session(user_id)
+            await self.finish_session(user_id, trigger="warmup")
         if users:
             logger.info("memory catch-up done", users=len(users))
 

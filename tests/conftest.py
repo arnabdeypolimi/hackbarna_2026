@@ -66,6 +66,11 @@ def otel() -> Otel:
 
 @pytest.fixture(autouse=True)
 def _clear_spans(request):
-    yield
+    # The provider is global, so tests that never ask for `otel` still record
+    # spans into it (and the batch processor delivers them late): start every
+    # test that asserts on spans from a flushed, clean slate.
     if "otel" in request.fixturenames:
-        request.getfixturevalue("otel").exporter.clear()
+        otel = request.getfixturevalue("otel")
+        otel.force_flush()
+        otel.exporter.clear()
+    yield

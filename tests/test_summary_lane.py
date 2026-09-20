@@ -156,3 +156,62 @@ async def test_turns_ingested_while_summarising_are_not_lost(tmp_path):
     assert [json.loads(p)["user"] for p in pending] == ["second"]
     archived = list((tmp_path / "mem" / "u1" / SESSIONS_DIR).iterdir())
     assert len(archived) == 1 and "second" not in archived[0].read_text()
+
+
+async def test_finish_session_span_is_a_generation_carrying_the_session_baggage(tmp_path, otel):
+    from conftest import PERSONA
+
+    from tv_avatar.session.state import SessionState
+    from tv_avatar.tracing import session_scope
+
+    lane, llm = _lane(tmp_path)
+    session = SessionState("sess_9", "tok", 0, persona=PERSONA, user_id="u1")
+    with session_scope(session, Settings(nebius_api_key="x", slng_api_key="-", anam_api_key="-", _env_file=None)):
+        await lane.ingest_turn("u1", "I hate horror", "Noted.")
+        await lane.finish_session("u1")
+    fold, = otel.spans()["memory.finish_session"]
+    assert fold.attributes["langfuse.observation.type"] == "generation"
+    assert fold.attributes["langfuse.observation.metadata.trigger"] == "session_end"
+    assert fold.attributes["langfuse.session.id"] == "sess_9"
+    assert fold.attributes["gen_ai.request.model"] == lane._model
+    assert fold.attributes["tv.memory.turns"] == 1
+    assert "Viewer: I hate horror" in fold.attributes["langfuse.observation.input"]
+    assert fold.attributes["langfuse.observation.output"] == llm.reply
+
+
+async def test_mid_session_fold_is_detached_from_the_turn_but_keeps_the_session(tmp_path, otel):
+    import asyncio
+
+    from conftest import PERSONA
+
+    from tv_avatar.session.state import SessionState
+    from tv_avatar.tracing import observation, session_scope
+
+    settings = Settings(nebius_api_key="x", slng_api_key="-", anam_api_key="-", anam_avatar_id="-",
+                        _env_file=None, memory_root=str(tmp_path / "mem"), memory_refresh_every_turns=2)
+    lane = SummaryMemoryLane(settings, client=FakeLLM())
+    session = SessionState("sess_9", "tok", 0, persona=PERSONA, user_id="u1")
+    with session_scope(session, settings), observation("llm", type="generation") as llm_span:
+        await lane.ingest_turn("u1", "turn 0", "ok")
+        await lane.ingest_turn("u1", "turn 1", "ok")
+        await asyncio.sleep(0.05)
+    spans = otel.spans()
+    first, second = spans["memory.ingest"]
+    assert first.parent.span_id == llm_span.context.span_id
+    assert first.attributes["langfuse.observation.metadata.refresh_triggered"] is False
+    assert second.attributes["langfuse.observation.metadata.refresh_triggered"] is True
+    assert second.attributes["tv.memory.pending_turns"] == 2
+    fold, = spans["memory.finish_session"]
+    assert fold.attributes["langfuse.observation.metadata.trigger"] == "every_n_turns"
+    assert fold.parent is None                                   # detached from the turn
+    assert fold.attributes["langfuse.session.id"] == "sess_9"    # baggage survived the detach
+
+
+async def test_failed_summary_marks_the_span_and_keeps_the_transcript(tmp_path, otel):
+    lane, _ = _lane(tmp_path, FakeLLM(fail=True))
+    await lane.ingest_turn("u1", "I hate horror", "Noted.")
+    await lane.finish_session("u1")
+    fold, = otel.spans()["memory.finish_session"]
+    assert fold.status.status_code.name == "ERROR"
+    assert fold.attributes["langfuse.observation.status_message"] == "RuntimeError"
+    assert [e.name for e in fold.events] == ["transcript kept for retry"]
