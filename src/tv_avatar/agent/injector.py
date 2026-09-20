@@ -13,11 +13,21 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from tv_avatar.agent.prompt import build_system_prompt
 from tv_avatar.control.protocol import ScreenState
 from tv_avatar.history.store import HistoryStore
-from tv_avatar.session.state import SessionState
+from tv_avatar.session.state import SessionState, shop_mark
+from tv_avatar.shop import get_shop
 
 
 class _Catalog(Protocol):
     def lookup(self, title_id: str): ...
+
+
+def render_shop(catalog: _Catalog | None) -> str:
+    """Every shelf with the title's catalogue name, so "the Barbie merch" resolves to an
+    id whether or not Barbie is on screen."""
+    def name_of(title_id: str) -> str | None:
+        item = catalog.lookup(title_id) if catalog is not None else None
+        return item.name if item is not None else None
+    return get_shop().render_shelves(name_of)
 
 
 def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
@@ -32,7 +42,7 @@ def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
         item = catalog.lookup(tile.title_id) if catalog is not None else None
         label = item.label() if item is not None else tile.name
         marker = " <- focused" if tile.position == screen.focus_index else ""
-        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){marker}")
+        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){shop_mark(tile)}{marker}")
     pb = screen.playback
     if pb.state == "stopped":
         lines.append("Playback: stopped")
@@ -64,6 +74,7 @@ class ScreenContextInjector(FrameProcessor):
         system = "\n\n".join([
             build_system_prompt(self._session.persona.language),
             "# Screen\n" + render_screen(self._session, self._catalog),
+            "# Shop\n" + render_shop(self._catalog),
             "# Recent activity\n" + history,
         ])
         messages = [m for m in frame.context.get_messages() if m.get("role") != "system"]

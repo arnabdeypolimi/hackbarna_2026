@@ -1,0 +1,32 @@
+{
+  "346698": [
+    { "id": "barbie-bomber", "name": "Pink Satin Bomber Jacket", "brand": "Dreamhouse Apparel", "price": "€89", "note": "The jacket from the roller-skating scene", "image": "products/346698/barbie-bomber.jpg" },
+    { "id": "barbie-skates", "name": "Neon Roller Skates", "brand": "Venice Wheels", "price": "€129", "note": "Seen on the boardwalk", "image": "products/346698/barbie-skates.jpg" },
+    { "id": "barbie-hat", "name": "Pink Western Hat", "brand": "Dreamhouse Apparel", "price": "€39", "note": "Worn on the road trip", "image": "products/346698/barbie-hat.jpg" }
+  ],
+  "872585": [
+    { "id": "oppenheimer-fedora", "name": "Wide-Brim Wool Fedora", "brand": "Los Alamos Hatters", "price": "€120", "note": "The hat from the desert scenes", "image": "products/872585/oppenheimer-fedora.jpg" },
+    { "id": "oppenheimer-glasses", "name": "Vintage Round Sunglasses", "brand": "Trinity Optics", "price": "€95", "note": "Worn at the test site", "image": "products/872585/oppenheimer-glasses.jpg" },
+    { "id": "oppenheimer-print", "name": "Trinity Desert Art Print", "brand": "Frame & Field", "price": "€35", "note": "A1 giclée print", "image": "products/872585/oppenheimer-print.jpg" }
+  ],
+  "603692": [
+    { "id": "wick-suit", "name": "Tailored Black Suit Jacket", "brand": "Continental Tailoring", "price": "€349", "note": "The jacket from the Paris finale", "image": "products/603692/wick-suit.jpg" },
+    { "id": "wick-gloves", "name": "Black Leather Driving Gloves", "brand": "Continental Tailoring", "price": "€59", "note": "Seen in the Osaka scenes", "image": "products/603692/wick-gloves.jpg" },
+    { "id": "wick-coin", "name": "Gold Marker Coin Replica", "brand": "High Table Collectibles", "price": "€25", "note": "Display coin in a velvet box", "image": "products/603692/wick-coin.jpg" }
+  ],
+  "569094": [
+    { "id": "spiderverse-hoodie", "name": "Red & Black Graffiti Hoodie", "brand": "Brooklyn Threads", "price": "€69", "note": "Miles' everyday hoodie", "image": "products/569094/spiderverse-hoodie.jpg" },
+    { "id": "spiderverse-sneakers", "name": "Red High-Top Sneakers", "brand": "Brooklyn Threads", "price": "€119", "note": "Laces untied, as worn in the film", "image": "products/569094/spiderverse-sneakers.jpg" },
+    { "id": "spiderverse-bottle", "name": "Spray-Can Water Bottle", "brand": "Brooklyn Threads", "price": "€22", "note": "Insulated steel, 750 ml", "image": "products/569094/spiderverse-bottle.jpg" }
+  ],
+  "502356": [
+    { "id": "mario-cap", "name": "Red Plumber's Cap", "brand": "Mushroom Kingdom Co.", "price": "€24", "note": "One size, embroidered emblem", "image": "products/502356/mario-cap.jpg" },
+    { "id": "mario-lamp", "name": "Question Block Lamp", "brand": "Mushroom Kingdom Co.", "price": "€45", "note": "Tap to light up", "image": "products/502356/mario-lamp.jpg" },
+    { "id": "mario-plush", "name": "Red Mushroom Plush", "brand": "Mushroom Kingdom Co.", "price": "€29", "note": "30 cm, super soft", "image": "products/502356/mario-plush.jpg" }
+  ],
+  "980489": [
+    { "id": "gt-jacket", "name": "Racing Team Jacket", "brand": "Trackside Gear", "price": "€159", "note": "The pit-lane jacket", "image": "products/980489/gt-jacket.jpg" },
+    { "id": "gt-gloves", "name": "Racing Driver Gloves", "brand": "Trackside Gear", "price": "€49", "note": "Suede palms, FIA style", "image": "products/980489/gt-gloves.jpg" },
+    { "id": "gt-model", "name": "Die-Cast GT Race Car 1:24", "brand": "Trackside Gear", "price": "€39", "note": "Display model with stand", "image": "products/980489/gt-model.jpg" }
+  ]
+}

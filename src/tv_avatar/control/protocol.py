@@ -25,6 +25,10 @@ class Tile(BaseModel):
     title_id: str
     name: str
     position: int = Field(ge=0)
+    #: The TV has a product shelf for this title. Commands are fire-and-forget, so a
+    #: failed `show_products` ack never reaches the model; this is how it knows in
+    #: advance whether "what's that jacket?" has an answer or an apology.
+    shoppable: bool = False
 
 
 class Playback(BaseModel):

@@ -221,6 +221,36 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .trailer .pill { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 24px; background: rgba(255, 255, 255, 0.2); }
 .trailer:focus .pill { background: #fff; color: #23211f; }
 
+/* Shop shelf. Lives in the Detail block's slot so the row above stays put: the viewer asked
+   about something in the title they are looking at, and that title must still be in view.
+   It arrives from the right, the side the avatar speaks from, so the motion reads as the
+   answer sliding in rather than the page changing. */
+.shelf { padding: var(--gap-block) var(--pad-text) 0; animation: shelf-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes shelf-in { from { opacity: 0; transform: translateX(80px); } }
+.shelfhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap-block); }
+.shelfhead h3 { margin: 0; font-size: 34px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shelfhint { flex: none; font-size: 17px; color: var(--ink-3); }
+.shelfrow { display: flex; gap: var(--gap-block); margin-top: var(--gap-group); }
+/* 348 x 3 + two gaps fills the text column exactly. The photo is square and shown whole:
+   a product cropped to a banner is a product the viewer cannot judge. The card's height
+   is the photo's, which also keeps the shelf inside the panel above the tab bar. */
+.product {
+  flex: none; display: flex; width: 348px; height: 196px; border-radius: 28px; overflow: hidden; text-align: left;
+  background: var(--chip-quiet);
+  animation: shelf-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(var(--i) * 70ms);
+}
+.product:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); background: var(--chip); }
+/* 150 wide on a 196 card trims 12% off the square's sides — a 168px text column is what
+   that buys, and it is the least width at which every name in the catalogue fits two lines. */
+.simg { flex: none; width: 150px; height: 100%; background: #f3ede6; }
+.simg img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 14px 16px; }
+/* Two lines for the name: a shopper will not buy a "Pink Satin Bomber…". */
+.sname { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sbrand { font-size: 15px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sprice { font-size: 21px; font-weight: 600; color: var(--ink); }
+.snote { margin-top: auto; font-size: 14px; line-height: 1.3; color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
 /* Side panel */
 .label { margin: var(--gap-block) 0 0; font-size: 19px; color: var(--ink-2); }
 .side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: auto; padding-top: var(--gap-group); }
@@ -515,4 +545,5 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
      setting exists for. Its chrome fades on a delay, which has to go with it or the controls
      arrive late on a player that is already open. */
   .track, .poster, .toast, .player, .playertop, .playerbar, .bigplay { transition: none; }
+  .shelf, .product { animation: none; }
 }

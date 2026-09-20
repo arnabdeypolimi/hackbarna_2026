@@ -34,16 +34,21 @@ export function deriveScreenState(args: {
   selIdx: number;
   playing: Title | null;
   playback: PlaybackReport;
+  /** The shop shelf is open under the row. */
+  shopping: boolean;
+  /** Whether the TV has products for a title: told up front, because a failed
+   *  `show_products` ack never reaches the model (commands are fire-and-forget). */
+  shoppable: (t: Title) => boolean;
 }): ScreenState {
-  const { tab, query, agentRail, row, selIdx, playing, playback } = args;
+  const { tab, query, agentRail, row, selIdx, playing, playback, shopping, shoppable } = args;
   const lo = Math.max(0, selIdx - WINDOW);
   // `position` is the absolute row index so focus_index and the prompt's [n] labels agree.
   const tiles: Tile[] = row
     .slice(lo, selIdx + WINDOW + 1)
-    .map((t, i) => ({ title_id: toWireId(t), name: t.title, position: lo + i }));
+    .map((t, i) => ({ title_id: toWireId(t), name: t.title, position: lo + i, shoppable: shoppable(t) }));
   return {
     // The Detail side panel shows whatever is focused, so it is part of `grid`, not a view.
-    view: playing ? 'player' : 'grid',
+    view: playing ? 'player' : shopping ? 'products' : 'grid',
     rail_id: query ? `search:${query}` : agentRail ? `agent:${agentRail}` : tab,
     focus_index: row.length ? selIdx : null,
     tiles,

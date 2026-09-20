@@ -8,6 +8,7 @@ const FALLBACK_TITLES = [
   { title_id: "tt_4", name: "Dune" },
 ];
 let TITLES = FALLBACK_TITLES;
+let SHOP = new Set(); // title_ids the backend has a shelf for
 
 let ws = null;
 let pc = null;
@@ -54,7 +55,7 @@ function pushScreenState() {
       view: playback.state === "stopped" ? "grid" : "player",
       rail_id: "rail_mock",
       focus_index: focus,
-      tiles: TITLES.map((t, i) => ({ title_id: t.title_id, name: t.name, position: i })),
+      tiles: TITLES.map((t, i) => ({ title_id: t.title_id, name: t.name, position: i, shoppable: SHOP.has(t.title_id) })),
       playback,
     },
   }));
@@ -88,6 +89,7 @@ function apply(msg) {
       playback = { state: "stopped", title_id: null, position_s: 0 };
       break;
     case "show_products":
+      log(`shop shelf for ${TITLES.find((t) => t.title_id === a.title_id)?.name || a.title_id}`);
       break;
     case "show_titles": {
       // The mock has no other rails: the picks replace the tiles, first one focused.
@@ -127,8 +129,18 @@ async function loadCatalog() {
   }
 }
 
+async function loadShop() {
+  try {
+    const body = await (await fetch("/shop")).json();
+    SHOP = new Set(Object.keys(body.products || {}));
+    log(`shop: ${SHOP.size} shoppable titles`);
+  } catch (e) {
+    log("shop: unavailable");
+  }
+}
+
 async function start() {
-  await loadCatalog();
+  await Promise.all([loadCatalog(), loadShop()]);
   const uid = userId();
   $("user").textContent = uid;
   session = await (await fetch("/sessions", {
