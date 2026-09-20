@@ -35,8 +35,9 @@ panel catches up in place.
 
 Two things worth knowing:
 
-- **The app connects on load.** Every reload, including a hot reload, opens a paid
-  Anam and Cartesia session. Stop the dev server when you are not using it.
+- **Picking a profile opens a paid session.** Every reload, including a hot reload, comes
+  back to "Who's watching?", and the first pick opens an Anam and Cartesia session. Stop the
+  dev server when you are not using it.
 - **On a real television it needs https.** `getUserMedia` is blocked on an insecure
   origin, so a plain `http://` LAN address cannot reach the microphone at all.
   Desktop development on `localhost` is exempt from that rule.

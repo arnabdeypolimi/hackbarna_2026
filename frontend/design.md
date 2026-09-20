@@ -503,7 +503,8 @@ environment or a `.env` file.
 | Dataset | 280 KB / 600 titles |
 | Runtime dependencies | 2 (`react`, `react-dom`) |
 | DOM nodes in the row | ≤ 30 posters |
-| Per-frame GPU work | 1 stage transform, 1 track translate — no filters, no blurs |
+| Composited layers, browsing | ≤ 12: stage, track, two walls, two bars, trailer card, face, actions, and the ≤ 5 tiles in the row's arc — no filters, no blurs |
+| Layout animation | once per launch: `width` on the browse panel and `left` on the two bars for the 1200 ms room opening; nothing else animates layout |
 
 The build targets `chrome84` for both JS and CSS, and uses `base: './'` so `dist/` can be
 hosted from any folder or served straight off the TV.

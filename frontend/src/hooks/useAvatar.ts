@@ -41,6 +41,33 @@ export interface AvatarOptions {
   commands: RefObject<CommandHandler | null>;
 }
 
+/**
+ * How long the backend gets to answer — the config fetch, and then the connect — before the
+ * panel gives up and says so. Nothing else bounds either: the only cap inside connect() is 2s
+ * on ICE gathering, and a backend that accepts the socket then blocks on its provider (or a
+ * dev proxy with nothing behind it) would otherwise hold the panel on a disabled "Connecting…"
+ * forever, with the room upstairs already opened around it. Twelve seconds is well past a
+ * healthy connect and short enough that the viewer is still waiting.
+ */
+const DEADLINE_MS = 12_000;
+
+class DeadlineError extends Error {}
+
+/**
+ * `attempt`, or a DeadlineError after DEADLINE_MS. The attempt is not cancelled — nothing here
+ * can cancel a WebRTC negotiation — so a result that lands after the deadline goes to `onLate`,
+ * for closing what nobody will use. Its late rejection is already observed by the race.
+ */
+async function withinDeadline<T>(attempt: Promise<T>, message: string, onLate?: (t: T) => void): Promise<T> {
+  let late = false;
+  let timer = 0;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => { late = true; reject(new DeadlineError(message)); }, DEADLINE_MS);
+  });
+  if (onLate) void attempt.then((t) => { if (late) onLate(t); }, () => {});
+  try { return await Promise.race([attempt, deadline]); } finally { window.clearTimeout(timer); }
+}
+
 export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOptions): AvatarView {
   const [config, setConfig] = useState<BackendConfig | null>(null);
   const [phase, setPhase] = useState<Phase>('off');
@@ -93,7 +120,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
 
     const mineStill = () => gen.current === mine && mounted.current;
     try {
-      const live = await connect({
+      const live = await withinDeadline(connect({
         avatar: who.id,
         language: code,
         userId: user.current,
@@ -122,23 +149,28 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
           setPhase('error');
           setMessage(e.message);
         },
-      });
+      // A session that lands after the deadline is a paid one nothing references.
+      }), `${who.name} did not answer`, (late) => late.close());
       // A newer attempt started while this one was negotiating: drop this session
       // rather than leaving it running and unreferenced.
       if (!mineStill()) { live.close(); return; }
       session.current = live;
       // Attached either way: with no avatar the stream is the voice alone.
       el.srcObject = live.stream;
-      // Autoplay may be refused when nothing the viewer did started this — the app
-      // connects on load, so that is the normal case, not the exception. The session is
-      // healthy; only playback was blocked, so the recovery is a gesture, never a new
-      // session.
+      // Autoplay may be refused when nothing the viewer did started this. Picking a profile
+      // is a gesture and usually unlocks it, but a restart from a language or video change
+      // arrives later, off the back of that gesture's grace period. The session is healthy;
+      // only playback was blocked, so the recovery is a gesture, never a new session.
       el.play().then(
         () => { if (mineStill()) setPhase('live'); },
         () => { if (mineStill()) { setPhase('blocked'); setMessage(`Press OK to hear ${who.name}`); } },
       );
     } catch (err) {
       if (!mineStill()) return;
+      // Retire the generation after a timeout, the way onError does: the abandoned attempt's
+      // status and transcript callbacks would otherwise still pass mineStill() and write over
+      // the error the panel is about to show.
+      if (err instanceof DeadlineError) gen.current++;
       const e = err as Error;
       // A refused microphone is recoverable by a gesture; everything else is not.
       const blocked = e.name === 'NotAllowedError' || e.name === 'SecurityError';
@@ -163,11 +195,13 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
 
     let cfg: BackendConfig;
     try {
-      cfg = await fetchConfig();
-    } catch {
+      cfg = await withinDeadline(fetchConfig(), 'Backend not answering');
+    } catch (err) {
       if (gen.current !== mine || !mounted.current) return;
       setPhase('error');
-      setMessage('Backend not running');
+      // A refused connection and a fetch that never returns are different problems for
+      // whoever is fixing the backend; the panel has room for the distinction.
+      setMessage(err instanceof DeadlineError ? err.message : 'Backend not running');
       return;
     }
     if (gen.current !== mine || !mounted.current) return;
@@ -210,23 +244,23 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     session.current = null;
   }, []);
 
-  // A different viewer is a different backend identity (history, memory), so the session
-  // restarts like it does for a language change. Skipped on mount — boot() covers that —
-  // and while there is nothing live to replace.
-  const firstUser = useRef(true);
+  // A different viewer is a different backend identity (history, memory), and the talking
+  // head is a property of the pipeline, so either change restarts the session the way a
+  // language change does. Skipped on mount — boot() covers that, and until it has run there
+  // is no config to start from.
+  //
+  // Not gated on session.current. It was, and the gate is exactly wrong for the moment these
+  // changes happen: both are made from "Who's watching?", which a viewer reopens to correct a
+  // mis-pick or flip the video within seconds of picking — while the first connect is still
+  // in flight and session.current is still null. The gate skipped the restart, nothing bumped
+  // the generation, and the in-flight connect landed live under the old identity with the
+  // old video setting while the panel rendered from the new ones. start() supersedes an
+  // in-flight attempt by construction (gen/mineStill), the same way setLanguage() does.
+  const firstRun = useRef(true);
   useEffect(() => {
-    if (firstUser.current) { firstUser.current = false; return; }
-    if (config && config.configured && session.current) void start(config, lang.current);
-  }, [opts.userId]);
-
-  // Reopening "Who's watching?" mid-session and flipping this rebuilds the pipeline, exactly
-  // as a language change does. Skipped on the first run — boot() has not happened yet on the
-  // launch path, and when it has there is nothing to replace.
-  const firstVideo = useRef(true);
-  useEffect(() => {
-    if (firstVideo.current) { firstVideo.current = false; return; }
-    if (config && config.configured && session.current) void start(config, lang.current);
-  }, [opts.videoEnabled]);
+    if (firstRun.current) { firstRun.current = false; return; }
+    if (config && config.configured) void start(config, lang.current);
+  }, [opts.userId, opts.videoEnabled]);
 
   // Stable across renders so effects keyed on it (the screen-state push) do not refire.
   const send = useCallback((msg: Outbound) => { session.current?.send(msg); }, []);

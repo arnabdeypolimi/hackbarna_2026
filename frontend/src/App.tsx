@@ -99,9 +99,11 @@ export default function App() {
    * panel at an angle beside empty space is an angle for no reason.
    *
    * `error` counts as arrived. With no backend the avatar panel reads "Backend not running",
-   * and that belongs in the room rather than behind an intro that never ends. So does the
-   * timeout below, for the case the phase never settles at all — a WebRTC connect that hangs
-   * rather than failing. Seven seconds is past the slowest healthy connect measured here.
+   * and that belongs in the room rather than behind an intro that never ends. A connect that
+   * hangs rather than failing lands in `error` too — useAvatar puts a deadline on it — so the
+   * phase always settles and this needs no timer of its own. It had one, and it left two
+   * disconnected ideas of "gave up": a room that had opened beside a panel still saying
+   * "Connecting…" with its only button disabled.
    *
    * Latched, because switching profile restarts the session and pushes the phase back to
    * `connecting`: the room would collapse behind the picker and re-open as the viewer left
@@ -110,11 +112,8 @@ export default function App() {
   const [roomOpen, setRoomOpen] = useState(false);
   const settled = avatar.phase === 'live' || avatar.phase === 'blocked' || avatar.phase === 'error';
   useEffect(() => {
-    if (roomOpen || !viewerChosen) return;
-    if (settled) return setRoomOpen(true);
-    const id = window.setTimeout(() => setRoomOpen(true), 7000);
-    return () => window.clearTimeout(id);
-  }, [roomOpen, viewerChosen, settled]);
+    if (viewerChosen && settled) setRoomOpen(true);
+  }, [viewerChosen, settled]);
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -145,6 +144,18 @@ export default function App() {
   }, [themeChoice, clock]);
 
   // ---------- focus helpers ----------
+  /**
+   * Which overlay owns the remote, if any — asked in one place. Five conditionals used to
+   * enumerate the flags by hand and the fifth had already drifted (goBack forgot the theme
+   * picker, so a spoken "back" with it open answered "already at home"). The ref is the same
+   * answer for closures that outlive the render they were made in: the close* helpers hand
+   * `focusRow` to requestAnimationFrame from the render where the overlay was still open, and
+   * a guard reading `profilesOpen` from that closure sees it still true.
+   */
+  const overlay = profilesOpen ? 'profiles' : themeOpen ? 'theme' : player ? 'player' : dialogOpen ? 'dialog' : null;
+  const overlayRef = useRef(overlay);
+  overlayRef.current = overlay;
+
   // Focus the selected poster once the DOM reflects the latest state: after the next
   // render if one is pending, or on the next frame if nothing changed.
   const flushRowFocus = () => {
@@ -154,10 +165,13 @@ export default function App() {
     // under it. The dataset arriving is the case that did: its focusRow() lands after
     // "Who's watching?" has focused a tile, leaving the viewer steering a hidden panel.
     // Dropping the request is safe — every path that closes an overlay asks for focus itself.
-    if (profilesOpen || themeOpen || dialogOpen || player) return;
+    if (overlayRef.current) return;
     const stage = stageRef.current;
+    // With no dataset the row has no poster; the import button is where the remote should
+    // land, so that a picker closed over an empty screen does not strand focus on a tab.
     const target =
       stage?.querySelector<HTMLElement>('.poster.sel') ||
+      stage?.querySelector<HTMLElement>('[data-role="import-empty"]') ||
       stage?.querySelector<HTMLElement>('.tab.cur') ||
       stage?.querySelector<HTMLElement>('.tab');
     target?.focus();
@@ -170,9 +184,15 @@ export default function App() {
 
   const selectPoster = (n: number) => { setSel(n); focusRow(); };
 
-  // With no dataset yet, start on the import button so the remote has somewhere to go.
+  // With no dataset yet, start on the import button so the remote has somewhere to go —
+  // unless an overlay has it. The app now opens on "Who's watching?", and a missing dataset
+  // is reported asynchronously, so without the guard this focused a button behind the
+  // scrim and OK opened the file chooser from under the picker. focusRow's fallback picks
+  // the button up when the picker closes.
   useEffect(() => {
-    if (status.kind === 'missing') stageRef.current?.querySelector<HTMLElement>('[data-role="import-empty"]')?.focus();
+    if (status.kind === 'missing' && !overlayRef.current) {
+      stageRef.current?.querySelector<HTMLElement>('[data-role="import-empty"]')?.focus();
+    }
   }, [status.kind]);
 
   // ---------- data ----------
@@ -420,7 +440,7 @@ export default function App() {
       back(inSearch);
       return;
     }
-    if (dialogOpen || player || profilesOpen || themeOpen) return;
+    if (overlay) return;
     if (e.keyCode === KEY.RED && current) toggleSave(current);
     else if (e.keyCode === KEY.YELLOW) fileRef.current?.click();
     // Not from the search box, where G is a letter the viewer is typing.
@@ -446,7 +466,7 @@ export default function App() {
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.
   const goBack = (): string | void => {
-    if (!profilesOpen && !player && !dialogOpen && !query && !agentRail && tab === 'popular') return 'already at home';
+    if (!overlay && !query && !agentRail && tab === 'popular') return 'already at home';
     back(false);
   };
   // The agent's picks become the row. Ids the loaded dataset does not have are dropped
