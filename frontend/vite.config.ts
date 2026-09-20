@@ -13,6 +13,9 @@ export default defineConfig({
     // signalling POST share one host with no CORS on the Python side.
     proxy: {
       '/config': 'http://localhost:8000',
+      // The shop catalogue. Product photos live under /products/ on this side, so the
+      // two paths must stay distinct.
+      '/shop': 'http://localhost:8000',
       // ws: true matters — the control channel is a WebSocket under the same
       // /sessions prefix as the HTTP signalling, so one entry covers both.
       '/sessions': { target: 'http://localhost:8000', ws: true },

@@ -9,10 +9,13 @@ import time
 from collections import deque
 
 from loguru import logger
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan
 from pipecat.frames.frames import (
     AggregatedTextFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    ErrorFrame,
     Frame,
     InterimTranscriptionFrame,
     InterruptionFrame,
@@ -30,9 +33,20 @@ from pipecat.observers.base_observer import BaseObserver, FramePushed
 from tv_avatar.control.bus import CommandBus
 from tv_avatar.control.protocol import AgentStatusMsg, TranscriptMsg
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import (
+    ATTR_LATENCY_PREFIX,
+    ATTR_OBS_LEVEL,
+    EVENT_ERROR,
+    LEVEL_ERROR,
+    META_N_ERRORS,
+    OBS_TYPE_EVENT,
+    TurnContextFn,
+    observation,
+)
 
 
-class _DedupObserver(BaseObserver):
+class DedupObserver(BaseObserver):
+    """An observer sees a frame once per hop it travels; subclasses act on each frame once."""
     def __init__(self, *, dedupe_window: int = 512) -> None:
         super().__init__()
         # Bounded so a long session cannot grow the set without limit.
@@ -49,7 +63,7 @@ class _DedupObserver(BaseObserver):
         return True
 
 
-class SessionEventsObserver(_DedupObserver):
+class SessionEventsObserver(DedupObserver):
     """Translate pipeline frames into protocol events on the session's bus."""
 
     def __init__(self, bus: CommandBus, *, dedupe_window: int = 512) -> None:
@@ -88,7 +102,7 @@ def translate(frame: Frame) -> AgentStatusMsg | TranscriptMsg | None:
             return None
 
 
-class TurnLatencyObserver(_DedupObserver):
+class TurnLatencyObserver(DedupObserver):
     """One structured log line per turn — M4's data source (phase 2, Task 8).
 
     Marks: first interim → LLMContextFrame, LLMContextFrame → first
@@ -96,9 +110,10 @@ class TurnLatencyObserver(_DedupObserver):
     TTFB/processing metrics. Emitted on BotStoppedSpeakingFrame.
     """
 
-    def __init__(self, session: SessionState) -> None:
+    def __init__(self, session: SessionState, *, turn_context: TurnContextFn | None = None) -> None:
         super().__init__()
         self._session = session
+        self._turn_context = turn_context
         self._reset()
 
     def _reset(self) -> None:
@@ -107,8 +122,14 @@ class TurnLatencyObserver(_DedupObserver):
         self._t_first_text: float | None = None
         self._t_interrupt: float | None = None
         self._metrics: dict[str, float] = {}
+        self._errors: list[tuple[str, bool]] = []
         self._emitted = False
         self.last_marks: dict | None = None
+
+    def _turn_span_context(self):
+        """OTel context of Pipecat's turn span, or None (tracing off, before turn 1)."""
+        ctx = self._turn_context() if self._turn_context is not None else None
+        return trace.set_span_in_context(NonRecordingSpan(ctx)) if ctx is not None else None
 
     async def on_push_frame(self, data: FramePushed) -> None:
         if not self._first_time(data.frame):
@@ -127,6 +148,11 @@ class TurnLatencyObserver(_DedupObserver):
             self._t_first_text = now
         elif isinstance(frame, InterruptionFrame):
             self._t_interrupt = now
+        elif isinstance(frame, ErrorFrame):
+            # Errors like "SLNG TTS context abandoned" or "Anam avatar does not
+            # exist" otherwise live only in the console: they become events on
+            # the turn's latency span (below) and a filterable count.
+            self._errors.append((frame.error, frame.fatal))
         elif isinstance(frame, MetricsFrame):
             for m in frame.data:
                 if isinstance(m, TTFBMetricsData):
@@ -153,6 +179,20 @@ class TurnLatencyObserver(_DedupObserver):
             marks["ttft_ms"] = round((self._t_first_text - self._t_context) * 1000)
         if self._t_context:
             marks["turn_total_ms"] = round((now - self._t_context) * 1000)
+        if self._errors:
+            marks["n_errors"] = len(self._errors)
         self.last_marks = marks
         logger.bind(session_id=self._session.session_id, user_id=self._session.user_id,
                     turn_id=self._session.current_turn_id or "-").info("turn latency", **marks)
+        # The same marks as a zero-duration `event` under Pipecat's turn span (D16):
+        # one producer, two sinks. Pipecat's own span object is not reachable
+        # from here (only its context), so the errors ride on this span instead.
+        if (ctx := self._turn_span_context()) is None:
+            return
+        attrs = {META_N_ERRORS: len(self._errors),
+                 **{ATTR_LATENCY_PREFIX + k: v for k, v in marks.items() if k != "n_errors"}}
+        if any(fatal for _, fatal in self._errors):
+            attrs[ATTR_OBS_LEVEL] = LEVEL_ERROR
+        with observation("turn.latency", type=OBS_TYPE_EVENT, parent_context=ctx, **attrs) as span:
+            for message, fatal in self._errors:
+                span.add_event(EVENT_ERROR, {"message": message, "fatal": fatal})

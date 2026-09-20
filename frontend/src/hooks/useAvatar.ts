@@ -4,7 +4,7 @@ import {
   connect, fetchConfig, type AgentState, type AvatarSession, type BackendConfig, type Outbound,
 } from '../lib/avatarClient';
 import { readJSON, writeJSON } from '../lib/storage';
-import type { AvatarView, Phase } from '../components/AvatarPanel';
+import { EMPTY_CAPTIONS, type AvatarView, type Captions, type Phase } from '../components/AvatarPanel';
 import { dispatchCommand, type CommandHandler } from './useTvControl';
 
 // A property of the television, not of a profile: whoever sits down next hears the
@@ -21,6 +21,12 @@ export const saveAvatarVideo = (on: boolean): void => writeJSON(VIDEO_KEY, on);
 // carries `avatar=false` and the backend builds the pipeline without one, so nothing is
 // generated and no Anam session is minted. Turning it on or off therefore needs a new
 // session, the same as changing language does.
+
+// Backoff before each automatic reconnect of a session that had been live. A wifi blip
+// is over within a second; a `uvicorn --reload` restart takes two or three. Two attempts
+// keep a dead avatar from spinning silently for long — past ~4 s the backend is down for
+// a reason the viewer should be told about, so the manual button takes over.
+const RECONNECT_BACKOFF_MS = [1000, 3000];
 
 export interface AvatarOptions {
   /** The viewer's profile id; a change restarts the session under the new identity. */
@@ -73,14 +79,28 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
   const [phase, setPhase] = useState<Phase>('off');
   const [message, setMessage] = useState('Choose who is watching to start.');
   const [status, setStatus] = useState<AgentState>('idle');
-  const [lastLine, setLastLine] = useState('');
+  const [captions, setCaptions] = useState<Captions>(EMPTY_CAPTIONS);
   const [language, setLanguageState] = useState(() => readJSON<string>(LANG_KEY, ''));
+  // The avatar's reply arrives one spoken sentence at a time, each marked final; nothing
+  // in the stream says where one reply ends and the next begins. A committed user
+  // utterance is that boundary: the next assistant sentence after it starts a new reply.
+  const newReply = useRef(true);
 
   const session = useRef<AvatarSession | null>(null);
   // One connection at a time. A language switch supersedes whatever the previous
   // attempt was doing, and that attempt's late callbacks must not write over it.
   const gen = useRef(0);
   const mounted = useRef(true);
+  // Automatic reconnects so far in this outage, and the one pending. Only a session that
+  // was live earns them: a first boot that fails is misconfiguration, not a blip, and
+  // retrying it would hide the message that says what is missing.
+  const attempt = useRef(0);
+  const everLive = useRef(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelReconnect = () => {
+    if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = null;
+  };
   // The chosen language, readable from callbacks that must not be rebuilt every
   // time it changes.
   const lang = useRef(language);
@@ -98,10 +118,12 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
 
   const start = useCallback(async (cfg: BackendConfig, code: string) => {
     const mine = ++gen.current;
+    cancelReconnect();
     session.current?.close();
     session.current = null;
     setStatus('idle');
-    setLastLine('');
+    setCaptions(EMPTY_CAPTIONS);
+    newReply.current = true;
 
     const who = avatarForLanguage(cfg, code);
     if (!who) {
@@ -119,6 +141,29 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     setMessage(`Connecting to ${who.name}…`);
 
     const mineStill = () => gen.current === mine && mounted.current;
+
+    // The session is gone either way; this decides what the panel does about it. Retiring
+    // the generation here does double duty: it fences off this attempt's late callbacks
+    // (see onError), and it is what a language switch, user switch, manual retry or unmount
+    // bumps to abandon the pending timer — so the timer checks it rather than `mine`.
+    const fail = (e: Error) => {
+      const retired = ++gen.current;
+      if (!everLive.current || attempt.current >= RECONNECT_BACKOFF_MS.length) {
+        attempt.current = 0;
+        setPhase('error');
+        setMessage(e.message);
+        return;
+      }
+      const delay = RECONNECT_BACKOFF_MS[attempt.current++];
+      setPhase('connecting');
+      setMessage(`Reconnecting to ${who.name}…`);
+      reconnectTimer.current = setTimeout(() => {
+        reconnectTimer.current = null;
+        if (gen.current !== retired || !mounted.current) return;
+        void start(cfg, lang.current);
+      }, delay);
+    };
+
     try {
       const live = await withinDeadline(connect({
         avatar: who.id,
@@ -126,7 +171,18 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
         userId: user.current,
         video: wantVideo.current,
         onStatus: (s) => { if (mineStill()) setStatus(s); },
-        onTranscript: (m) => { if (mineStill() && m.text.trim()) setLastLine(m.text); },
+        onTranscript: (m) => {
+          const text = m.text.trim();
+          if (!mineStill() || !text) return;
+          if (m.role === 'user') {
+            if (m.final) newReply.current = true;
+            setCaptions((c) => ({ ...c, heard: text, settled: m.final }));
+          } else {
+            const fresh = newReply.current;
+            newReply.current = false;
+            setCaptions((c) => ({ ...c, reply: fresh ? text : `${c.reply} ${text}` }));
+          }
+        },
         onCommand: (m) => {
           // A superseded session's late command must not reach the current screen. The
           // socket is opened inside connect(), so by the time a command can arrive
@@ -140,14 +196,12 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
           // <video> keeps playing audio, and the session keeps billing.
           session.current?.close();
           session.current = null;
-          // Retire this generation too. The error can arrive while connect() is still
-          // negotiating, when there is no session to close yet — without this, that
-          // connect() resolves afterwards, passes mineStill(), and overwrites the
-          // error with `live`. Failing the check instead routes it to the branch that
-          // closes the late session.
-          gen.current++;
-          setPhase('error');
-          setMessage(e.message);
+          // fail() retires this generation too. The error can arrive while connect() is
+          // still negotiating, when there is no session to close yet — without that, the
+          // connect() resolves afterwards, passes mineStill(), and overwrites the error
+          // with `live`. Failing the check instead routes it to the branch that closes
+          // the late session.
+          fail(e);
         },
       // A session that lands after the deadline is a paid one nothing references.
       }), `${who.name} did not answer`, (late) => late.close());
@@ -162,20 +216,24 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
       // arrives later, off the back of that gesture's grace period. The session is healthy;
       // only playback was blocked, so the recovery is a gesture, never a new session.
       el.play().then(
-        () => { if (mineStill()) setPhase('live'); },
+        () => { if (mineStill()) { everLive.current = true; attempt.current = 0; setPhase('live'); } },
         () => { if (mineStill()) { setPhase('blocked'); setMessage(`Press OK to hear ${who.name}`); } },
       );
     } catch (err) {
       if (!mineStill()) return;
-      // Retire the generation after a timeout, the way onError does: the abandoned attempt's
-      // status and transcript callbacks would otherwise still pass mineStill() and write over
-      // the error the panel is about to show.
-      if (err instanceof DeadlineError) gen.current++;
+      // fail() retires the generation, which also fences off a timed-out attempt's late
+      // status and transcript callbacks; a timeout during a reconnect is just another
+      // failure for its backoff to decide about.
       const e = err as Error;
-      // A refused microphone is recoverable by a gesture; everything else is not.
-      const blocked = e.name === 'NotAllowedError' || e.name === 'SecurityError';
-      setPhase(blocked ? 'blocked' : 'error');
-      setMessage(blocked ? `Press OK to talk to ${who.name}` : e.message);
+      // A refused microphone is recoverable by a gesture and never by retrying; anything
+      // else during a reconnect is the backend still coming up, and fail() decides
+      // whether to wait for it again.
+      if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
+        setPhase('blocked');
+        setMessage(`Press OK to talk to ${who.name}`);
+        return;
+      }
+      fail(e);
     }
   }, [video]);
 
@@ -188,6 +246,8 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
    */
   const boot = useCallback(async () => {
     const mine = ++gen.current;
+    cancelReconnect();
+    attempt.current = 0;
     session.current?.close();
     session.current = null;
     setPhase('connecting');
@@ -237,9 +297,11 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     };
   }, [opts.ready, boot]);
 
-  // Closing the session belongs to unmount alone; the effect above reruns when `ready` moves.
+  // Closing the session belongs to unmount alone; the effect above reruns when `ready` moves,
+  // and a pending reconnect is part of the session.
   useEffect(() => () => {
     gen.current++;
+    cancelReconnect();
     session.current?.close();
     session.current = null;
   }, []);
@@ -276,6 +338,8 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     if (code === lang.current) return;
     choose(code);
     writeJSON(LANG_KEY, code);
+    // A viewer's own action starts the outage count over, like the button does.
+    attempt.current = 0;
     // Go back to the top unless there is a catalogue worth starting from. An
     // unconfigured backend has one, but connecting against it only strands the panel
     // in "Connecting…", where boot() says plainly what is missing.
@@ -301,7 +365,7 @@ export function useAvatar(video: RefObject<HTMLVideoElement>, opts: AvatarOption
     message,
     avatar: config ? avatarForLanguage(config, language) : null,
     status,
-    lastLine,
+    captions,
     languages: config ? languageOptions(config) : [],
     language,
     videoEnabled: opts.videoEnabled,

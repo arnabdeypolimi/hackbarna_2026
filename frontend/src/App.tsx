@@ -29,6 +29,8 @@ import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
 import { deriveScreenState, fromWireId, searchCatalog, STOPPED, toWireId, type PlaybackReport } from './lib/tvBridge';
 import { TrailerPlayer, type TrailerPlayerHandle } from './components/TrailerPlayer';
 import { UploadIcon } from './components/Icons';
+import { ProductShelf } from './components/ProductShelf';
+import { loadProducts, productsFor, type Product, type ProductMap } from './lib/products';
 
 /** What is on screen: the title, the box it grew out of, and whether it owns the whole stage. */
 interface Playing { item: Title; from: Rect | null; full: boolean }
@@ -73,6 +75,9 @@ export default function App() {
   const [player, setPlayer] = useState<Playing | null>(null);
   const [playback, setPlayback] = useState<PlaybackReport>(STOPPED);
   const [agentRail, setAgentRail] = useState<AgentRail | null>(null);
+  const [products, setProducts] = useState<ProductMap>({});
+  // The title whose shop shelf is open. Pull, never push: only `show_products` sets it.
+  const [shop, setShop] = useState<Title | null>(null);
   const [dragging, setDragging] = useState(false);
   const toast = useToast();
 
@@ -174,7 +179,10 @@ export default function App() {
       stage?.querySelector<HTMLElement>('[data-role="import-empty"]') ||
       stage?.querySelector<HTMLElement>('.tab.cur') ||
       stage?.querySelector<HTMLElement>('.tab');
-    target?.focus();
+    // The track pans to the selection itself. Without this, a far jump (the agent revealing
+    // a title eight posters away) also scrolls the overflow-hidden row wrapper, and the two
+    // shifts stack: the selected poster lands a screen to the left of where it should.
+    target?.focus({ preventScroll: true });
   };
   const focusRow = () => {
     wantRowFocus.current = true;
@@ -224,8 +232,14 @@ export default function App() {
       })
       .catch(() => { if (!cancelled) setStatus({ kind: 'missing' }); });
     initTTS();
+    loadProducts().then((m) => { if (!cancelled) setProducts(m); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // The shelf belongs to one title: arrowing along the row, a search or a new rail puts
+  // another title in the Detail slot, and the products must not outlive the thing they
+  // were seen in.
+  useEffect(() => { if (shop && current?.id !== shop.id) setShop(null); }, [current, shop]);
 
   // Saved lists from before titles had ids can only be matched up once a dataset is here.
   useEffect(() => {
@@ -380,6 +394,7 @@ export default function App() {
     if (themeOpen) return closeThemes();
     if (player) return closePlayer();
     if (dialogOpen) return closeDialog();
+    if (shop) { setShop(null); return focusRow(); }
     if (inSearch || query) { setQuery(''); setSel(0); return focusRow(); }
     if (agentRail) { setAgentRail(null); setSel(0); return focusRow(); }
     if (tab !== 'popular') { selectTab('popular'); return focusRow(); }
@@ -466,8 +481,24 @@ export default function App() {
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.
   const goBack = (): string | void => {
-    if (!overlay && !query && !agentRail && tab === 'popular') return 'already at home';
+    if (!overlay && !shop && !query && !agentRail && tab === 'popular') return 'already at home';
     back(false);
+  };
+  // "What's that jacket?" — the shelf slides in under the row for the title asked about.
+  // A playing trailer gives way: the products sit beside the grid, not over the film.
+  // The row is re-pointed at the title first so the shelf and the Detail slot agree.
+  const showProducts = ({ title_id }: { title_id: string }): string | void => {
+    const t = fromWireId(title_id, catalog);
+    if (!t) return `unknown title ${title_id}`;
+    if (!productsFor(products, t).length) return `nothing to shop for ${t.title}`;
+    reveal(title_id);
+    setShop(t);
+  };
+  // A TV has no checkout. The item goes to the viewer's phone — mocked as a toast and a
+  // user_event, which is the signal a commerce backend would bill on.
+  const pickProduct = (p: Product) => {
+    avatar.send({ type: 'user_event', event: 'product_pick', detail: { product_id: p.id, title_id: shop ? toWireId(shop) : null } });
+    toast.show(`Sent ${p.name} to your phone`);
   };
   // The agent's picks become the row. Ids the loaded dataset does not have are dropped
   // rather than shown as blanks; if none survive the agent is told so and can say it.
@@ -513,17 +544,22 @@ export default function App() {
     close: goBack,
     back: goBack,
     home: () => { if (player) closePlayer(); selectTab('popular'); focusRow(); },
-    show_products: () => 'not supported on this TV',
+    show_products: showProducts,
     show_titles: showTitles,
     search_catalog: ({ query: q, limit }) =>
       searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
   };
 
+  // Dev only: `__tv.show_products({ title_id: '346698' })` from the console exercises a
+  // verb without a voice session behind it. Stripped from production builds.
+  if (import.meta.env.DEV) (window as unknown as { __tv: CommandHandler }).__tv = tv.current;
+
   const screen = useMemo(
     () => deriveScreenState({
       tab, query, agentRail: rail?.label ?? null, row, selIdx, playing: player?.item ?? null, playback,
+      shopping: !!shop, shoppable: (t) => productsFor(products, t).length > 0,
     }),
-    [tab, query, rail, row, selIdx, player, playback],
+    [tab, query, rail, row, selIdx, player, playback, shop, products],
   );
   useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
 
@@ -560,10 +596,11 @@ export default function App() {
   }, []);
 
   // ---------- render ----------
-  const heading = status.kind !== 'ready' ? 'Recommended'
-    : query ? `Results for "${query}"`
-    : rail ? rail.label
-    : TAB_TITLES[tab];
+  const heading = (() => {
+    if (status.kind !== 'ready') return 'Recommended';
+    if (query) return `Results for "${query}"`;
+    return rail ? rail.label : TAB_TITLES[tab];
+  })();
 
   const emptyRow =
     profile.kind === 'kids' && items.length > 0 && !catalog.length ? (
@@ -595,7 +632,9 @@ export default function App() {
                 if (i === selIdx) stageRef.current?.querySelector<HTMLElement>('[data-role="watch"]')?.focus();
                 else selectPoster(i);
               }} />
-              {current && (
+              {current && shop && shop.id === current.id ? (
+                <ProductShelf item={shop} products={productsFor(products, shop)} onPick={pickProduct} />
+              ) : current && (
                 <Detail
                   item={current}
                   saved={myList.includes(current.id)}

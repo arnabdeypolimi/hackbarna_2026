@@ -62,6 +62,21 @@ def test_render_for_prompt_mentions_focused_tile():
     assert "focused" in rendered.lower()
 
 
+def test_render_for_prompt_marks_shoppable_tiles_only():
+    s = SessionStore().create(60, PERSONA)
+    state = _state()
+    state.tiles[1].shoppable = True
+    s.update_screen(state)
+    heat, sicario = [ln for ln in s.render_for_prompt().splitlines() if ln.startswith("  [")]
+    assert "[shop]" not in heat
+    assert "[shop]" in sicario
+
+
+def test_tile_defaults_to_not_shoppable():
+    # Older TV apps do not send the field; they must still validate.
+    assert Tile(title_id="x", name="X", position=0).shoppable is False
+
+
 def test_render_for_prompt_handles_no_state_yet():
     s = SessionStore().create(60, PERSONA)
     assert "unknown" in s.render_for_prompt().lower()

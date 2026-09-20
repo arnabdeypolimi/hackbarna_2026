@@ -10,6 +10,7 @@ InterruptionFrame was seen since the last LLMFullResponseStartFrame, because
 a cut-off turn is not a memory.
 """
 import asyncio
+import contextvars
 from typing import Protocol
 
 from loguru import logger
@@ -27,6 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from tv_avatar.memory.lane import MemoryLane
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import TurnContextFn, task_context
 
 
 class _QueryPrefetcher(Protocol):
@@ -41,8 +43,8 @@ def _text_of(content) -> str:
     return ""
 
 
-def _fire(coro, what: str) -> asyncio.Task:
-    task = asyncio.create_task(coro)
+def _fire(coro, what: str, *, context: contextvars.Context | None = None) -> asyncio.Task:
+    task = asyncio.create_task(coro, context=context)
 
     def _done(t: asyncio.Task) -> None:
         if not t.cancelled() and t.exception() is not None:
@@ -54,12 +56,14 @@ def _fire(coro, what: str) -> asyncio.Task:
 
 class MemoryPrefetchTap(FrameProcessor):
     def __init__(self, lane: MemoryLane, session: SessionState, *, min_chars: int = 6,
-                 recs: _QueryPrefetcher | None = None, **kwargs) -> None:
+                 recs: _QueryPrefetcher | None = None, turn_context: TurnContextFn | None = None,
+                 **kwargs) -> None:
         super().__init__(**kwargs)
         self._lane = lane
         self._session = session
         self._min_chars = min_chars
         self._recs = recs
+        self._turn_context = turn_context
         self._fired_this_utterance = False
         self.prefetch_count = 0
 
@@ -80,7 +84,11 @@ class MemoryPrefetchTap(FrameProcessor):
         self._fired_this_utterance = True
         self.prefetch_count += 1
         user_id = self._session.user_id or self._session.session_id
-        _fire(self._lane.prefetch(user_id, text), "memory prefetch")
+        # The tap opens no span itself (media path); the prefetch task is parented
+        # on Pipecat's current turn so it is not a root — seen live, every root
+        # prefetch became its own "tv-avatar-session" trace in the session view.
+        turn = self._turn_context() if self._turn_context is not None else None
+        _fire(self._lane.prefetch(user_id, text), "memory prefetch", context=task_context(turn))
         if self._recs is not None:
             self._recs.prefetch_query(user_id, text)
         logger.bind(session_id=self._session.session_id, user_id=user_id).debug(

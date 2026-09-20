@@ -1,0 +1,500 @@
+{
+ "name": "turn_plan",
+ "schema": {
+  "$defs": {
+   "Back": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "back",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
+   "Close": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "close",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
+   "Focus": {
+    "additionalProperties": false,
+    "properties": {
+     "title_id": {
+      "type": "string"
+     },
+     "verb": {
+      "const": "focus",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_id"
+    ],
+    "type": "object"
+   },
+   "Home": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "home",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
+   "Navigate": {
+    "additionalProperties": false,
+    "properties": {
+     "count": {
+      "maximum": 20,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "direction": {
+      "enum": [
+       "up",
+       "down",
+       "left",
+       "right"
+      ],
+      "type": "string"
+     },
+     "verb": {
+      "const": "navigate",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "direction",
+     "count"
+    ],
+    "type": "object"
+   },
+   "OpenDetails": {
+    "additionalProperties": false,
+    "properties": {
+     "title_id": {
+      "type": "string"
+     },
+     "verb": {
+      "const": "open_details",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_id"
+    ],
+    "type": "object"
+   },
+   "Pause": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "pause",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
+   "Play": {
+    "additionalProperties": false,
+    "properties": {
+     "resume_from": {
+      "anyOf": [
+       {
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "title_id": {
+      "type": "string"
+     },
+     "verb": {
+      "const": "play",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_id",
+     "resume_from"
+    ],
+    "type": "object"
+   },
+   "RecommendTitles": {
+    "additionalProperties": false,
+    "description": "Internal: ask the recommendation engine for titles; results feed cycle 2.\n\nConstraints are typed so constrained decoding can only emit real TMDB genres;\nthe model — not a keyword list — decides what the user's memory implies.",
+    "properties": {
+     "exclude_genres": {
+      "description": "genres to never return — fill from Memory dislikes (e.g. 'dislikes horror' -> Horror)",
+      "items": {
+       "enum": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Family",
+        "Fantasy",
+        "History",
+        "Horror",
+        "Music",
+        "Mystery",
+        "Romance",
+        "Science Fiction",
+        "TV Movie",
+        "Thriller",
+        "War",
+        "Western"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "genres": {
+      "description": "wanted genres (any match)",
+      "items": {
+       "enum": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Family",
+        "Fantasy",
+        "History",
+        "Horror",
+        "Music",
+        "Mystery",
+        "Romance",
+        "Science Fiction",
+        "TV Movie",
+        "Thriller",
+        "War",
+        "Western"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "maximum": 12,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "query": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "similar_to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "verb": {
+      "const": "recommend_titles",
+      "type": "string"
+     },
+     "year_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "year_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "verb",
+     "query",
+     "genres",
+     "exclude_genres",
+     "year_min",
+     "year_max",
+     "similar_to",
+     "limit"
+    ],
+    "type": "object"
+   },
+   "RejectTitle": {
+    "additionalProperties": false,
+    "description": "Internal: the viewer declined a title that was offered. Recorded in the\nviewing log so it is not recommended again or offered at the next greeting.\nFire-and-forget — no result comes back and no second cycle follows.",
+    "properties": {
+     "title_id": {
+      "type": "string"
+     },
+     "verb": {
+      "const": "reject_title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_id"
+    ],
+    "type": "object"
+   },
+   "Resume": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "resume",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
+   "SearchCatalog": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "query": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "verb": {
+      "const": "search_catalog",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "query",
+     "limit"
+    ],
+    "type": "object"
+   },
+   "Seek": {
+    "additionalProperties": false,
+    "properties": {
+     "delta_seconds": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "to_seconds": {
+      "anyOf": [
+       {
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "verb": {
+      "const": "seek",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "to_seconds",
+     "delta_seconds"
+    ],
+    "type": "object"
+   },
+   "ShowTitles": {
+    "additionalProperties": false,
+    "description": "Put a rail of the agent's picks on screen. `focus` can only highlight a\ntitle already showing; recommendations usually are not, so without this the\nagent could only describe them.",
+    "properties": {
+     "label": {
+      "maxLength": 60,
+      "minLength": 1,
+      "type": "string"
+     },
+     "title_ids": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+     },
+     "verb": {
+      "const": "show_titles",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_ids",
+     "label"
+    ],
+    "type": "object"
+   },
+   "ShowProducts": {
+    "additionalProperties": false,
+    "properties": {
+     "scene_at": {
+      "anyOf": [
+       {
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "title_id": {
+      "type": "string"
+     },
+     "verb": {
+      "const": "show_products",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "title_id",
+     "scene_at"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "actions": {
+    "items": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/Play"
+      },
+      {
+       "$ref": "#/$defs/Pause"
+      },
+      {
+       "$ref": "#/$defs/Resume"
+      },
+      {
+       "$ref": "#/$defs/Seek"
+      },
+      {
+       "$ref": "#/$defs/Navigate"
+      },
+      {
+       "$ref": "#/$defs/Focus"
+      },
+      {
+       "$ref": "#/$defs/OpenDetails"
+      },
+      {
+       "$ref": "#/$defs/Close"
+      },
+      {
+       "$ref": "#/$defs/Back"
+      },
+      {
+       "$ref": "#/$defs/Home"
+      },
+      {
+       "$ref": "#/$defs/ShowProducts"
+      },
+      {
+       "$ref": "#/$defs/SearchCatalog"
+      },
+      {
+       "$ref": "#/$defs/ShowTitles"
+      },
+      {
+       "$ref": "#/$defs/RecommendTitles"
+      },
+      {
+       "$ref": "#/$defs/RejectTitle"
+      }
+     ]
+    },
+    "type": "array"
+   },
+   "intent": {
+    "enum": [
+     "control",
+     "navigate",
+     "recommend",
+     "search",
+     "answer",
+     "chitchat",
+     "clarify"
+    ],
+    "type": "string"
+   },
+   "say": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "intent",
+   "say",
+   "actions"
+  ],
+  "type": "object"
+ },
+ "strict": true
+}

@@ -118,6 +118,7 @@ class TypstCompiler:
                 cmd,
                 cwd=self.work_dir,
                 capture_output=False,
+                check=False,
             )
             elapsed = time.time() - start_time
 
@@ -151,6 +152,7 @@ class TypstCompiler:
                 ["typst", "fonts"],
                 cwd=self.work_dir,
                 capture_output=False,
+                check=False,
             )
             return result.returncode
         except Exception as e:
@@ -170,6 +172,7 @@ class TypstCompiler:
                 ["typst", "query", str(self.typ_file), selector],
                 cwd=self.work_dir,
                 capture_output=False,
+                check=False,
             )
             return result.returncode
         except Exception as e:

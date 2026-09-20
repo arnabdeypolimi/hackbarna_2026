@@ -113,6 +113,7 @@ export interface Tile {
   title_id: string;
   name: string;
   position: number;
+  shoppable?: boolean;
 }
 
 export interface UserEventMsg {

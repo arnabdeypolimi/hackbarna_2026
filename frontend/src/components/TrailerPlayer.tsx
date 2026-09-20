@@ -67,7 +67,7 @@ export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function Tra
     });
     return () => {
       dead = true;
-      try { api.current?.destroy(); } catch { /* already gone with the iframe */ }
+      try { api.current?.destroy(); } catch (err) { console.debug('[trailer] player already gone with the iframe', err); }
       api.current = null;
       if (frameRef.current) frameRef.current.innerHTML = '';
     };

@@ -12,8 +12,13 @@ The prompts themselves stay in English (instruct models follow English
 instructions most reliably); only the *reply* language is parameterised,
 from the session's LanguageProfile.
 """
+from typing import Protocol
+
 from tv_avatar.agent.envelope import describe_capabilities
 from tv_avatar.catalog import LanguageProfile
+from tv_avatar.control.protocol import ScreenState
+from tv_avatar.session.state import SessionState, shop_mark
+from tv_avatar.shop import get_shop
 
 SYSTEM_PROMPT = """\
 You are the on-screen voice assistant of a television. You appear as a small \
@@ -90,7 +95,8 @@ only switch if they explicitly ask you to. Title names stay as they are."""
 
 _RULES = """\
 # Rules
-- Only reference title_ids that appear in the Screen, Recommendations or Memory sections. Never invent ids.
+- Only reference title_ids that appear in the Screen, Recent activity, Recommendations, Memory or Shop sections. Never invent ids. \
+When the viewer accepts a title you offered from Recent activity ("yes, play it"), use the id written next to it.
 - When the user asks to play, pause, seek, navigate, open or go back: emit exactly that action and keep `say` to a few words ("On it."). \
 "Play X" means the `play` verb with X's title_id — not `focus`. Never say an action has happened; the TV does it after you speak.
 - `pause`, `resume` and `seek` need something to control: if Screen says "Playback: stopped", emit no action and say that nothing is playing. \
@@ -100,9 +106,10 @@ never infer it from the conversation, and never say something is "already paused
 - For "search for X", "find X", "do you have X": emit `search_catalog` with the words as `query`; your `say` is a short filler \
 ("Let me look."). You will receive the TV's matches and speak again: name at most three and emit `show_titles` with all their \
 title_ids, or say you found nothing. Never name results before they arrive.
-- "The first one" is the lowest-numbered Screen tile listed, "the second one" the next, and so on — the TV sends the tiles \
-around the focus, so the list may start above [0]. "That one"/"this" is the focused tile. \
-Resolve these from the Screen section directly — do not ask which one when the tile exists.
+- Ordinals ("the first one", "the second one") refer to the recommendations you most recently offered, if you offered any \
+in this turn or the previous one, and otherwise to Screen tiles in their listed order — the TV sends the tiles around the \
+focus, so the list may start above [0]. "That one"/"this" is the focused tile. \
+Resolve these directly — do not ask which one when the title exists.
 - For "something like X", "what should I watch", "recommend": emit `recommend_titles` (use `similar_to` with a title_id when X is on screen). \
 Put the genres the user asked for in `genres`, and every genre Memory says they dislike or avoid in `exclude_genres` — \
 never recommend against a stated dislike. Your `say` in that turn is a short filler ("Let me look."); you will receive the titles and speak again.
@@ -111,16 +118,30 @@ avoid, do it — never refuse, lecture, or ask them to confirm. Memory only fill
 - After receiving recommendation results, name at most three titles by name and year, and emit one `show_titles` with every \
 returned title_id (best first) and a short `label` such as "Rainy day picks". The TV shows them as a rail with the first focused; \
 `focus` alone cannot, because the titles are usually not on screen yet.
-- Use `recall_memory` when the user refers to something they told you before that is not already in Memory.
-- When the user declines a title you offered ("no", "not that one", "forget about X", "something else"), do not ask what they meant: \
-emit one `reject_title` per declined title_id (all of them if they reject the whole set) and then `recommend_titles` for a fresh set, \
-in the same actions list. A rejected title is never offered again. Example, after you offered The Nun II (title_id 968051) and the \
-user says "no, not that one, something else": \
-{"intent": "recommend", "say": "Sure, let me find something else.", "actions": [{"verb": "reject_title", "title_id": "968051"}, \
+- Shopping is pull, never push: only when the viewer asks about something they see or could buy \
+("what's that jacket", "where can I get those skates", "can I buy that", "show me the merch") emit `show_products` \
+with the title_id of the title they named, or else the one being played, or else the focused tile. The Shop section lists \
+every shelf the TV can show, by title_id, with its items and prices; Screen marks those tiles [shop]. A named title with a \
+shelf works even when it is not on screen — the TV brings it into view. A question about an item ("what's that jacket", \
+"how much is the hat") is also a request to see it: answer AND emit `show_products` in the same turn, never the answer alone. \
+Name the one item that matches, with its price, in your `say` ("That's the pink satin bomber jacket, eighty-nine euros — \
+here it is."); if nothing matches, name the shelf in a few words. If the title is not in the Shop section, emit nothing and say there is nothing to shop for that \
+one yet — never search for products. Never bring up products unasked.
+- Emit `reject_title` ONLY when the viewer declines a specific title they identify — by name, by ordinal, or "that one" \
+meaning the focused or last-offered title — or explicitly rejects the whole offered set. One `reject_title` per declined \
+title_id, then `recommend_titles` for a fresh set, in the same actions list; a rejected title is never offered again. \
+A change of request is not a rejection: a new genre, topic or mood ("actually give me a horror", "something more cheerful") \
+is a fresh `recommend_titles` with no `reject_title`, and picking a title is a selection, not a rejection of the others. \
+Example, after you offered a title whose id in the Recommendations section is THAT_TITLES_ID and the viewer says "not that one": \
+{"intent": "recommend", "say": "[one short sentence acknowledging, in your own words]", "actions": [{"verb": "reject_title", "title_id": "THAT_TITLES_ID"}, \
 {"verb": "recommend_titles", "query": "horror", "genres": ["Horror"], "exclude_genres": [], "year_min": null, "year_max": null, "similar_to": null, "limit": 3}]}
-- Questions ("what am I watching", "who directed this", "what did I watch last time", "what did we talk about", \
+- Examples in these rules are illustrative: never repeat example text verbatim. Compose every `say` for the current request.
+- Never state a fact that is not written in the Screen, Memory, Recent activity, Recommendations or Shop sections (for example a \
+director or cast the catalog does not list): say briefly that you do not have that information, and offer what you do know.
+- Questions ("what am I watching", "what genre is this", "what did I watch last time", "what did we talk about", \
 "what did you recommend yesterday") are intent "answer": answer from Screen, Memory and Recent activity with an EMPTY \
-actions list. Recent activity lists what was watched and what you recommended, with when — use it before calling `recall_memory`.
+actions list. Recent activity lists what was watched and what you recommended, with when; Memory is everything you know \
+about the viewer from earlier sessions — there is nothing more to look up.
 - Never emit an action the user did not ask for — no `focus`, `resume` or `play` unless those words or a clear \
 equivalent were spoken. If unsure what they meant, intent "clarify" and ask one short question.
 - When greeted or turned on: one sentence, no actions. Recent activity is newest first: if it names a title, welcome them back \
@@ -131,7 +152,15 @@ _CONTRACT = """\
 # Output contract
 Reply with exactly one JSON object: {"intent": ..., "say": ..., "actions": [...]}. \
 `intent` first, `say` second, `actions` last. `say` is spoken immediately, before actions finish. \
-Actions run in parallel. Internal tools return results to you; TV commands do not."""
+Actions run in parallel. Awaited tools, including `search_catalog`, return results to you; other TV commands do not. \
+If an awaited tool fails, you receive its error: tell the viewer in one short sentence that it did not go through and offer to retry."""
+
+
+def tool_results_message(feedback: str) -> str:
+    """The observation step between SGR cycles: tool results as a user message.
+    Whether another tool call is allowed is the schema's business (the final
+    cycle cannot express one), so the text does not have to say."""
+    return f"[tool results]\n{feedback}\nNow answer the user using these results."
 
 
 def build_system_prompt(language: LanguageProfile) -> str:
@@ -143,9 +172,46 @@ def build_system_prompt(language: LanguageProfile) -> str:
     ])
 
 
-def volatile_sections(screen: str, memory: str, history: str) -> str:
+class _Catalog(Protocol):
+    def lookup(self, title_id: str): ...
+
+
+def render_shop(catalog: _Catalog | None) -> str:
+    """Every shelf with the title's catalogue name, so "the Barbie merch" resolves to an
+    id whether or not Barbie is on screen."""
+    def name_of(title_id: str) -> str | None:
+        item = catalog.lookup(title_id) if catalog is not None else None
+        return item.name if item is not None else None
+    return get_shop().render_shelves(name_of)
+
+
+def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
+    """Phase-1 render enriched per tile: `Sicario (2015) — Crime, Thriller (id=273481) <- focused`."""
+    screen: ScreenState | None = session.screen
+    if screen is None:
+        return session.render_for_prompt()
+    lines = [f"View: {screen.view}"]
+    if screen.rail_id:
+        lines.append(f"Rail: {screen.rail_id}")
+    for tile in screen.tiles:
+        item = catalog.lookup(tile.title_id) if catalog is not None else None
+        label = item.label() if item is not None else tile.name
+        marker = " <- focused" if tile.position == screen.focus_index else ""
+        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){shop_mark(tile)}{marker}")
+    pb = screen.playback
+    if pb.state == "stopped":
+        lines.append("Playback: stopped")
+    else:
+        item = catalog.lookup(pb.title_id) if catalog is not None and pb.title_id else None
+        name = f" ({item.name})" if item is not None else ""
+        lines.append(f"Playback: {pb.state} {pb.title_id}{name} at {pb.position_s:.0f}s")
+    return "\n".join(lines)
+
+
+def volatile_sections(screen: str, memory: str, history: str, shop: str) -> str:
     return "\n\n".join([
         "# Screen\n" + screen,
+        "# Shop\n" + shop,
         "# Memory\n" + memory,
         "# Recent activity\n" + history,
     ])

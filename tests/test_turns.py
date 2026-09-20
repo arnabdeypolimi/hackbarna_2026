@@ -2,7 +2,10 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     InputAudioRawFrame,
+    InterimTranscriptionFrame,
+    VADUserStartedSpeakingFrame,
 )
+from pipecat.turns.types import ProcessFrameResult
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
@@ -10,8 +13,61 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
 from tv_avatar.pipeline.turns import (
     PHANTOM_TURN_TIMEOUT_S,
     MuteWhileBotSpeakingUserMuteStrategy,
+    WordsToBargeInUserTurnStartStrategy,
     user_aggregator_params,
 )
+
+
+def _interim(text: str) -> InterimTranscriptionFrame:
+    return InterimTranscriptionFrame(text=text, user_id="u", timestamp="0")
+
+
+def _start_strategy(min_words: int = 2) -> tuple[WordsToBargeInUserTurnStartStrategy, list]:
+    strategy = WordsToBargeInUserTurnStartStrategy(min_words=min_words)
+    started: list = []
+
+    @strategy.event_handler("on_user_turn_started")
+    async def _on_started(_strategy, *args, **kwargs):
+        started.append(True)
+
+    return strategy, started
+
+
+async def test_vad_alone_starts_a_turn_while_the_avatar_is_silent():
+    strategy, started = _start_strategy()
+    assert await strategy.process_frame(VADUserStartedSpeakingFrame()) is ProcessFrameResult.STOP
+    assert started == [True]
+
+
+async def test_vad_alone_does_not_interrupt_the_avatar():
+    """Speaker echo trips Silero; without words it must not cut the reply (2026-09-20)."""
+    strategy, started = _start_strategy()
+    await strategy.process_frame(BotStartedSpeakingFrame())
+    assert await strategy.process_frame(VADUserStartedSpeakingFrame()) is ProcessFrameResult.CONTINUE
+    assert await strategy.process_frame(_interim("the")) is ProcessFrameResult.CONTINUE
+    assert started == []
+
+
+async def test_enough_words_interrupt_the_avatar():
+    strategy, started = _start_strategy(min_words=2)
+    await strategy.process_frame(BotStartedSpeakingFrame())
+    assert await strategy.process_frame(_interim("wait stop")) is ProcessFrameResult.STOP
+    assert started == [True]
+
+
+async def test_vad_start_works_again_once_the_avatar_stops():
+    strategy, started = _start_strategy()
+    await strategy.process_frame(BotStartedSpeakingFrame())
+    await strategy.process_frame(BotStoppedSpeakingFrame())
+    assert await strategy.process_frame(VADUserStartedSpeakingFrame()) is ProcessFrameResult.STOP
+    assert started == [True]
+
+
+def test_barge_in_word_threshold_is_configurable():
+    params = user_aggregator_params(barge_in_min_words=3)
+    (start,) = params.user_turn_strategies.start
+    assert isinstance(start, WordsToBargeInUserTurnStartStrategy)
+    assert start._min_words == 3
 
 
 async def test_half_duplex_mutes_only_while_bot_speaks():
@@ -51,9 +107,12 @@ def test_turn_ends_on_a_silence_timer_not_the_smart_turn_model():
 def test_settings_carry_the_silence_threshold(monkeypatch):
     from tv_avatar.config import Settings
     for k, v in {"NEBIUS_API_KEY": "x", "SLNG_API_KEY": "x",
-                 "ANAM_API_KEY": "x", "ANAM_AVATAR_ID": "x", "TURN_SILENCE_S": "0.8"}.items():
+                 "ANAM_API_KEY": "x", "ANAM_AVATAR_ID": "x", "TURN_SILENCE_S": "0.8",
+                 "BARGE_IN_MIN_WORDS": "3"}.items():
         monkeypatch.setenv(k, v)
-    assert Settings(_env_file=None).turn_silence_s == 0.8
+    settings = Settings(_env_file=None)
+    assert settings.turn_silence_s == 0.8
+    assert settings.barge_in_min_words == 3
 
 
 def test_half_duplex_installs_the_mute_strategy():
