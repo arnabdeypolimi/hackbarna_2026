@@ -4177,6 +4177,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "loguru" },
     { name = "openai" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -4207,6 +4208,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "openai", specifier = ">=3.16.2" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.33,<2" },

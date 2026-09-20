@@ -23,6 +23,7 @@ import { ExitDialog } from './components/ExitDialog';
 import { Profiles } from './components/Profiles';
 import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
+import { WeatherTheme } from './weather/WeatherTheme';
 import { Toast, useToast } from './components/Toast';
 import { loadAvatarVideo, saveAvatarVideo, useAvatar } from './hooks/useAvatar';
 import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
@@ -619,6 +620,7 @@ export default function App() {
       {/* Outside the stage so it fills the window, whatever shape a desktop gives it; the stage scales inside. */}
       {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
       <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
+      <WeatherTheme theme={theme} themeOpen={themeOpen} paused={!!player || status.kind === 'loading'} motion={tunes[theme.id].motion} />
       {/* Any trailer, inline or full: while a moving image is on screen the room stands square. */}
       <Stage ref={stageRef} flat={!!player} solo={!roomOpen}>
         <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
