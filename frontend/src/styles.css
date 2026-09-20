@@ -231,11 +231,12 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 
 /* Anam sends a 2:3 portrait. At the panel's 468px of inner width that is 702px tall and the
    panel has 825px in total, so the frame is cropped to head and shoulders — the part of a
-   talking head that carries at ten feet anyway. 570 is what the rest of the live panel
-   leaves: 43 for the name, 60 for the two transcript lines, 100 for the chips (two rows,
-   because Sora wraps Català off the first) and 48 of gaps — 821, with 4px of slack. */
+   talking head that carries at ten feet anyway. 533 is what the rest of the live panel
+   leaves: 43 for the name, 97 for the captions (one heard line, two reply lines, 8 between),
+   100 for the chips (two rows, because Sora wraps Català off the first) and 48 of gaps —
+   821, with 4px of slack. */
 .face {
-  position: relative; flex: none; height: 570px;
+  position: relative; flex: none; height: 533px;
   border-radius: 30px; overflow: hidden; background: rgba(0, 0, 0, 0.35);
 }
 .face video {
@@ -266,14 +267,29 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .pill[data-state="listening"] { background: rgba(95, 208, 187, 0.22); color: var(--kids); }
 .pill[data-state="speaking"] { background: rgba(255, 255, 255, 0.28); color: var(--ink); }
 
-/* flex: none because .say is the only child with overflow: hidden, which makes its automatic
-   minimum size 0 — any overflow in the column lands entirely on it, crushing two clamped
-   lines into one clipped one before -webkit-line-clamp ever gets to act. */
-.say {
-  margin: 0; flex: none; font-size: 21px; line-height: 1.4; color: var(--ink-2);
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; height: 60px;
+/* flex: none because the captions are the only child with overflow: hidden, which makes
+   their automatic minimum size 0 — any overflow in the column would land entirely on them
+   and crush the rows before they get to clip. */
+.captions {
+  margin: 0; flex: none; display: grid; grid-template-columns: auto 1fr;
+  column-gap: var(--gap-item); row-gap: 8px; align-items: end;
 }
+.captions dt {
+  font-size: 16px; font-weight: 500; color: var(--ink-2); opacity: 0.7;
+  line-height: 29px; white-space: nowrap;
+}
+/* Each row is a fixed-height window onto text that may run longer than it, anchored at the
+   bottom so the clipped part is the oldest: the words just heard and the sentence being
+   spoken are what the viewer is checking against their ears. */
+.say {
+  margin: 0; font-size: 21px; line-height: 1.4; color: var(--ink-2);
+  display: flex; align-items: flex-end; overflow: hidden;
+}
+.say span { display: block; width: 100%; overflow-wrap: anywhere; }
+.heard { height: 29px; color: var(--ink); }
+/* An interim guess the recogniser may still revise reads as provisional until it settles. */
+.heard[data-settled="false"] { color: var(--ink-2); font-style: italic; }
+.reply { height: 59px; }
 
 /* margin-top: auto pins the picker to the bottom of the panel whatever is above it. */
 .langs { display: flex; flex-wrap: wrap; gap: var(--gap-item); margin-top: auto; }
