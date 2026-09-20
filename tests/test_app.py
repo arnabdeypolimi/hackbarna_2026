@@ -231,6 +231,37 @@ def test_delete_session_requires_token_and_then_closes_everything():
             assert ws.receive_json()["code"] == "unauthorized"
 
 
+@pytest.mark.parametrize("ok,error", [(False, "catalog unavailable"), (False, None), (True, None)])
+def test_search_ack_releases_only_rejected_searches(ok, error):
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        bus = app.state.manager.bus_for(body["session_id"])
+        url = f"/sessions/{body['session_id']}/control?token={body['control_token']}"
+        with c.websocket_connect(url) as ws:
+            ws.receive_json()
+            pending = c.portal.start_task_soon(bus.dispatch, "search_catalog", {"query": "space"}, "turn_1")
+            try:
+                command = ws.receive_json()
+                ws.send_json({"v": 1, "type": "ack", "command_id": "unknown", "ok": False})
+                ws.send_json({"v": 99})
+                assert ws.receive_json()["code"] == "unsupported_version"
+                assert not pending.done()
+                ws.send_json({"v": 1, "type": "ack", "command_id": command["id"], "ok": ok, "error": error})
+                ws.send_json({"v": 99})
+                assert ws.receive_json()["code"] == "unsupported_version"
+                if ok:
+                    assert not pending.done()
+                    expected = {"titles": []}
+                    ws.send_json({"v": 1, "type": "result", "command_id": command["id"], "data": expected})
+                else:
+                    expected = {"status": "error", "reason": error or "command rejected"}
+                assert pending.result(timeout=1) == expected
+                assert c.portal.call(bus.pending_count) == 0
+            finally:
+                pending.cancel()
+
+
 def test_command_result_over_the_socket_is_a_linked_event_span(otel):
     """The TV's reply closes the loop: a `tv.command_result` event linked to the
     `tv.command` it answers, carrying the session id from the channel's own scope."""

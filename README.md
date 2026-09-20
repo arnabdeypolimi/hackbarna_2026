@@ -115,6 +115,8 @@ missing key does.
 | `PATCH` | `/sessions/{id}/offer?token=` | Trickle ICE candidate |
 | `DELETE` | `/sessions/{id}` | Explicit hang-up; token in the `X-Control-Token` header |
 | `WS` | `/sessions/{id}/control?token=` | Control channel |
+| `GET` | `/shop` | The shop catalogue (`products.json`), for the TV to hold in memory |
+| `GET` | `/shop/{title_id}` | One title's shelf; 404 when there is nothing to shop |
 
 The offer endpoint takes two query flags: `avatar=false` runs the voice loop with no
 talking head, and `halfduplex=true` mutes the microphone while the avatar speaks. Half-duplex
@@ -133,13 +135,16 @@ missing field.
 - **Client → server:** `screen_state`, `ack`, `result`, `user_event`
 - **Server → client:** `command`, `agent_status`, `transcript`, `error`
 
-Twelve command verbs are defined in `src/tv_avatar/agent/commands.py`: `play`, `pause`,
+Thirteen command verbs are defined in `src/tv_avatar/agent/commands.py`: `play`, `pause`,
 `resume`, `seek`, `navigate`, `focus`, `open_details`, `close`, `back`, `home`,
-`show_products`, `search_catalog`.
+`show_products`, `search_catalog`, `show_titles`.
 
 Commands are **fire-and-forget** — the backend never waits for the TV app, because a slow
 client would stall the LLM turn and stall speech with it. `search_catalog` is the single
-exception: it blocks the turn for at most 400 ms and then answers `{"status": "unavailable"}`.
+exception: it waits for the TV's result, a failed acknowledgment, or turn cancellation,
+with no default deadline. A successful acknowledgment alone does not finish a search.
+The engineering `/demo/` console logs commands but does not answer catalog searches;
+use the TV frontend for catalog replies.
 
 Commands are also **turn-scoped**. When the viewer barges in, commands the interrupted turn
 had queued but not yet sent are dropped. Commands already on the wire are never rolled back.
@@ -305,9 +310,10 @@ interruption behaviour, the control protocol with a mock client, and the agent l
 `AGENT_IMPL=sgr` (default) runs `SGRAgentService`: a Schema-Guided-Reasoning agent whose
 every cycle is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
 decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel. A
-result that must be spoken — `recommend_titles`, or any awaited action that *failed* — buys
-one more cycle, up to `AGENT_MAX_CYCLES` (default 2); every follow-up cycle has
-`CYCLE_FIRST_BYTE_S` to start speaking before the results are read from a template instead.
+reply from an awaited tool — `recommend_titles` or `search_catalog`, including failures —
+buys one more cycle, up to `AGENT_MAX_CYCLES` (default 2). The final cycle's schema excludes
+observation-returning tools. `CYCLE_FIRST_BYTE_S=0` disables the follow-up speech deadline;
+a positive value enables a first-byte budget and a templated fallback.
 
 - **Recommendations** — a TMDB slice indexed in embedded Qdrant with the local
   `multilingual-e5-small` (~15 ms per query). Build it once:
@@ -332,9 +338,16 @@ Text-mode smoke, no speech keys needed:
 uv run python tools/smoke_turn.py --user couch_1 "something like Sicario" "no, not the first one"
 ```
 
-Not built yet: **M4** latency instrumentation beyond the console and the per-turn log line;
-**M5** shoppable products and persona polish. The session store is an in-memory dict —
-swapping in Redis touches `SessionStore` and nothing else.
+**M5** shoppable products: `show_products` slides a three-product shelf in under the TV's
+poster row, pulled only when the viewer asks ("what's that jacket?"). The catalogue is
+`products.json` at the repo root (override with `PRODUCTS_FILE`), served at `/shop`; tiles
+the TV can shop carry `shoppable: true` in the screen state and render in the prompt as
+`[shop]`. A separate `# Shop` section lists every shelf's title, items and prices, including
+off-screen titles, so the agent names the item while the shelf arrives.
+
+**M4** latency instrumentation is available through the opt-in tracing described above.
+Persona polish remains. The session store is an in-memory dict — swapping in Redis touches
+`SessionStore` and nothing else.
 
 ### The frontend
 

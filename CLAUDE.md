@@ -157,3 +157,9 @@ drops queued commands, so a delayed action cannot enqueue after turn cancellatio
 Verify integrations with `uv run pytest` at the root and `npm run build` in `frontend/`.
 The frontend auto-connects to paid providers when the backend is configured; use a static
 build server without the backend proxy for a UI-only preview.
+
+Shop context is rendered by the shared `agent/prompt.py` helpers: `SGRAgentService` and
+`ScreenContextInjector` each include it on their own path. Keep off-screen shelves in
+`# Shop` and `[shop]` markers in `# Screen`; neither path may depend on the other's prompt.
+A failed command acknowledgment releases a pending search with an error observation;
+a successful acknowledgment still waits for the catalog result.

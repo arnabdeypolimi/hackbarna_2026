@@ -9,7 +9,12 @@ pollutes the conversation (D9). Every other frame passes through untouched.
 from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from tv_avatar.agent.prompt import _Catalog, build_system_prompt, render_screen
+from tv_avatar.agent.prompt import (
+    _Catalog,
+    build_system_prompt,
+    render_screen,
+    render_shop,
+)
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.session.state import SessionState
 
@@ -37,6 +42,7 @@ class ScreenContextInjector(FrameProcessor):
         system = "\n\n".join([
             build_system_prompt(self._session.persona.language),
             "# Screen\n" + render_screen(self._session, self._catalog),
+            "# Shop\n" + render_shop(self._catalog),
             "# Recent activity\n" + history,
         ])
         messages = [m for m in frame.context.get_messages() if m.get("role") != "system"]

@@ -45,8 +45,17 @@ def test_facts_outside_the_sections_are_not_stated():
     # has no director field.
     prompt = _prompt()
     assert "Never state a fact that is not written in the Screen, Memory, " \
-           "Recent activity or Recommendations sections" in prompt
+           "Recent activity, Recommendations or Shop sections" in prompt
     assert "say briefly that you do not have that information" in prompt
+
+
+def test_shop_ids_and_prices_are_allowed_without_reviving_removed_tools():
+    prompt = _prompt()
+    id_rule = prompt.split("Only reference title_ids", 1)[1].split("\n", 1)[0]
+    assert "Shop" in id_rule
+    assert "Shopping is pull, never push" in prompt
+    assert "only for title_ids listed in the Shop section" in prompt
+    assert "recall_memory" not in prompt
 
 
 def test_ordinals_refer_to_the_most_recently_offered_recommendations():

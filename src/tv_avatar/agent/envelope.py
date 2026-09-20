@@ -87,7 +87,7 @@ _TV_DOCS: dict[Verb, str] = {
     Verb.CLOSE: "close the current overlay/details",
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
-    Verb.SHOW_PRODUCTS: "show products visible in a scene",
+    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title — its outfits and merchandise; only for title_ids listed in the Shop section",
     Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
     Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
 }

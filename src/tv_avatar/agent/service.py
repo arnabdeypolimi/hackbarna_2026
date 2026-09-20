@@ -44,6 +44,7 @@ from tv_avatar.agent.prompt import (
     greeting_brief,
     is_greeting,
     render_screen,
+    render_shop,
     volatile_sections,
 )
 from tv_avatar.agent.tools import InternalTools
@@ -337,7 +338,8 @@ class SGRAgentService(LLMService):
         rest = [m for i, m in enumerate(rest)
                 if i == len(rest) - 1 or not is_greeting(_text_of(m))][-MAX_HISTORY_MESSAGES:]
         system = build_system_prompt(self._session.persona.language) + "\n\n" + volatile_sections(
-            render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary)
+            render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary,
+            render_shop(self._catalog))
         return [{"role": "system", "content": system}, *rest]
 
     async def dispatch_action(self, action: BaseModel, ctx: TurnContext) -> dict:

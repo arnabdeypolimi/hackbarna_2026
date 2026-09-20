@@ -91,6 +91,8 @@ class ControlChannel:
             case "ack":
                 if not msg.ok:
                     self._log.warning("command {} failed: {}", msg.command_id, msg.error)
+                    self._bus.resolve(msg.command_id, {
+                        "status": "error", "reason": msg.error or "command rejected"})
                 self._record_reply(msg.command_id, "ok" if msg.ok else "failed",
                                    {"ok": msg.ok, "error": msg.error})
             case "user_event":

@@ -417,6 +417,48 @@ async def test_system_prompt_carries_screen_memory_and_history():
     assert client.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+@pytest.mark.parametrize("screen_kind", ["unknown", "offscreen", "onscreen"])
+async def test_shop_context_reaches_sgr_without_the_injector(monkeypatch, screen_kind):
+    from tv_avatar.control.protocol import Playback, ScreenState, Tile
+    from tv_avatar.shop import ShopCatalog
+
+    shop = ShopCatalog.model_validate({"346698": [{
+        "id": "bomber", "name": "Pink Satin Bomber Jacket", "brand": "Dreamhouse",
+        "price": "€89", "image": "products/bomber.jpg",
+    }]})
+    monkeypatch.setattr("tv_avatar.agent.prompt.get_shop", lambda: shop)
+    reply = ('{"intent":"control","say":"The jacket is eighty-nine euros.",'
+             '"actions":[{"verb":"show_products","title_id":"346698"}]}')
+    client, bus, sink = FakeOpenAI([reply]), RecordingBus(), TimingSink()
+    agent = _agent(client, bus)
+    agent._cfg.agent_max_cycles = 1
+    agent._catalog = SimpleNamespace(lookup=lambda title_id: SimpleNamespace(
+        name="Barbie", label=lambda: "Barbie (2023)") if title_id == "346698" else None)
+    if screen_kind != "unknown":
+        tile = (Tile(title_id="346698", name="Barbie", position=0, shoppable=True)
+                if screen_kind == "onscreen"
+                else Tile(title_id="565770", name="Blue Beetle", position=0))
+        agent._session.update_screen(ScreenState(
+            view="grid", focus_index=0, tiles=[tile], playback=Playback(state="stopped")))
+    context = _ctx("show me the Barbie jacket")
+    context.add_message({"role": "system", "content": "# Shop\nSTALE SHELF"})
+    await _run(agent, sink, [LLMContextFrame(context=context)])
+
+    system = client.calls[0]["messages"][0]["content"]
+    assert system.count("# Shop\n") == 1
+    assert "# Shop\n- Barbie (id=346698): Pink Satin Bomber Jacket €89" in system
+    assert "STALE SHELF" not in system
+    screen = system.split("# Screen\n")[1].split("\n\n# ")[0]
+    if screen_kind == "onscreen":
+        assert "Barbie (2023) (id=346698) [shop] <- focused" in screen
+    else:
+        assert "Barbie" not in screen
+    command = await bus.next_outbound()
+    assert command.verb == "show_products" and command.args == {"title_id": "346698"}
+    assert len(client.calls) == 1
+    assert _spoken(sink) == ["The jacket is eighty-nine euros."]
+
+
 def _sections(system: str) -> list[str]:
     return [line for line in system.splitlines() if line.startswith("# ")]
 

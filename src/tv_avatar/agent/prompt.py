@@ -17,7 +17,8 @@ from typing import Protocol
 from tv_avatar.agent.envelope import describe_capabilities
 from tv_avatar.catalog import LanguageProfile
 from tv_avatar.control.protocol import ScreenState
-from tv_avatar.session.state import SessionState
+from tv_avatar.session.state import SessionState, shop_mark
+from tv_avatar.shop import get_shop
 
 SYSTEM_PROMPT = """\
 You are the on-screen voice assistant of a television. You appear as a small \
@@ -94,7 +95,7 @@ only switch if they explicitly ask you to. Title names stay as they are."""
 
 _RULES = """\
 # Rules
-- Only reference title_ids that appear in the Screen, Recent activity, Recommendations or Memory sections. Never invent ids. \
+- Only reference title_ids that appear in the Screen, Recent activity, Recommendations, Memory or Shop sections. Never invent ids. \
 When the viewer accepts a title you offered from Recent activity ("yes, play it"), use the id written next to it.
 - When the user asks to play, pause, seek, navigate, open or go back: emit exactly that action and keep `say` to a few words ("On it."). \
 "Play X" means the `play` verb with X's title_id — not `focus`. Never say an action has happened; the TV does it after you speak.
@@ -117,6 +118,15 @@ avoid, do it — never refuse, lecture, or ask them to confirm. Memory only fill
 - After receiving recommendation results, name at most three titles by name and year, and emit one `show_titles` with every \
 returned title_id (best first) and a short `label` such as "Rainy day picks". The TV shows them as a rail with the first focused; \
 `focus` alone cannot, because the titles are usually not on screen yet.
+- Shopping is pull, never push: only when the viewer asks about something they see or could buy \
+("what's that jacket", "where can I get those skates", "can I buy that", "show me the merch") emit `show_products` \
+with the title_id of the title they named, or else the one being played, or else the focused tile. The Shop section lists \
+every shelf the TV can show, by title_id, with its items and prices; Screen marks those tiles [shop]. A named title with a \
+shelf works even when it is not on screen — the TV brings it into view. A question about an item ("what's that jacket", \
+"how much is the hat") is also a request to see it: answer AND emit `show_products` in the same turn, never the answer alone. \
+Name the one item that matches, with its price, in your `say` ("That's the pink satin bomber jacket, eighty-nine euros — \
+here it is."); if nothing matches, name the shelf in a few words. If the title is not in the Shop section, emit nothing and say there is nothing to shop for that \
+one yet — never search for products. Never bring up products unasked.
 - Emit `reject_title` ONLY when the viewer declines a specific title they identify — by name, by ordinal, or "that one" \
 meaning the focused or last-offered title — or explicitly rejects the whole offered set. One `reject_title` per declined \
 title_id, then `recommend_titles` for a fresh set, in the same actions list; a rejected title is never offered again. \
@@ -126,7 +136,7 @@ Example, after you offered a title whose id in the Recommendations section is TH
 {"intent": "recommend", "say": "[one short sentence acknowledging, in your own words]", "actions": [{"verb": "reject_title", "title_id": "THAT_TITLES_ID"}, \
 {"verb": "recommend_titles", "query": "horror", "genres": ["Horror"], "exclude_genres": [], "year_min": null, "year_max": null, "similar_to": null, "limit": 3}]}
 - Examples in these rules are illustrative: never repeat example text verbatim. Compose every `say` for the current request.
-- Never state a fact that is not written in the Screen, Memory, Recent activity or Recommendations sections (for example a \
+- Never state a fact that is not written in the Screen, Memory, Recent activity, Recommendations or Shop sections (for example a \
 director or cast the catalog does not list): say briefly that you do not have that information, and offer what you do know.
 - Questions ("what am I watching", "what genre is this", "what did I watch last time", "what did we talk about", \
 "what did you recommend yesterday") are intent "answer": answer from Screen, Memory and Recent activity with an EMPTY \
@@ -166,6 +176,15 @@ class _Catalog(Protocol):
     def lookup(self, title_id: str): ...
 
 
+def render_shop(catalog: _Catalog | None) -> str:
+    """Every shelf with the title's catalogue name, so "the Barbie merch" resolves to an
+    id whether or not Barbie is on screen."""
+    def name_of(title_id: str) -> str | None:
+        item = catalog.lookup(title_id) if catalog is not None else None
+        return item.name if item is not None else None
+    return get_shop().render_shelves(name_of)
+
+
 def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
     """Phase-1 render enriched per tile: `Sicario (2015) — Crime, Thriller (id=273481) <- focused`."""
     screen: ScreenState | None = session.screen
@@ -178,7 +197,7 @@ def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
         item = catalog.lookup(tile.title_id) if catalog is not None else None
         label = item.label() if item is not None else tile.name
         marker = " <- focused" if tile.position == screen.focus_index else ""
-        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){marker}")
+        lines.append(f"  [{tile.position}] {label} (id={tile.title_id}){shop_mark(tile)}{marker}")
     pb = screen.playback
     if pb.state == "stopped":
         lines.append("Playback: stopped")
@@ -189,9 +208,10 @@ def render_screen(session: SessionState, catalog: _Catalog | None) -> str:
     return "\n".join(lines)
 
 
-def volatile_sections(screen: str, memory: str, history: str) -> str:
+def volatile_sections(screen: str, memory: str, history: str, shop: str) -> str:
     return "\n\n".join([
         "# Screen\n" + screen,
+        "# Shop\n" + shop,
         "# Memory\n" + memory,
         "# Recent activity\n" + history,
     ])
