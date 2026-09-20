@@ -625,7 +625,6 @@ async def test_turn_produces_llm_recall_cycle_action_spans(otel):
     recall, = spans["agent.recall"]
     assert recall.parent.span_id == llm.context.span_id
     assert recall.attributes["langfuse.observation.type"] == "retriever"
-    assert recall.attributes["langfuse.observation.metadata.source"] == "empty"
     cycle, = spans["agent.cycle"]
     assert cycle.parent.span_id == llm.context.span_id and cycle.attributes["tv.cycle.max"] == 2
     assert cycle.attributes["langfuse.observation.type"] == "generation"

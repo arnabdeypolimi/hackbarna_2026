@@ -39,6 +39,7 @@ from tv_avatar.control.protocol import (
 from tv_avatar.logging import setup_logging
 from tv_avatar.runtime import build_runtime
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import session_scope, setup_tracing, shutdown_tracing
 
 DEFAULT_TURNS = [
     "something like Sicario, but newer",
@@ -71,6 +72,7 @@ class Sink(FrameProcessor):
 async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
     settings = SmokeSettings()
     setup_logging(settings.log_level)
+    traced = setup_tracing(settings)
     runtime = build_runtime(settings)
     if runtime.catalog is None:
         logger.error("catalog missing — run tools/build_catalog.py --limit 500 first")
@@ -93,10 +95,34 @@ async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
                           timeout_s=settings.tool_timeout_s)
     agent = SGRAgentService(settings, bus, runtime.lane, runtime.recs, runtime.history, session,
                             catalog=runtime.catalog, tools=tools, recorder=runtime.recorder)
+    if traced:
+        # No PipelineTask here, so no StartFrame carries enable_tracing and no turn
+        # tracker parents the `llm` span: it is a root per turn, which is the
+        # quickest way to inspect the agent subtree in isolation.
+        original_setup = agent.setup
+
+        async def traced_setup(cfg):
+            await original_setup(cfg)
+            agent._tracing_enabled = True
+
+        agent.setup = traced_setup
 
     print(f"\nuser_id={user_id}  screen: " + " | ".join(t.label() for t in tiles) + "\n")
     if greet:
         turns = [greeting_instruction(session.persona.language), *turns]
+    with session_scope(session, settings):
+        await _run_turns(agent, bus, context, runtime, session, turns, user_id)
+    profile = getattr(runtime.lane, "read_profile", lambda _u: "")(user_id)
+    if profile:
+        print("memory profile after this session:\n  " + profile.replace("\n", "\n  ") + "\n")
+    await runtime.close()
+    if traced:
+        shutdown_tracing()
+        print(f"traced {len(turns)} turn(s) for session_id={session.session_id}")
+    return 0
+
+
+async def _run_turns(agent, bus, context, runtime, session, turns, user_id) -> None:
     for text in turns:
         sink = Sink()
         context.add_message({"role": "user", "content": text})
@@ -129,11 +155,6 @@ async def main(user_id: str, turns: list[str], *, greet: bool = False) -> int:
         # The agent ingests the turn itself at turn end (or on interruption).
     # What the pipeline runner does when the session ends: consolidate the transcript.
     await runtime.lane.finish_session(user_id)
-    profile = getattr(runtime.lane, "read_profile", lambda _u: "")(user_id)
-    if profile:
-        print("memory profile after this session:\n  " + profile.replace("\n", "\n  ") + "\n")
-    await runtime.close()
-    return 0
 
 
 if __name__ == "__main__":

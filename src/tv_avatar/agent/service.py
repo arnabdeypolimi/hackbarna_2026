@@ -73,7 +73,6 @@ from tv_avatar.tracing import (
     META_GREETING,
     META_INTERRUPTED,
     META_KIND,
-    META_SOURCE,
     META_STATUS,
     META_VERB,
     OBS_TYPE_RETRIEVER,
@@ -241,8 +240,9 @@ class SGRAgentService(LLMService):
                 history_text = (await self._history.render_for_prompt(user_id, self._catalog)
                                 if self._history is not None else "Recently watched: (none yet)")
                 metrics.recall_ms = ctx.elapsed_ms()
+                # `source` (prefetch hit / search / stale) lives on the child
+                # `memory.recall` span; this one carries what the prompt got.
                 recall.set_attributes({
-                    META_SOURCE: "stale" if memory.stale else "empty" if memory.empty else "hit",
                     ATTR_MEMORY_EMPTY: memory.empty, ATTR_MEMORY_STALE: memory.stale,
                     ATTR_MEMORY_TOKEN_EST: memory.token_est, ATTR_HISTORY_CHARS: len(history_text),
                     ATTR_OBS_OUTPUT: memory.render_for_prompt(),
