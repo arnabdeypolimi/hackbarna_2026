@@ -34,13 +34,31 @@ function userId() {
   return id;
 }
 
+// Tiles are built from DOM nodes: title names, genres and poster paths come from the
+// catalog service and must never be interpolated into HTML.
+function tile(t, focused) {
+  const div = document.createElement("div");
+  div.className = focused ? "tile focused" : "tile";
+  div.dataset.id = t.title_id;
+  if (t.poster_path && /^\/[\w.-]+$/.test(t.poster_path)) {
+    const img = document.createElement("img");
+    img.src = `https://image.tmdb.org/t/p/w185${t.poster_path}`;
+    img.alt = "";
+    div.appendChild(img);
+  }
+  const name = document.createElement("div");
+  name.textContent = t.name;
+  div.appendChild(name);
+  if (t.year) {
+    const meta = document.createElement("small");
+    meta.textContent = `${t.year}${t.genres ? " · " + t.genres.slice(0, 2).join(", ") : ""}`;
+    div.appendChild(meta);
+  }
+  return div;
+}
+
 function render() {
-  $("grid").innerHTML = TITLES.map((t, i) => {
-    const poster = t.poster_path
-      ? `<img src="https://image.tmdb.org/t/p/w185${t.poster_path}" alt="" />` : "";
-    const meta = t.year ? `<small>${t.year}${t.genres ? " · " + t.genres.slice(0, 2).join(", ") : ""}</small>` : "";
-    return `<div class="tile ${i === focus ? "focused" : ""}" data-id="${t.title_id}">${poster}<div>${t.name}</div>${meta}</div>`;
-  }).join("");
+  $("grid").replaceChildren(...TITLES.map((t, i) => tile(t, i === focus)));
   const name = TITLES.find((t) => t.title_id === playback.title_id)?.name || playback.title_id;
   $("playback").textContent =
     playback.state === "stopped" ? "stopped" : `${playback.state} ${name} @ ${Math.floor(playback.position_s)}s`;
@@ -152,8 +170,11 @@ async function start() {
   ws = new WebSocket(`${proto}://${location.host}${session.control_url}?token=${session.control_token}`);
   ws.onopen = () => { log("control socket open"); pushScreenState(); };
   ws.onclose = () => log("control socket closed");
+  const expectedOrigin = `${proto}://${location.host}`;
   ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
+    if (ev.origin && ev.origin !== expectedOrigin) return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { log("< unreadable control frame"); return; }
     if (msg.type === "command") { log(`< ${ev.data}`); apply(msg); }
     else if (msg.type === "agent_status") $("status").textContent = msg.state;
     else if (msg.type === "transcript") {
