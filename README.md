@@ -169,8 +169,11 @@ src/tv_avatar/
     envelope.py           the SGR turn envelope: intent / say / actions, plus internal tools
     service.py            SGRAgentService — streams `say` sentence by sentence, dispatches actions
     stream_parse.py       incremental parser for the streamed envelope
-    tools.py              internal tools: recommend_titles, recall_memory, reject_title
-    injector.py           stamps screen / history sections into the system prompt per turn
+    loop.py               TurnRunner — the bounded SGR cycle loop, independent of Pipecat
+    turn.py               typed turn state: TurnContext / TurnMetrics / ToolResult / TurnTrace
+    tools.py              internal tools: recommend_titles, reject_title
+    fallback.py           the templated answer for a cycle that blows its budget
+    injector.py           stamps screen / history sections — AGENT_IMPL=stub only
     prompt.py             system prompts, written for the ear rather than the screen
     llm.py                provider construction + the deterministic scripted stub
   memory/
@@ -281,6 +284,10 @@ These came out of measurement on 2026-09-19, not from defaults:
   Silero VAD, not the smart-turn model. A timer is predictable and cannot hold a turn open
   on a "sounds unfinished" verdict. Speaker echo trips VAD without producing words, so a
   turn with VAD activity and no transcript is abandoned after 2 s.
+- **The echo guard is opt-in** (`ECHO_FILTER`, default off). It drops user transcripts that
+  mostly repeat the avatar's last words, but word overlap cannot tell echo from a correction
+  that reuses a title: "no, die hard" right after the avatar named "No Hard Feelings" was
+  swallowed. Browser AEC and `BARGE_IN_MIN_WORDS` are the defence without it.
 - **SLNG regional routing is a header**, `X-World-Part-Override`. Per-region hostnames such
   as `eu.api.slng.ai` do not resolve.
 
@@ -296,10 +303,11 @@ interruption behaviour, the control protocol with a mock client, and the agent l
 ### Agent layer (phase 2)
 
 `AGENT_IMPL=sgr` (default) runs `SGRAgentService`: a Schema-Guided-Reasoning agent whose
-every turn is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
-decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel;
-internal tools (`recommend_titles`, `recall_memory`) earn one bounded second cycle to speak
-their results, with a templated fallback if the model is late.
+every cycle is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
+decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel. A
+result that must be spoken — `recommend_titles`, or any awaited action that *failed* — buys
+one more cycle, up to `AGENT_MAX_CYCLES` (default 2); every follow-up cycle has
+`CYCLE_FIRST_BYTE_S` to start speaking before the results are read from a template instead.
 
 - **Recommendations** — a TMDB slice indexed in embedded Qdrant with the local
   `multilingual-e5-small` (~15 ms per query). Build it once:
@@ -311,8 +319,10 @@ their results, with a templated fallback if the model is late.
 - **Viewing log** — `data/history.db`: what was played, what the agent offered, what the
   viewer declined (`reject_title`). The greeting and the recommender take titles from here.
 - **Memory** — one profile per viewer in `data/memory/<user_id>/profile.md`, rewritten by
-  the LLM from the session transcript when the session ends (crash-safe: leftovers are
-  folded in at the next start). Durable preferences and tone, readable and editable by hand.
+  the LLM from the session transcript when the session ends *and* every
+  `MEMORY_REFRESH_EVERY_TURNS` ingests (default 6), so what was said early in a long session
+  is back in the prompt before it ends. Crash-safe: leftovers are folded in at the next start.
+  Durable preferences and tone, readable and editable by hand.
 - **Viewer identity** — `POST /sessions {"user_id": "..."}`; sessions come and go, the
   couch persists.
 
