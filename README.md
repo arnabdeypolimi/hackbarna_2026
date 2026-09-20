@@ -230,6 +230,46 @@ behaviour. End-to-end is manual, through the console at `/demo/`.
 
 ---
 
+## Tracing
+
+Every session can be seen as one tree in [Langfuse](https://langfuse.com): Pipecat's own
+`conversation → turn → stt / tts` spans, and under each turn the agent's
+`llm → agent.recall / agent.cycle → agent.action → tv.command`, the memory lane
+(`memory.prefetch`, `memory.recall`, `memory.ingest`, `memory.finish_session`), the recommender
+(`recs.recommend`), the observer's `turn.latency` marks and the TV's `tv.command_result` acks —
+with prompts, envelopes, timings and, where the endpoint reports it, token usage. OpenTelemetry is
+the only instrumentation API; Langfuse is an OTLP/HTTP sink (no `langfuse` SDK). Off by default,
+and never on the media path: spans are attribute writes, export is batched on a background thread.
+
+```dotenv
+TRACING_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com      # EU; US: https://us.cloud.langfuse.com
+```
+
+```bash
+uv run python tools/langfuse_smoke.py                     # export one span, read it back: 5 s
+npx langfuse-cli api traces list --sessionId <session_id> # read a real session back
+npx langfuse-cli api traces get <trace_id>
+```
+
+Every span of a session carries `sessionId` and `userId` (propagated as OTel baggage), so both
+filter across observations, not just traces. Filterable facts live under
+`langfuse.observation.metadata.*` (`intent`, `cycles`, `fallback`, `interrupted`, `verb`, `status`,
+`source`, `trigger`, `query_embed`); details are `tv.*` attributes on the span. Each span declares
+its Langfuse observation type: `agent.cycle` and `memory.finish_session` are `generation`s,
+`agent.action` and `tv.command` are `tool`s, the recall/recs spans are `retriever`s.
+
+- `TRACE_CONTENT=false` strips prompts, transcripts, envelopes and spoken text from every span
+  (Pipecat's included) before export.
+- Any OTLP/HTTP collector instead of Langfuse: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
+  (e.g. `docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one`). It wins over the keys.
+- The full span vocabulary and the decisions behind it:
+  [`docs/superpowers/plans/2026-09-19-tv-avatar-observability.md`](docs/superpowers/plans/2026-09-19-tv-avatar-observability.md).
+
+---
+
 ## Measured decisions
 
 These came out of measurement on 2026-09-19, not from defaults:
