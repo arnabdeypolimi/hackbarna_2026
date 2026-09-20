@@ -71,9 +71,9 @@ class ActionSpec:
 
     @property
     def returns_observation(self) -> bool:
-        """The reply is fed back to the LLM for another cycle. A *failed* reply of
-        any awaited action is fed back regardless (`ToolResult.is_observation`)."""
-        return self.kind == "internal" and self.awaits_result
+        """Awaited replies feed another LLM cycle, whether from an internal tool
+        or a TV search. The final cycle excludes these actions from its schema."""
+        return self.awaits_result
 
 
 _TV_DOCS: dict[Verb, str] = {
@@ -88,7 +88,8 @@ _TV_DOCS: dict[Verb, str] = {
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
     Verb.SHOW_PRODUCTS: "show products visible in a scene",
-    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; the TV shows the results — you hear back only if it fails",
+    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
+    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
 }
 
 REGISTRY: dict[str, ActionSpec] = {

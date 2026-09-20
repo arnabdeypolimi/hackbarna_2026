@@ -1,29 +1,40 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { Profile, Rect, Tab, Title } from './types/title';
 import { DATA_URL, MAX_FILE_BYTES } from './config';
 import { toTitles } from './lib/csv';
-import { buildRow, pickResume, TAB_TITLES } from './lib/rows';
+import { buildRow, TAB_TITLES } from './lib/rows';
 import { readJSON, writeJSON } from './lib/storage';
 import { catalogFor } from './lib/maturity';
 import {
   dropProfileData, historyKey, listKey, loadActiveId, loadProfiles, refileByTitle, saveActiveId, saveProfiles,
 } from './lib/profiles';
-import { BACK_KEYS, KEY, exitApp, initTTS, speak } from './lib/titan';
+import { BACK_KEYS, KEY, THEME_KEYS, exitApp, initTTS, speak } from './lib/titan';
+import {
+  applyTheme, loadChoice, loadTunes, msToNextSeason, resolve, saveChoice, saveTunes, type ThemeChoice, type Tune, type Tunes,
+} from './lib/theme';
 import { DIRS, findNext, isVisible, type Dir } from './lib/spatialNav';
 import { Stage } from './components/Stage';
 import { SearchBar } from './components/SearchBar';
 import { PosterRow } from './components/PosterRow';
 import { Detail } from './components/Detail';
-import { ResumePanel } from './components/ResumePanel';
+import { AvatarPanel } from './components/AvatarPanel';
 import { TabBar } from './components/TabBar';
 import { ExitDialog } from './components/ExitDialog';
 import { Profiles } from './components/Profiles';
+import { ThemePicker } from './components/ThemePicker';
+import { SkyVideo } from './components/SkyVideo';
 import { Toast, useToast } from './components/Toast';
-import { TrailerPlayer } from './components/TrailerPlayer';
+import { useAvatar } from './hooks/useAvatar';
+import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
+import { deriveScreenState, fromWireId, searchCatalog, STOPPED, toWireId, type PlaybackReport } from './lib/tvBridge';
+import { TrailerPlayer, type TrailerPlayerHandle } from './components/TrailerPlayer';
 import { UploadIcon } from './components/Icons';
 
 /** What is on screen: the title, the box it grew out of, and whether it owns the whole stage. */
 interface Playing { item: Title; from: Rect | null; full: boolean }
+
+/** A rail the agent put up (`show_titles`): its picks, under its own heading, until the viewer moves on. */
+interface AgentRail { label: string; items: Title[] }
 
 type Status =
   | { kind: 'loading' }
@@ -40,10 +51,18 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>(loadProfiles);
   const [activeId, setActiveId] = useState<string>(() => loadActiveId(profiles));
   const [myList, setMyList] = useState<string[]>(() => readJSON(listKey(activeId), []));
-  const [history, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
+  // Write-only since the resume panel left: nothing renders history today, but Watch
+  // keeps recording it because the agent will want it.
+  const [, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>(loadChoice);
+  const [clock, setClock] = useState(0); // bumped when the season may have changed
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [tunes, setTunes] = useState<Tunes>(loadTunes);
   const [player, setPlayer] = useState<Playing | null>(null);
+  const [playback, setPlayback] = useState<PlaybackReport>(STOPPED);
+  const [agentRail, setAgentRail] = useState<AgentRail | null>(null);
   const [dragging, setDragging] = useState(false);
   const toast = useToast();
 
@@ -51,18 +70,44 @@ export default function App() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const profilesRef = useRef<HTMLDivElement>(null);
   const profilesBack = useRef<() => boolean>(() => false);
+  const themesRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<HTMLDivElement>(null);
+  const trailer = useRef<TrailerPlayerHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
+  const avatarVideo = useRef<HTMLVideoElement>(null);
+  // Assigned below, once the actions it calls exist; useAvatar only reads it on a command.
+  const tv = useRef<CommandHandler | null>(null);
+  const avatar = useAvatar(avatarVideo, { userId: activeId, commands: tv });
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
   const catalog = useMemo(() => catalogFor(items, profile), [items, profile]);
-  const row = useMemo(() => buildRow(catalog, tab, query, myList), [catalog, tab, query, myList]);
+  // A typed search outranks the agent's rail; clearing the search brings the rail back.
+  const rail = query ? null : agentRail;
+  const row = useMemo(
+    () => (rail ? rail.items : buildRow(catalog, tab, query, myList)),
+    [catalog, tab, query, myList, rail],
+  );
   const selIdx = Math.min(sel, Math.max(0, row.length - 1));
   const current: Title | undefined = row[selIdx];
-  const resume = useMemo(() => pickResume(catalog, history), [catalog, history]);
+
+  // ---------- theme ----------
+  // `clock` moves once a day at most, so this settles on one of four objects.
+  const theme = useMemo(() => resolve(themeChoice, new Date()), [themeChoice, clock]);
+  // Before paint, so the room never shows a frame of the wrong sky.
+  useLayoutEffect(() => { applyTheme(theme, tunes[theme.id]); }, [theme, tunes]);
+  // On auto the room follows the calendar: wake when the season ends rather than polling.
+  useEffect(() => {
+    if (themeChoice !== 'auto') return;
+    const tick = () => setClock((n) => n + 1);
+    const id = window.setTimeout(tick, msToNextSeason(new Date()));
+    // A set that slept through a boundary would otherwise come back on the wrong sky.
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.clearTimeout(id); document.removeEventListener('visibilitychange', onVisible); };
+  }, [themeChoice, clock]);
 
   // ---------- focus helpers ----------
   // Focus the selected poster once the DOM reflects the latest state: after the next
@@ -150,6 +195,7 @@ export default function App() {
    */
   const watch = (item: Title) => {
     setHistory((h) => { const next = { ...h, [item.id]: Date.now() }; writeJSON(historyKey(activeId), next); return next; });
+    avatar.send({ type: 'user_event', event: 'watch', detail: { title_id: toWireId(item) } });
     if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
     prevFocus.current = document.activeElement as HTMLElement;
     // It grows out of the browse panel, so the film opens from where the viewer was looking.
@@ -172,11 +218,12 @@ export default function App() {
     const next = had ? myList.filter((k) => k !== item.id) : [...myList, item.id];
     setMyList(next);
     writeJSON(listKey(activeId), next);
+    avatar.send({ type: 'user_event', event: had ? 'unsave' : 'save', detail: { title_id: toWireId(item) } });
     toast.show(had ? `Removed ${item.title} from My List` : `Saved ${item.title} to My List`);
     if (had && tab === 'list' && !query) focusRow();
   };
 
-  const selectTab = (t: Tab) => { setTab(t); setQuery(''); setSel(0); };
+  const selectTab = (t: Tab) => { setTab(t); setQuery(''); setAgentRail(null); setSel(0); };
 
   // ---------- profiles ----------
   const openProfiles = () => { prevFocus.current = document.activeElement as HTMLElement; setProfilesOpen(true); };
@@ -198,6 +245,7 @@ export default function App() {
     setPlayer(null);
     setTab('popular');
     setQuery('');
+    setAgentRail(null);
     setSel(0);
   };
 
@@ -222,6 +270,15 @@ export default function App() {
     if (gone) toast.show(`Deleted ${gone.name}`, 'alert');
   };
 
+  const pickTheme = (choice: ThemeChoice) => { setThemeChoice(choice); saveChoice(choice); };
+  const tuneTheme = (tune: Tune) => { const next = { ...tunes, [theme.id]: tune }; setTunes(next); saveTunes(next); };
+  const openThemes = () => { prevFocus.current = document.activeElement as HTMLElement; setThemeOpen(true); };
+  const closeThemes = () => {
+    setThemeOpen(false);
+    const back = prevFocus.current;
+    requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
+  };
+
   const openTrailer = (item: Title) => {
     if (!item.trailerKey) { toast.show(`No trailer available for ${item.title}`, 'alert'); return; }
     prevFocus.current = document.activeElement as HTMLElement;
@@ -243,6 +300,7 @@ export default function App() {
   };
   const closePlayer = () => {
     setPlayer(null);
+    setPlayback(STOPPED);
     const prev = prevFocus.current;
     requestAnimationFrame(() => (prev && document.contains(prev) ? prev.focus() : focusRow()));
   };
@@ -257,9 +315,11 @@ export default function App() {
 
   const back = (inSearch: boolean) => {
     if (profilesOpen) { if (!profilesBack.current()) closeProfiles(); return; }
+    if (themeOpen) return closeThemes();
     if (player) return closePlayer();
     if (dialogOpen) return closeDialog();
     if (inSearch || query) { setQuery(''); setSel(0); return focusRow(); }
+    if (agentRail) { setAgentRail(null); setSel(0); return focusRow(); }
     if (tab !== 'popular') { selectTab('popular'); return focusRow(); }
     openDialog();
   };
@@ -267,6 +327,7 @@ export default function App() {
   // ---------- remote control ----------
   const move = (dir: Dir, active: HTMLElement | null) => {
     const scope = profilesOpen ? profilesRef.current
+      : themeOpen ? themesRef.current
       : player ? playerRef.current
       : dialogOpen ? dialogRef.current
       : stageRef.current;
@@ -317,11 +378,92 @@ export default function App() {
       back(inSearch);
       return;
     }
-    if (dialogOpen || player || profilesOpen) return;
+    if (dialogOpen || player || profilesOpen || themeOpen) return;
     if (e.keyCode === KEY.RED && current) toggleSave(current);
     else if (e.keyCode === KEY.YELLOW) fileRef.current?.click();
+    // Not from the search box, where G is a letter the viewer is typing.
+    else if (THEME_KEYS.includes(e.keyCode) && !inText) openThemes();
     else if ((e.keyCode === KEY.PLAY || e.keyCode === KEY.PLAY_PAUSE) && current) watch(current);
   };
+
+  // ---------- the agent ----------
+  // Bring a title on screen and focus it. Resolved against the whole catalogue, not the
+  // visible row: a recommendation the agent just made may not be on the rail the viewer
+  // is on, and the search rail is the app's only way to show an arbitrary title.
+  const reveal = (title_id: string): string | void => {
+    const t = fromWireId(title_id, catalog);
+    if (!t) return `unknown title ${title_id}`;
+    if (player) closePlayer();
+    const at = row.indexOf(t);
+    if (at >= 0) return selectPoster(at);
+    // The search rail keeps catalogue order, so a title whose name is a prefix of others
+    // ("Moon" → Moonfall) need not land at 0: focus where the new row will actually put it.
+    setQuery(t.title);
+    selectPoster(Math.max(0, buildRow(catalog, tab, t.title, myList).indexOf(t)));
+  };
+  // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
+  // nothing to go back from should not.
+  const goBack = (): string | void => {
+    if (!profilesOpen && !player && !dialogOpen && !query && !agentRail && tab === 'popular') return 'already at home';
+    back(false);
+  };
+  // The agent's picks become the row. Ids the loaded dataset does not have are dropped
+  // rather than shown as blanks; if none survive the agent is told so and can say it.
+  const showTitles = ({ title_ids, label }: { title_ids: string[]; label: string }): string | void => {
+    const items = title_ids.map((id) => fromWireId(id, catalog)).filter((t): t is Title => !!t);
+    if (!items.length) return 'none of those titles are on this TV';
+    if (player) closePlayer();
+    setQuery('');
+    setAgentRail({ label, items });
+    selectPoster(0);
+  };
+
+  tv.current = {
+    play: ({ title_id }) => {
+      const t = fromWireId(title_id, catalog);
+      if (!t) return `unknown title ${title_id}`;
+      if (!t.trailerKey) return `no trailer for ${t.title}`;
+      if (player) closePlayer();
+      watch(t);
+    },
+    pause: () => (player ? trailer.current?.pause() : 'nothing is playing'),
+    resume: () => (player ? trailer.current?.resume() : 'nothing is playing'),
+    seek: ({ to_seconds, delta_seconds }) => {
+      if (!player) return 'nothing is playing';
+      if (to_seconds != null) trailer.current?.seekTo(to_seconds);
+      else if (delta_seconds != null) trailer.current?.seekBy(delta_seconds);
+    },
+    navigate: ({ direction, count }) => {
+      const n = count ?? 1;
+      const active = document.activeElement as HTMLElement | null;
+      // Along the row the target is computed once: move() reads selIdx from this render's
+      // closure, so calling it n times would step to the same neighbour n times.
+      if (active?.classList.contains('poster') && (direction === 'left' || direction === 'right')) {
+        const target = Math.max(0, Math.min(row.length - 1, selIdx + (direction === 'right' ? n : -n)));
+        if (target === selIdx) return `already at the ${direction === 'right' ? 'end' : 'start'} of the row`;
+        return selectPoster(target);
+      }
+      // Elsewhere each step is a synchronous DOM focus change, so repeating works.
+      for (let i = 0; i < n; i++) move(direction, document.activeElement as HTMLElement | null);
+    },
+    focus: ({ title_id }) => reveal(title_id),
+    open_details: ({ title_id }) => reveal(title_id),
+    close: goBack,
+    back: goBack,
+    home: () => { if (player) closePlayer(); selectTab('popular'); focusRow(); },
+    show_products: () => 'not supported on this TV',
+    show_titles: showTitles,
+    search_catalog: ({ query: q, limit }) =>
+      searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
+  };
+
+  const screen = useMemo(
+    () => deriveScreenState({
+      tab, query, agentRail: rail?.label ?? null, row, selIdx, playing: player?.item ?? null, playback,
+    }),
+    [tab, query, rail, row, selIdx, player, playback],
+  );
+  useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
 
   // One listener for the app's lifetime that always calls the latest handler.
   const keyHandler = useRef(onKey);
@@ -356,7 +498,10 @@ export default function App() {
   }, []);
 
   // ---------- render ----------
-  const heading = status.kind !== 'ready' ? 'Recommended' : query ? `Results for "${query}"` : TAB_TITLES[tab];
+  const heading = status.kind !== 'ready' ? 'Recommended'
+    : query ? `Results for "${query}"`
+    : rail ? rail.label
+    : TAB_TITLES[tab];
 
   const emptyRow =
     profile.kind === 'kids' && items.length > 0 && !catalog.length ? (
@@ -371,82 +516,87 @@ export default function App() {
     );
 
   return (
-    <Stage ref={stageRef}>
-      <div className="room" />
-      <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
-      <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={onFile} />
+    <>
+      {/* Outside the stage so it fills the window, whatever shape a desktop gives it; the stage scales inside. */}
+      {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
+      <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
+      <Stage ref={stageRef}>
+        <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
+        <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={onFile} />
 
-      <section className="panel main">
-        <h1>{heading}{profile.kind === 'kids' && <span className="kidsflag">Kids</span>}</h1>
-        {status.kind === 'ready' ? (
-          <>
-            <PosterRow items={row} sel={selIdx} saved={myList} empty={emptyRow} onPick={(i) => {
-              if (i === selIdx) stageRef.current?.querySelector<HTMLElement>('[data-role="watch"]')?.focus();
-              else selectPoster(i);
-            }} />
-            {current && (
-              <Detail
-                item={current}
-                saved={myList.includes(current.id)}
-                onWatch={() => watch(current)}
-                onSave={() => toggleSave(current)}
-                onTrailer={() => openTrailer(current)}
-              />
-            )}
-          </>
-        ) : (
-          <div className="empty data-state">
-            {status.kind === 'loading' && <b>Loading titles…</b>}
-            {status.kind === 'missing' && (
-              <>
-                <b>No titles yet</b>
-                Add your dataset as public/data/titles.csv and reload, or load a CSV file now to try it.
-                <div className="actions">
-                  <button className="btn f" data-role="import-empty" onClick={() => fileRef.current?.click()}>
-                    <UploadIcon />Load titles
-                  </button>
-                </div>
-              </>
-            )}
-            {status.kind === 'error' && (<><b>Couldn't read titles.csv</b>{status.message}</>)}
-          </div>
+        <section className="panel main">
+          <h1>{heading}{profile.kind === 'kids' && <span className="kidsflag">Kids</span>}</h1>
+          {status.kind === 'ready' ? (
+            <>
+              <PosterRow items={row} sel={selIdx} saved={myList} empty={emptyRow} onPick={(i) => {
+                if (i === selIdx) stageRef.current?.querySelector<HTMLElement>('[data-role="watch"]')?.focus();
+                else selectPoster(i);
+              }} />
+              {current && (
+                <Detail
+                  item={current}
+                  saved={myList.includes(current.id)}
+                  onWatch={() => watch(current)}
+                  onSave={() => toggleSave(current)}
+                  onTrailer={() => openTrailer(current)}
+                />
+              )}
+            </>
+          ) : (
+            <div className="empty data-state">
+              {status.kind === 'loading' && <b>Loading titles…</b>}
+              {status.kind === 'missing' && (
+                <>
+                  <b>No titles yet</b>
+                  Add your dataset as public/data/titles.csv and reload, or load a CSV file now to try it.
+                  <div className="actions">
+                    <button className="btn f" data-role="import-empty" onClick={() => fileRef.current?.click()}>
+                      <UploadIcon />Load titles
+                    </button>
+                  </div>
+                </>
+              )}
+              {status.kind === 'error' && (<><b>Couldn't read titles.csv</b>{status.message}</>)}
+            </div>
+          )}
+          {player && !player.full && (
+            <TrailerPlayer
+              ref={trailer} item={player.item} from={player.from} scopeRef={playerRef}
+              onClose={closePlayer} onPlayback={setPlayback}
+            />
+          )}
+        </section>
+
+        <AvatarPanel view={avatar} videoRef={avatarVideo} />
+
+        <TabBar tab={tab} highlight={!query && !rail} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
+
+        {player && player.full && (
+          <TrailerPlayer
+            ref={trailer} item={player.item} from={player.from} full scopeRef={playerRef}
+            onClose={closePlayer} onPlayback={setPlayback}
+          />
         )}
-        {player && !player.full && (
-          <TrailerPlayer item={player.item} from={player.from} scopeRef={playerRef} onClose={closePlayer} />
-        )}
-      </section>
 
-      <ResumePanel
-        item={resume}
-        onContinue={() => resume && watch(resume)}
-        onEpisodes={() => resume && toast.show(`Opening episodes of ${resume.title}`)}
-        onRemind={() => resume && toast.show(`We'll remind you about ${resume.title} later`)}
-      />
-
-      <TabBar tab={tab} highlight={!query} profile={profile} onSelect={selectTab} onProfile={openProfiles} />
-
-      <div className="hint">
-        <span><i className="dot red" />Save to My List</span>
-      </div>
-
-      {player && player.full && (
-        <TrailerPlayer item={player.item} from={player.from} full scopeRef={playerRef} onClose={closePlayer} />
-      )}
-
-      <Toast message={toast.message} kind={toast.kind} visible={toast.visible} />
-      {dragging && <div className="drop">Drop your CSV to load it</div>}
-      <ExitDialog open={dialogOpen} scopeRef={dialogRef} onStay={closeDialog} onExit={exit} />
-      <Profiles
-        open={profilesOpen}
-        profiles={profiles}
-        activeId={activeId}
-        scopeRef={profilesRef}
-        backRef={profilesBack}
-        onPick={switchProfile}
-        onSave={writeProfiles}
-        onDelete={removeProfile}
-        onNotice={toast.show}
-      />
-    </Stage>
+        <Toast message={toast.message} kind={toast.kind} visible={toast.visible} />
+        {dragging && <div className="drop">Drop your CSV to load it</div>}
+        <ExitDialog open={dialogOpen} scopeRef={dialogRef} onStay={closeDialog} onExit={exit} />
+        <Profiles
+          open={profilesOpen}
+          profiles={profiles}
+          activeId={activeId}
+          scopeRef={profilesRef}
+          backRef={profilesBack}
+          onPick={switchProfile}
+          onSave={writeProfiles}
+          onDelete={removeProfile}
+          onNotice={toast.show}
+        />
+        <ThemePicker
+          open={themeOpen} choice={themeChoice} theme={theme} tune={tunes[theme.id]}
+          scopeRef={themesRef} onPick={pickTheme} onTune={tuneTheme} onClose={closeThemes}
+        />
+      </Stage>
+    </>
   );
 }

@@ -38,7 +38,7 @@ def test_registry_covers_every_union_member():
 
 def test_registry_classification():
     tv = REGISTRY["search_catalog"]
-    assert tv.kind == "tv" and tv.awaits_result and not tv.returns_observation
+    assert tv.kind == "tv" and tv.awaits_result and tv.returns_observation
     assert REGISTRY["play"].kind == "tv" and not REGISTRY["play"].awaits_result
     rec = REGISTRY["recommend_titles"]
     assert rec.kind == "internal" and rec.awaits_result and rec.returns_observation
@@ -54,8 +54,12 @@ def test_final_schema_has_no_observation_tools():
     wrapped = turn_plan_schema(final=True)
     assert wrapped["name"] == "turn_plan_final" and wrapped["strict"] is True
     items = wrapped["schema"]["properties"]["actions"]["items"]
-    assert len(items["anyOf"]) == len(REGISTRY) - 1
+    assert len(items["anyOf"]) == len(REGISTRY) - 2
     assert "RecommendTitles" not in wrapped["schema"]["$defs"]
+    assert "SearchCatalog" not in wrapped["schema"]["$defs"]
+    with pytest.raises(ValidationError):
+        parse_action({"verb": "search_catalog", "query": "space"}, final=True)
+    assert parse_action({"verb": "show_titles", "title_ids": ["1"]}, final=True).verb == Verb.SHOW_TITLES
     assert list(wrapped["schema"]["properties"]) == ["intent", "say", "actions"]
     with pytest.raises(ValidationError):
         parse_action({"verb": "recommend_titles", "query": "heist"}, final=True)

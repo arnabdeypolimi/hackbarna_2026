@@ -89,6 +89,15 @@ function apply(msg) {
       break;
     case "show_products":
       break;
+    case "show_titles": {
+      // The mock has no other rails: the picks replace the tiles, first one focused.
+      const byId = new Map(TITLES.map((t) => [t.title_id, t]));
+      const shown = a.title_ids.map((id) => byId.get(id) || { title_id: id, name: id });
+      TITLES = shown;
+      focus = 0;
+      log(`rail "${a.label}": ${shown.map((t) => t.name).join(", ")}`);
+      break;
+    }
     case "search_catalog":
       ws.send(JSON.stringify({ v: V, type: "result", command_id: msg.id,
         data: { titles: TITLES.slice(0, a.limit || 10).map((t) => ({ title_id: t.title_id, name: t.name })) } }));

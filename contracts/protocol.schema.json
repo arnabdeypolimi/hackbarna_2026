@@ -530,6 +530,38 @@
       ],
       "title": "ShowProducts",
       "type": "object"
+    },
+    "show_titles": {
+      "description": "Put a rail of the agent's picks on screen. `focus` can only highlight a\ntitle already showing; recommendations usually are not, so without this the\nagent could only describe them.",
+      "properties": {
+        "label": {
+          "default": "For you",
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "title_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Title Ids",
+          "type": "array"
+        },
+        "verb": {
+          "const": "show_titles",
+          "default": "show_titles",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_ids"
+      ],
+      "title": "ShowTitles",
+      "type": "object"
     }
   },
   "protocol_version": 1,

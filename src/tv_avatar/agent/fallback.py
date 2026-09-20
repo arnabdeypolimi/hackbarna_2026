@@ -7,13 +7,16 @@ def render_fallback(results: tuple[ToolResult, ...]) -> tuple[str, list[tuple[st
     """Spoken answer + TV actions built from tool results without an LLM call."""
     for r in results:
         verb, result = r.verb, r.payload
-        if verb == "recommend_titles":
+        if verb == "recommend_titles" or (verb == "search_catalog" and "titles" in result and not r.failed):
             titles = result.get("titles") or []
             if not titles:
                 return ("I couldn't find anything matching that right now. Want to try something else?", [])
             names = [f"{t['name']} from {t['year']}" if t.get("year") else t["name"] for t in titles[:3]]
             spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f", or {names[-1]}"
-            return (f"How about {spoken}?", [("focus", {"title_id": titles[0]["title_id"]})])
+            lead = "How about" if verb == "recommend_titles" else "I found"
+            label = "For you" if verb == "recommend_titles" else "Search results"
+            return (f"{lead} {spoken}{'?' if verb == 'recommend_titles' else '.'}",
+                    [("show_titles", {"title_ids": [t["title_id"] for t in titles[:20]], "label": label})])
         if r.failed:
             return ("Sorry, the TV didn't respond to that. Could you try again?", [])
     return ("Sorry, that took too long. Could you say it again?", [])

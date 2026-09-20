@@ -346,6 +346,11 @@ on 1–1.5 GB TV boards. It has its own README, its own toolchain and its own da
 cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
 
-It is **not yet wired to this backend.** Watch, Episodes and Continue record local history
-and report what they would do; the YouTube trailer player is the only real playback surface.
-Connecting those seams to the control protocol above is the work that joins the two halves.
+The sky loops in `frontend/public/sky/` are Git LFS objects: clone with `git lfs` installed, or
+that folder holds pointer files and the room stays still.
+
+It is **connected to this backend** through WebRTC and the control WebSocket. The avatar
+can search, display recommendation rails, navigate and control the YouTube trailer player,
+which remains the only real playback surface. The TV sends screen state and viewer events
+back to the agent using the generated protocol types. See `frontend/README.md` for setup;
+loading the frontend with a configured backend opens a paid avatar session automatically.

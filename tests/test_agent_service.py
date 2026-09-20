@@ -150,6 +150,77 @@ async def test_say_reaches_tts_as_sentences_before_actions_dispatch():
     assert (await bus.next_outbound()).verb == "play"
 
 
+SPACE_SEARCH_1 = '{"intent":"search","say":"Let me look.","actions":[{"verb":"search_catalog","query":"space"}]}'
+SPACE_SEARCH_2 = ('{"intent":"search","say":"I found Gravity and Moon.",'
+                  '"actions":[{"verb":"show_titles","title_ids":["49047","17431"],"label":"Search results"}]}')
+TV_HITS = {"titles": [{"title_id": "49047", "name": "Gravity"}, {"title_id": "17431", "name": "Moon"}]}
+
+
+class AnsweringBus(RecordingBus):
+    """A TV that answers search_catalog straight away, like the frontend does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dispatched: list[str] = []
+
+    async def dispatch(self, verb, args, turn_id):
+        self.dispatched.append(verb)
+        if verb == "search_catalog":
+            async def answer():
+                msg = await self.next_outbound()
+                self.resolve(msg.id, TV_HITS)
+            asyncio.get_running_loop().create_task(answer())
+        return await super().dispatch(verb, args, turn_id)
+
+
+async def test_search_catalog_result_is_fed_back_for_a_second_cycle():
+    """The TV answers within the budget; its titles must reach the model and be spoken,
+    not discarded after the filler (the field bug: 'Let me look.' and silence)."""
+    bus, sink = AnsweringBus(), TimingSink()
+    client = FakeOpenAI([SPACE_SEARCH_1, SPACE_SEARCH_2])
+    agent = _agent(client, bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert len(client.calls) == 2
+    assert "Gravity" in client.calls[1]["messages"][-1]["content"]
+    assert _spoken(sink) == ["Let me look.", "I found Gravity and Moon."]
+    command = await bus.next_outbound()
+    assert command.verb == "show_titles"
+    assert command.args["title_ids"] == ["49047", "17431"]
+
+
+async def test_second_cycle_search_is_skipped_not_awaited():
+    """Cycle 2 has no cycle 3 to speak a result, so a search there must not block the turn."""
+    again = '{"intent":"search","say":"Let me check once more.","actions":[{"verb":"search_catalog","query":"moon"}]}'
+    bus, sink = AnsweringBus(), TimingSink()
+    agent = _agent(FakeOpenAI([SPACE_SEARCH_1, again]), bus)
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("search for space"))])
+
+    assert _spoken(sink) == ["Let me look.", "Let me check once more."]
+    assert bus.dispatched == ["search_catalog"]
+
+
+def test_search_fallback_names_the_hits():
+    from tv_avatar.agent.fallback import render_fallback
+    from tv_avatar.agent.turn import ToolResult
+    text, actions = render_fallback((ToolResult("search_catalog", TV_HITS),))
+    assert text == "I found Gravity, or Moon."
+    assert actions == [("show_titles", {"title_ids": ["49047", "17431"], "label": "Search results"})]
+    assert "couldn't find" in render_fallback((ToolResult("search_catalog", {"titles": []}),))[0]
+
+
+def test_search_fallback_respects_the_rail_size_limit():
+    from tv_avatar.agent.envelope import parse_action
+    from tv_avatar.agent.fallback import render_fallback
+    from tv_avatar.agent.turn import ToolResult
+
+    titles = [{"title_id": str(i), "name": f"Movie {i}"} for i in range(50)]
+    _, actions = render_fallback((ToolResult("search_catalog", {"titles": titles}),))
+    verb, args = actions[0]
+    action = parse_action({"verb": verb, **args}, final=True)
+    assert action.title_ids == [str(i) for i in range(20)]
+
+
 async def test_multi_sentence_say_is_split_and_streamed_per_sentence():
     sink = TimingSink()
     agent = _agent(FakeOpenAI(['{"intent":"chitchat","say":"Sure thing. Rainy, slow and sad it is","actions":[]}']),
@@ -260,7 +331,7 @@ async def test_every_follow_up_cycle_is_budgeted():
     await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
     assert len(client.calls) == 2
     assert _spoken(sink) == ["Let me look.", "How about Heat, or Inception?"]
-    assert (await bus.next_outbound()).verb == "focus"
+    assert (await bus.next_outbound()).verb == "show_titles"
 
 
 async def test_interruption_frame_cancels_stream_and_queued_commands():
@@ -275,6 +346,47 @@ async def test_interruption_frame_cancels_stream_and_queued_commands():
     assert bus.pending_count() == 0
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(bus.next_outbound(), timeout=0.05)
+
+
+@pytest.mark.parametrize("verb", ["play", "search_catalog"])
+async def test_interruption_cancels_actions_started_while_the_envelope_is_streaming(verb):
+    envelope = PLAY if verb == "play" else SPACE_SEARCH_1
+
+    class DelayedBus(RecordingBus):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancelled = False
+
+        async def dispatch(self, verb, args, turn_id):
+            self.started.set()
+            try:
+                await self.release.wait()
+                return await super().dispatch(verb, args, turn_id)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    class PausedStream(FakeStream):
+        async def _iter(self):
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=envelope[:-2]))])
+            await asyncio.sleep(10)
+
+    class PausedClient(FakeOpenAI):
+        async def _create(self, **kwargs):
+            self.calls.append(kwargs)
+            return PausedStream(envelope)
+
+    bus = DelayedBus()
+    agent = _agent(PausedClient([]), bus)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("play")), SleepFrame(0.1), InterruptionFrame()])
+    assert bus.started.is_set()
+    bus.release.set()
+    await asyncio.sleep(0.02)
+    assert bus.cancelled
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.next_outbound(), timeout=0.02)
 
 
 async def test_system_prompt_carries_screen_memory_and_history():
@@ -456,7 +568,7 @@ async def test_slow_second_cycle_falls_back_to_templated_answer():
     said = _spoken(sink)
     assert said[0] == "Let me look."
     assert "How about Heat, or Inception?" in said            # from FakeTools' two titles
-    assert (await bus.next_outbound()).verb == "focus"        # first title focused
+    assert (await bus.next_outbound()).verb == "show_titles"  # the picks go on screen
     assert len(client.calls) == 2                              # cycle 2 was attempted, then cancelled
     assert sum(isinstance(f, LLMFullResponseEndFrame) for f in sink.frames) == 1
     await asyncio.sleep(0.02)
@@ -525,7 +637,7 @@ async def test_rec_shown_from_the_templated_fallback():
     await _run(agent, sink, [LLMContextFrame(context=_ctx("recommend"))])
     await asyncio.sleep(0.02)
     assert "How about Heat, Inception, or Pulp Fiction?" in _spoken(sink)
-    assert [ids for _, ids in recorder.shown] == [["949", "27205", "680"]]   # the three named + focus on 949
+    assert [ids for _, ids in recorder.shown] == [["949", "27205", "680", "8", "9"]]   # all five appear on the rail
 
 
 async def test_interrupted_turn_records_nothing_as_shown():
@@ -550,10 +662,11 @@ def test_render_fallback_shapes():
         {"title_id": "1", "name": "Heat", "year": 1995}, {"title_id": "2", "name": "Sicario", "year": 2015},
         {"title_id": "3", "name": "Drive", "year": 2011}, {"title_id": "4", "name": "Extra"}]}),))
     assert text == "How about Heat from 1995, Sicario from 2015, or Drive from 2011?"
-    assert actions == [("focus", {"title_id": "1"})]
+    # Every returned title goes on the rail, even the ones not spoken.
+    assert actions == [("show_titles", {"title_ids": ["1", "2", "3", "4"], "label": "For you"})]
     assert render_fallback((ToolResult("recommend_titles", {"titles": []}),))[1] == []
     assert "didn't respond" in render_fallback((ToolResult("search_catalog", {"status": "unavailable"}),))[0]
-    assert "took too long" in render_fallback((ToolResult("search_catalog", {"titles": []}),))[0]
+    assert "couldn't find" in render_fallback((ToolResult("search_catalog", {"titles": []}),))[0]
 
 
 SEARCH_1 = ('{"intent":"search","say":"Searching for Jurassic World.",'
@@ -572,22 +685,16 @@ async def test_search_nobody_answers_is_spoken_not_swallowed():
     assert "[tool results]" in feedback and '"status": "unavailable"' in feedback
 
 
-async def test_search_the_tv_answers_stays_one_cycle():
-    """The happy path is unchanged: the TV renders the results, the filler is the reply."""
-    bus, client, sink = CommandBus(), FakeOpenAI([SEARCH_1]), TimingSink()
-
-    async def tv_app():
-        while (msg := await bus.next_outbound()).type != "command":
-            pass
-        bus.resolve(msg.id, {"titles": [{"title_id": "1", "name": "Jurassic World"}]})
-
-    tv = asyncio.create_task(tv_app())
-    try:
-        await _run(_agent(client, bus), sink, [LLMContextFrame(context=_ctx("jurassic world"))])
-    finally:
-        tv.cancel()
+async def test_search_in_the_only_cycle_is_rejected_by_the_schema():
+    """With no follow-up cycle available, search must not dispatch or await the TV."""
+    bus, client, sink = AnsweringBus(), FakeOpenAI([SEARCH_1]), TimingSink()
+    agent = _agent(client, bus)
+    agent._cfg.agent_max_cycles = 1
+    await _run(agent, sink, [LLMContextFrame(context=_ctx("jurassic world"))])
     assert _spoken(sink) == ["Searching for Jurassic World."]
     assert len(client.calls) == 1
+    assert bus.dispatched == []
+    assert "SearchCatalog" not in client.calls[0]["response_format"]["json_schema"]["schema"]["$defs"]
 
 
 async def test_turn_log_line_reports_typed_metrics():

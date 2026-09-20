@@ -125,8 +125,8 @@ M0–M2 are done (voice loop, avatar with interruption, control protocol + mock 
 phase 2 is live under `AGENT_IMPL=sgr`: `SGRAgentService` (`agent/service.py`) is the Pipecat
 glue, `TurnRunner` (`agent/loop.py`) the Pipecat-free plan → act → observe loop. Each cycle
 streams one `{intent, say, actions[]}` envelope under constrained decoding; `say` reaches TTS
-sentence by sentence while actions dispatch; an internal tool's reply (or a failed awaited TV
-command) is the observation that buys the next cycle, up to `AGENT_MAX_CYCLES`. The agent is the
+sentence by sentence while actions dispatch; an awaited tool's reply (including a successful
+TV search) is the observation that buys the next cycle, up to `AGENT_MAX_CYCLES`. The agent is the
 only writer of the system prompt — `ScreenContextInjector` serves the `stub` pipeline only.
 `StubLLMService` remains for tests.
 
@@ -135,7 +135,13 @@ only writer of the system prompt — `ScreenContextInjector` serves the `stub` p
 `frontend/` is a separate application with its own toolchain (`npm`, Vite, Node 20.19+) and
 its own `README.md`, `PRODUCT.md` and `design.md`. Do not run `uv` in it or `npm` outside it.
 
-It is **not yet connected to this backend**: it speaks no control protocol, and Watch,
-Episodes and Continue only record local history. Wiring those seams to `contracts/protocol.d.ts`
-is the work that joins the two halves — and the generated TypeScript is what it should import
-rather than hand-writing the command shapes.
+It is **connected to this backend**: the avatar uses WebRTC, while the control WebSocket
+carries commands, screen state and viewer events. Command types come from
+`contracts/protocol.d.ts`; never hand-write them. `show_titles` displays an ordered rail,
+and successful `search_catalog` results feed the next agent cycle for speech.
+
+The cycle owns its action tasks: interruption cancels and awaits them before the service
+drops queued commands, so a delayed action cannot enqueue after turn cancellation.
+Verify integrations with `uv run pytest` at the root and `npm run build` in `frontend/`.
+The frontend auto-connects to paid providers when the backend is configured; use a static
+build server without the backend proxy for a UI-only preview.

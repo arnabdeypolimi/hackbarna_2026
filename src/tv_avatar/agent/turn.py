@@ -93,6 +93,7 @@ class TurnTrace:
     fallback_said: str = ""
     candidates: dict[str, str] = field(default_factory=dict)  # title_id -> name
     referenced_ids: set[str] = field(default_factory=set)
+    rail_ids: list[str] = field(default_factory=list)
 
     def spoken(self) -> str:
         return "".join(self.said).strip()
@@ -112,6 +113,8 @@ class TurnTrace:
     def add_action(self, verb: str, args: dict[str, Any], *, after_results: bool) -> None:
         if after_results and verb in _OFFERING_VERBS and args.get("title_id"):
             self.referenced_ids.add(str(args["title_id"]))
+        if after_results and verb == "show_titles":
+            self.rail_ids = list(dict.fromkeys(str(tid) for tid in args.get("title_ids", [])))
 
     def offered_ids(self) -> list[str]:
         """Candidates the agent focused/opened/played, or named in what it said
@@ -123,10 +126,11 @@ class TurnTrace:
         timestamp and the greeting reopens with the first one rendered, so the
         title the agent actually focused must lead, not the tool's first hit."""
         spoken = (self.spoken() + " " + self.fallback_said).casefold()
-        pointed = [tid for tid in self.candidates if tid in self.referenced_ids]
+        shown = [tid for tid in self.rail_ids if tid in self.candidates]
+        pointed = [tid for tid in self.candidates if tid in self.referenced_ids and tid not in shown]
         named = [tid for tid, name in self.candidates.items()
-                 if tid not in self.referenced_ids and name and name.casefold() in spoken]
-        return pointed + named
+                 if tid not in self.referenced_ids and tid not in shown and name and name.casefold() in spoken]
+        return shown + pointed + named
 
 
 #: Reply statuses that mean the awaited action did not happen (bus timeout,
@@ -147,21 +151,20 @@ class ToolResult:
 
     @property
     def is_observation(self) -> bool:
-        """A reply the model must see. Observation-returning tools always; an
-        awaited TV verb only when it failed — a successful `search_catalog` is
-        answered by the TV screen, but with no TV to answer (seen live,
-        2026-09-20) the filler "Searching for X." was the whole turn and the
-        viewer waited on nothing. The failure is fed back so the agent says so."""
+        """Awaited replies reach the model, including successful TV searches,
+        so the viewer hears the results rather than only the filler. Cancelled
+        replies belong to an interrupted turn and must not start another cycle."""
         spec = REGISTRY.get(self.verb)
         if spec is None:
             return False
-        return spec.returns_observation or (spec.awaits_result and self.failed)
+        return self.payload.get("status") != "cancelled" and (
+            spec.returns_observation or (spec.awaits_result and self.failed))
 
 
 @dataclass(frozen=True)
 class CycleOutcome:
     """What one cycle left for the next: the raw envelope and the observations
-    (only those — a successful TV reply is the screen's business, not the model's)."""
+    from awaited tools, including successful TV search replies."""
     raw: str
     observations: tuple[ToolResult, ...]
 

@@ -14,7 +14,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from tv_avatar.catalog import LanguageCode, get_catalog
 from tv_avatar.config import Settings, get_settings
@@ -36,7 +36,9 @@ _TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
 class CreateSessionRequest(BaseModel):
     """All optional: an empty body yields the catalog defaults and an anonymous viewer."""
-    user_id: str | None = None
+    # The id becomes a directory name under memory_root and a history key, and the TV
+    # app sends whatever its profile store holds — so its shape is the traversal guard.
+    user_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     avatar: str | None = None
     language: LanguageCode | None = None
 

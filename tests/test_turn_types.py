@@ -28,6 +28,14 @@ def test_offered_ids_put_the_pointed_at_titles_before_the_merely_named_ones():
     assert trace.offered_ids() == ["2", "3", "1"]
 
 
+def test_shown_rail_counts_unspoken_titles_and_keeps_the_focused_title_first():
+    trace = TurnTrace()
+    trace.add_results((_reco(("1", "Heat"), ("2", "Moon"), ("3", "Gravity")),))
+    trace.said.append("Try Gravity.")
+    trace.add_action("show_titles", {"title_ids": ["3", "1"]}, after_results=True)
+    assert trace.offered_ids() == ["3", "1"]
+
+
 def test_offered_ids_match_names_case_insensitively_and_from_fallback_text():
     trace = TurnTrace()
     trace.add_results((_reco(("1", "The Nun II"), ("2", "Saw X")),))
@@ -83,8 +91,8 @@ def test_intent_is_the_first_cycles_routing_decision_not_the_answer_cycles():
 def test_tool_result_knows_whether_it_is_an_observation():
     assert ToolResult("recommend_titles", {"titles": []}).is_observation
     assert ToolResult("recommend_titles", {"status": "error"}).is_observation   # a failure still needs speaking
-    assert not ToolResult("search_catalog", {"status": "ok"}).is_observation
-    assert not ToolResult("search_catalog", {"titles": []}).is_observation      # the TV answered; it shows them
+    assert ToolResult("search_catalog", {"status": "ok"}).is_observation
+    assert ToolResult("search_catalog", {"titles": []}).is_observation      # the TV answered; it shows them
     assert not ToolResult("reject_title", {}).is_observation
     assert not ToolResult("not_a_verb", {}).is_observation
 

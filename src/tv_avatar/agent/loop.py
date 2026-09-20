@@ -3,7 +3,7 @@
 `TurnRunner.run` streams one envelope per cycle, speaks `say` sentence by
 sentence as it arrives and dispatches each `actions[]` element the moment it
 closes. The *model* decides whether the turn goes on: a cycle that produced an
-observation (an internal tool's reply, or a failed awaited TV command) buys the
+observation (an awaited tool's reply, including a TV search result) buys the
 next cycle with that observation fed back; a cycle that produced none was the
 answer. The loop itself only iterates.
 
@@ -173,6 +173,11 @@ class TurnRunner:
                                 budget_ms=budget_ms)
                 raise CycleOverBudget(cycle) from None
             finally:
+                tasks = [task for _, task in state.awaited] + state.fire
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
                 span.set_attribute(ATTR_OBS_OUTPUT, "".join(raw))
 
     async def _run_cycle(self, messages: list[dict], c: _Cycle, metrics: TurnMetrics, trace: TurnTrace,
