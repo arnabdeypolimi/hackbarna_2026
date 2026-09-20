@@ -35,8 +35,9 @@ panel catches up in place.
 
 Two things worth knowing:
 
-- **The app connects on load.** Every reload, including a hot reload, opens a paid
-  Anam and Cartesia session. Stop the dev server when you are not using it.
+- **Picking a profile opens a paid session.** Every reload, including a hot reload, comes
+  back to "Who's watching?", and the first pick opens an Anam and Cartesia session. Stop the
+  dev server when you are not using it.
 - **On a real television it needs https.** `getUserMedia` is blocked on an insecure
   origin, so a plain `http://` LAN address cannot reach the microphone at all.
   Desktop development on `localhost` is exempt from that rule.
@@ -63,6 +64,7 @@ command with an `ack` — `ok: false` carries a reason the agent can speak, such
 | "search for space movies" | `search_catalog` | filters the loaded CSV with the search bar's matcher and returns the hits |
 | "show me the products" | `show_products` | acked `ok: false`: not supported on this TV |
 | "what should I watch?" (after the agent picks) | `show_titles` | the picks replace the row under the agent's label, first one focused; Back or a tab dismisses it |
+| "show me a fireplace", "put the beach on" | `show_ambient`, `hide_ambient` | a relaxing scene fills the screen with its own sound at once — a starter clip shipped with the app — while fal Director makes the full minute behind it and keeps it for next time; Back or "close it" takes it down. See [src/ambient/README.md](src/ambient/README.md) |
 
 In return the app reports what is on screen (`screen_state`) whenever it changes —
 the rail, a window of tiles around the focus, and playback — so the agent can resolve
@@ -251,5 +253,5 @@ src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 - **The glass look avoids `backdrop-filter`.** Panels are semi-transparent over a pre-blurred background, which is much cheaper on 1–1.5 GB boards.
 - **Images** come from TMDB's image CDN. When one fails to load, a generated title card is shown instead.
 - **TMDB credit** is shown at the bottom of the screen. Turn it off with `SHOW_TMDB_CREDIT` in `src/config.ts` if you use other data.
-- **Fonts** load Sora from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
+- **Fonts** load Schibsted Grotesk from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
 - `src/types/sdk.d.ts` is Titan's published type file. Refresh it from https://sdk.titanos.tv/sdk/sdk.d.ts when the SDK changes.

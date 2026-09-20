@@ -17,15 +17,15 @@ def _prompt() -> str:
     return build_system_prompt(_LANG)
 
 
-def test_reject_example_say_is_a_placeholder_not_speakable_text():
-    # Live: the model spoke the example's `say` verbatim three times, once as
-    # its whole reply to a selection. The example must not contain a sentence
-    # that reads naturally aloud, and the prompt must say examples are not
-    # to be copied.
+def test_no_example_in_the_prompt_is_speakable():
+    # Live: the model spoke the reject example's `say` verbatim three times, once
+    # as its whole reply to a selection. The examples now carry action shapes only
+    # — no `say` at all — so there is no sentence to lift, and the prompt still
+    # says to compose the spoken line for the request at hand.
     prompt = _prompt()
     assert "Sure, let me find something else." not in prompt
-    assert '"say": "[' in prompt, "example `say` should be a bracketed placeholder"
-    assert "never repeat example text verbatim" in prompt
+    assert '"say"' not in prompt.split("# Rules")[1], "no rule example may carry a spoken line"
+    assert "Compose every `say` yourself" in prompt
 
 
 def test_change_of_request_is_not_a_rejection():

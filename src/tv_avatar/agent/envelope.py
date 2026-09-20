@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field, TypeAdapter
 
 from tv_avatar.agent.commands import AWAITS_RESULT, COMMAND_MODELS, Verb
+from tv_avatar.ambient.scenes import describe_scenes
 from tv_avatar.sgr import response_format
 
 Genre = Literal[
@@ -93,9 +94,11 @@ _TV_DOCS: dict[Verb, str] = {
     Verb.CLOSE: "close the current overlay/details",
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
-    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title; only for title_ids listed in the Shop section",
-    Verb.SEARCH_CATALOG: "find catalog titles by name or words; results come back to you",
-    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused",
+    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title — its outfits and merchandise; only for title_ids listed in the Shop section",
+    Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
+    Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
+    Verb.SHOW_AMBIENT: "show a relaxing looping video full screen with its own sound; scenes: " + describe_scenes(),
+    Verb.HIDE_AMBIENT: "close the ambient video and return to browsing",
 }
 
 REGISTRY: dict[str, ActionSpec] = {

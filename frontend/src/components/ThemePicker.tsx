@@ -85,18 +85,23 @@ export function ThemePicker({ open, choice, theme, tune, scopeRef, onPick, onTun
         </button>
 
         <p className="tsub">Adjust {theme.name}</p>
-        <div className="trow" role="group" aria-label="Room">
+        {/* The labels sit beside the groups rather than inside them: one grid, so all three
+            lines share a label column and a chip column. Centring each row on its own put
+            them on three different axes, because the rows are not the same width. */}
+        <div className="tadjust">
           <span className="tkey" aria-hidden="true">Room</span>
-          {ROOM.map(([v, label]) => chip(label, tune.room === v, `Room ${label.toLowerCase()}`, () => onTune({ ...tune, room: v })))}
-        </div>
-        <div className="trow" role="group" aria-label="Glass">
+          <div className="trow" role="group" aria-label="Room">
+            {ROOM.map(([v, label]) => chip(label, tune.room === v, `Room ${label.toLowerCase()}`, () => onTune({ ...tune, room: v })))}
+          </div>
           <span className="tkey" aria-hidden="true">Glass</span>
-          {GLASS.map(([v, label]) => chip(label, tune.glass === v, `Glass ${label.toLowerCase()}`, () => onTune({ ...tune, glass: v })))}
-        </div>
-        <div className="trow" role="group" aria-label="Sky">
+          <div className="trow" role="group" aria-label="Glass">
+            {GLASS.map(([v, label]) => chip(label, tune.glass === v, `Glass ${label.toLowerCase()}`, () => onTune({ ...tune, glass: v })))}
+          </div>
           <span className="tkey" aria-hidden="true">Sky</span>
-          {chip('Moving', tune.motion, 'Moving sky', () => onTune({ ...tune, motion: true }))}
-          {chip('Still', !tune.motion, 'Still sky', () => onTune({ ...tune, motion: false }))}
+          <div className="trow" role="group" aria-label="Sky">
+            {chip('Moving', tune.motion, 'Moving sky', () => onTune({ ...tune, motion: true }))}
+            {chip('Still', !tune.motion, 'Still sky', () => onTune({ ...tune, motion: false }))}
+          </div>
         </div>
 
         <p className="tnote">

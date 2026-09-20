@@ -43,6 +43,9 @@ class ScreenState(BaseModel):
     focus_index: int | None = Field(default=None, ge=0)
     tiles: list[Tile] = Field(default_factory=list)
     playback: Playback
+    #: The ambient scene on full screen, if one is (frontend/src/ambient). Optional:
+    #: a TV app from before the field reports the same screen without it.
+    ambient: str | None = None
 
 
 # --- client -> server --------------------------------------------------

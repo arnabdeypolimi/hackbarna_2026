@@ -20,6 +20,8 @@ export interface CommandHandler {
   show_products(args: CommandArgsByVerb['show_products']): string | void;
   show_titles(args: CommandArgsByVerb['show_titles']): string | void;
   search_catalog(args: CommandArgsByVerb['search_catalog']): Array<{ title_id: string; name: string }>;
+  show_ambient(args: CommandArgsByVerb['show_ambient']): string | void;
+  hide_ambient(): string | void;
 }
 
 export type Send = (msg: Outbound) => void;

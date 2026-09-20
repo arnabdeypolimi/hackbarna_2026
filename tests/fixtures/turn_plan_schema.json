@@ -45,6 +45,19 @@
     ],
     "type": "object"
    },
+   "HideAmbient": {
+    "additionalProperties": false,
+    "properties": {
+     "verb": {
+      "const": "hide_ambient",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb"
+    ],
+    "type": "object"
+   },
    "Home": {
     "additionalProperties": false,
     "properties": {
@@ -408,6 +421,29 @@
     ],
     "type": "object"
    },
+   "ShowAmbient": {
+    "additionalProperties": false,
+    "description": "Put a relaxing scene on full screen, looping, with its own sound. The TV\nopens with a starter clip it ships with, makes the full video behind it\n(frontend/src/ambient) and keeps that for the next request, so nothing waits\non a session and a scene asked for again costs nothing.",
+    "properties": {
+     "scene": {
+      "enum": [
+       "garden",
+       "beach",
+       "fireplace"
+      ],
+      "type": "string"
+     },
+     "verb": {
+      "const": "show_ambient",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verb",
+     "scene"
+    ],
+    "type": "object"
+   },
    "ShowProducts": {
     "additionalProperties": false,
     "properties": {
@@ -510,6 +546,12 @@
       },
       {
        "$ref": "#/$defs/ShowTitles"
+      },
+      {
+       "$ref": "#/$defs/ShowAmbient"
+      },
+      {
+       "$ref": "#/$defs/HideAmbient"
       },
       {
        "$ref": "#/$defs/RecommendTitles"

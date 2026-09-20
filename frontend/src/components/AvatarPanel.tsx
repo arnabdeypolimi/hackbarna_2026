@@ -30,6 +30,8 @@ export interface AvatarView {
   captions: Captions;
   languages: LanguageInfo[];
   language: string;
+  /** The set's talking-head setting. Off still speaks; the face box says so. */
+  videoEnabled: boolean;
   setLanguage: (code: string) => void;
   retry: () => void;
   /** Client→server messages (screen state, user events). A no-op while not live. */
@@ -51,11 +53,15 @@ const STATUS_LABEL: Record<AgentState, string> = {
 export function AvatarPanel({ view, videoRef }: Props) {
   const live = view.phase === 'live';
   const name = view.avatar?.name ?? 'the avatar';
+  // The video element stays mounted and playing when the head is off — it carries the
+  // voice. Only the picture is held back, so the box says what it is instead of going
+  // black, and the name and state below it still report a live session.
+  const showFace = live && view.videoEnabled;
   return (
     <aside className="panel side avatarpanel">
-      <div className="face" data-state={live ? 'live' : 'off'}>
+      <div className="face" data-state={showFace ? 'live' : 'off'}>
         <video ref={videoRef} autoPlay playsInline />
-        {!live && <p className="face-note">{view.message}</p>}
+        {!showFace && <p className="face-note">{live ? 'Video off' : view.message}</p>}
       </div>
 
       {live ? (

@@ -23,8 +23,10 @@ import { ExitDialog } from './components/ExitDialog';
 import { Profiles } from './components/Profiles';
 import { ThemePicker } from './components/ThemePicker';
 import { SkyVideo } from './components/SkyVideo';
+import { WeatherTheme } from './weather/WeatherTheme';
+import { AmbientScene, useAmbient, useAmbientScreen, withAmbient } from './ambient';
 import { Toast, useToast } from './components/Toast';
-import { useAvatar } from './hooks/useAvatar';
+import { loadAvatarVideo, saveAvatarVideo, useAvatar } from './hooks/useAvatar';
 import { useScreenStatePush, type CommandHandler } from './hooks/useTvControl';
 import { deriveScreenState, fromWireId, searchCatalog, STOPPED, toWireId, type PlaybackReport } from './lib/tvBridge';
 import { TrailerPlayer, type TrailerPlayerHandle } from './components/TrailerPlayer';
@@ -57,7 +59,17 @@ export default function App() {
   // keeps recording it because the agent will want it.
   const [, setHistory] = useState<Record<string, number>>(() => readJSON(historyKey(activeId), {}));
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [profilesOpen, setProfilesOpen] = useState(false);
+  // The set is shared, so the app opens on "Who's watching?" rather than on whoever used it
+  // last. Nothing behind it is wrong — the saved profile is already active — but the avatar
+  // waits for this to be answered before it opens a session.
+  const [profilesOpen, setProfilesOpen] = useState(true);
+  // True once the picker has been left by any route: a profile pressed, or Back. Until then
+  // the avatar has no viewer to be, and does not connect.
+  const [viewerChosen, setViewerChosen] = useState(false);
+  // A property of the set, like the avatar's language: whoever sits down next gets the
+  // television as it was left.
+  const [avatarVideo, setAvatarVideo] = useState(loadAvatarVideo);
+  const toggleAvatarVideo = (on: boolean) => { setAvatarVideo(on); saveAvatarVideo(on); };
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>(loadChoice);
   const [clock, setClock] = useState(0); // bumped when the season may have changed
   const [themeOpen, setThemeOpen] = useState(false);
@@ -81,10 +93,35 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
   const wantRowFocus = useRef(false);
-  const avatarVideo = useRef<HTMLVideoElement>(null);
+  const avatarVideoRef = useRef<HTMLVideoElement>(null);
   // Assigned below, once the actions it calls exist; useAvatar only reads it on a command.
   const tv = useRef<CommandHandler | null>(null);
-  const avatar = useAvatar(avatarVideo, { userId: activeId, commands: tv });
+  const avatar = useAvatar(avatarVideoRef, {
+    userId: activeId, commands: tv, ready: viewerChosen, videoEnabled: avatarVideo,
+  });
+
+  /**
+   * The room opens once, when the avatar has finished arriving. Until then the browse panel
+   * has the whole screen and stands flat: there is no second wall to turn towards yet, and a
+   * panel at an angle beside empty space is an angle for no reason.
+   *
+   * `error` counts as arrived. With no backend the avatar panel reads "Backend not running",
+   * and that belongs in the room rather than behind an intro that never ends. A connect that
+   * hangs rather than failing lands in `error` too — useAvatar puts a deadline on it — so the
+   * phase always settles and this needs no timer of its own. It had one, and it left two
+   * disconnected ideas of "gave up": a room that had opened beside a panel still saying
+   * "Connecting…" with its only button disabled.
+   *
+   * Latched, because switching profile restarts the session and pushes the phase back to
+   * `connecting`: the room would collapse behind the picker and re-open as the viewer left
+   * it. The opening belongs to arriving at the television, not to every session on it.
+   */
+  const [roomOpen, setRoomOpen] = useState(false);
+  const settled = avatar.phase === 'live' || avatar.phase === 'blocked' || avatar.phase === 'error';
+  useEffect(() => {
+    if (viewerChosen && settled) setRoomOpen(true);
+  }, [viewerChosen, settled]);
+  const ambient = useAmbient();
 
   const profile = profiles.find((p) => p.id === activeId) || profiles[0];
   // A kids profile browses a filtered dataset, so every row, search and resume reads this.
@@ -115,14 +152,34 @@ export default function App() {
   }, [themeChoice, clock]);
 
   // ---------- focus helpers ----------
+  /**
+   * Which overlay owns the remote, if any — asked in one place. Five conditionals used to
+   * enumerate the flags by hand and the fifth had already drifted (goBack forgot the theme
+   * picker, so a spoken "back" with it open answered "already at home"). The ref is the same
+   * answer for closures that outlive the render they were made in: the close* helpers hand
+   * `focusRow` to requestAnimationFrame from the render where the overlay was still open, and
+   * a guard reading `profilesOpen` from that closure sees it still true.
+   */
+  const overlay = profilesOpen ? 'profiles' : themeOpen ? 'theme' : player ? 'player' : dialogOpen ? 'dialog' : null;
+  const overlayRef = useRef(overlay);
+  overlayRef.current = overlay;
+
   // Focus the selected poster once the DOM reflects the latest state: after the next
   // render if one is pending, or on the next frame if nothing changed.
   const flushRowFocus = () => {
     if (!wantRowFocus.current) return;
     wantRowFocus.current = false;
+    // An overlay owns the remote while it is open, and the row must not pull focus out from
+    // under it. The dataset arriving is the case that did: its focusRow() lands after
+    // "Who's watching?" has focused a tile, leaving the viewer steering a hidden panel.
+    // Dropping the request is safe — every path that closes an overlay asks for focus itself.
+    if (overlayRef.current) return;
     const stage = stageRef.current;
+    // With no dataset the row has no poster; the import button is where the remote should
+    // land, so that a picker closed over an empty screen does not strand focus on a tab.
     const target =
       stage?.querySelector<HTMLElement>('.poster.sel') ||
+      stage?.querySelector<HTMLElement>('[data-role="import-empty"]') ||
       stage?.querySelector<HTMLElement>('.tab.cur') ||
       stage?.querySelector<HTMLElement>('.tab');
     // The track pans to the selection itself. Without this, a far jump (the agent revealing
@@ -138,9 +195,15 @@ export default function App() {
 
   const selectPoster = (n: number) => { setSel(n); focusRow(); };
 
-  // With no dataset yet, start on the import button so the remote has somewhere to go.
+  // With no dataset yet, start on the import button so the remote has somewhere to go —
+  // unless an overlay has it. The app now opens on "Who's watching?", and a missing dataset
+  // is reported asynchronously, so without the guard this focused a button behind the
+  // scrim and OK opened the file chooser from under the picker. focusRow's fallback picks
+  // the button up when the picker closes.
   useEffect(() => {
-    if (status.kind === 'missing') stageRef.current?.querySelector<HTMLElement>('[data-role="import-empty"]')?.focus();
+    if (status.kind === 'missing' && !overlayRef.current) {
+      stageRef.current?.querySelector<HTMLElement>('[data-role="import-empty"]')?.focus();
+    }
   }, [status.kind]);
 
   // ---------- data ----------
@@ -243,6 +306,7 @@ export default function App() {
   const openProfiles = () => { prevFocus.current = document.activeElement as HTMLElement; setProfilesOpen(true); };
   const closeProfiles = () => {
     setProfilesOpen(false);
+    setViewerChosen(true);
     const back = prevFocus.current;
     requestAnimationFrame(() => (back && document.contains(back) ? back.focus() : focusRow()));
   };
@@ -268,6 +332,7 @@ export default function App() {
     if (!next) return;
     activate(id);
     setProfilesOpen(false);
+    setViewerChosen(true);
     toast.show(next.kind === 'kids' ? `Watching as ${next.name} — kids titles only` : `Watching as ${next.name}`);
     focusRow();
   };
@@ -393,7 +458,7 @@ export default function App() {
       back(inSearch);
       return;
     }
-    if (dialogOpen || player || profilesOpen || themeOpen) return;
+    if (overlay) return;
     if (e.keyCode === KEY.RED && current) toggleSave(current);
     else if (e.keyCode === KEY.YELLOW) fileRef.current?.click();
     // Not from the search box, where G is a letter the viewer is typing.
@@ -419,7 +484,7 @@ export default function App() {
   // The remote's Back at the home screen asks about leaving the app; a spoken "back" with
   // nothing to go back from should not.
   const goBack = (): string | void => {
-    if (!profilesOpen && !player && !dialogOpen && !shop && !query && !agentRail && tab === 'popular') return 'already at home';
+    if (!overlay && !shop && !query && !agentRail && tab === 'popular') return 'already at home';
     back(false);
   };
   // "What's that jacket?" — the shelf slides in under the row for the title asked about.
@@ -449,7 +514,7 @@ export default function App() {
     selectPoster(0);
   };
 
-  tv.current = {
+  tv.current = withAmbient({
     play: ({ title_id }) => {
       const t = fromWireId(title_id, catalog);
       if (!t) return `unknown title ${title_id}`;
@@ -486,7 +551,7 @@ export default function App() {
     show_titles: showTitles,
     search_catalog: ({ query: q, limit }) =>
       searchCatalog(catalog, q, limit ?? 10).map((t) => ({ title_id: toWireId(t), name: t.title })),
-  };
+  }, ambient);
 
   // Dev only: `__tv.show_products({ title_id: '346698' })` from the console exercises a
   // verb without a voice session behind it. Stripped from production builds.
@@ -499,7 +564,8 @@ export default function App() {
     }),
     [tab, query, rail, row, selIdx, player, playback, shop, products],
   );
-  useScreenStatePush(screen, avatar.send, avatar.phase === 'live');
+  const shown = useAmbientScreen(screen, ambient.scene);
+  useScreenStatePush(shown, avatar.send, avatar.phase === 'live');
 
   // One listener for the app's lifetime that always calls the latest handler.
   const keyHandler = useRef(onKey);
@@ -557,7 +623,10 @@ export default function App() {
       {/* Outside the stage so it fills the window, whatever shape a desktop gives it; the stage scales inside. */}
       {/* The loop waits until the titles are in, so their fetch and first paint come first. */}
       <div className="room"><SkyVideo theme={theme} paused={!!player || status.kind === 'loading'} enabled={tunes[theme.id].motion} /></div>
-      <Stage ref={stageRef}>
+      <WeatherTheme theme={theme} themeOpen={themeOpen} paused={!!player || status.kind === 'loading'} motion={tunes[theme.id].motion} />
+      <AmbientScene ambient={ambient} />
+      {/* Any trailer, inline or full: while a moving image is on screen the room stands square. */}
+      <Stage ref={stageRef} flat={!!player} solo={!roomOpen}>
         <SearchBar value={query} onChange={(v) => { setQuery(v); setSel(0); }} />
         <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={onFile} />
 
@@ -606,7 +675,7 @@ export default function App() {
           )}
         </section>
 
-        <AvatarPanel view={avatar} videoRef={avatarVideo} />
+        <AvatarPanel view={avatar} videoRef={avatarVideoRef} />
 
         <TabBar tab={tab} highlight={!query && !rail} profile={profile} theme={theme} onSelect={selectTab} onProfile={openProfiles} onTheme={openThemes} />
 
@@ -630,6 +699,8 @@ export default function App() {
           onSave={writeProfiles}
           onDelete={removeProfile}
           onNotice={toast.show}
+          avatarVideo={avatarVideo}
+          onAvatarVideo={toggleAvatarVideo}
         />
         <ThemePicker
           open={themeOpen} choice={themeChoice} theme={theme} tune={tunes[theme.id]}
