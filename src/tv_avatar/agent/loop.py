@@ -161,6 +161,12 @@ class TurnRunner:
             trace.add_results(outcome.observations)
             ctx.log.debug("cycle end", step="cycle", cycle=cycle, raw=outcome.raw, done=outcome.done,
                           observed=[r.verb for r in outcome.observations])
+            # A discovery turn that fetched titles, then spoke about them and sent
+            # the TV nothing at all, leaves the viewer looking at the old grid. Seen
+            # live: "You pick. Crime and thrillers, no horror." Deliberately narrow —
+            # a cycle that dispatched anything made its own choice and is left alone.
+            if previous is not None and pinned == "discover" and outcome.n_dispatched == 0:
+                await self._show_fetched(previous.observations, ctx, trace, cycle)
             if outcome.done:
                 return
             feedback = outcome.feedback()
@@ -173,6 +179,25 @@ class TurnRunner:
                         {"role": "user", "content": tool_results_message(
                             feedback, original_request=trace.user_text)}]
             previous = outcome
+
+    async def _show_fetched(self, results: tuple[ToolResult, ...], ctx: TurnContext,
+                            trace: TurnTrace, cycle: int) -> None:
+        """Put the titles this turn fetched on screen. Not a second opinion on the
+        model's picks — it chose what to fetch — only the guarantee that a viewer
+        who asked for options ends the turn looking at some."""
+        for r in results:
+            if r.failed or r.verb != "recommend_titles":
+                continue
+            titles = r.payload.get("titles") or []
+            if not titles:
+                return
+            args = {"title_ids": [t["title_id"] for t in titles[:20]], "label": "For you"}
+            ctx.log.info("fetched titles put on screen", step="action", cycle=cycle,
+                         n=len(args["title_ids"]))
+            trace.add_action("show_titles", args, after_results=True)
+            with tel.attribute_scope({tel.META_SOURCE: "fetched_rail"}):
+                await self._host.dispatch_action(parse_action({"verb": "show_titles", **args}), ctx)
+            return
 
     async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext,
                               metrics: TurnMetrics, trace: TurnTrace) -> None:
@@ -288,7 +313,8 @@ class TurnRunner:
                         awaited=len(c.awaited), fire_and_forget=len(c.fire), ms=c.ms())
         c.span.set_attributes({ATTR_CYCLE_N_ACTIONS: len(c.awaited) + len(c.fire),
                                ATTR_CYCLE_N_REJECTED: c.n_rejected})
-        return CycleOutcome("".join(raw), await self._observe(c), request=c.request)
+        return CycleOutcome("".join(raw), await self._observe(c), request=c.request,
+                            n_dispatched=len(c.telemetry.accepted))
 
     async def _stream(self, messages: list[dict], c: _Cycle, raw: list[str]) -> AsyncIterator[Event]:
         """The LLM call as envelope events. Knows the wire, not the product."""

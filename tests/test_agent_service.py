@@ -1130,3 +1130,16 @@ async def test_barge_in_after_a_finished_turn_does_not_touch_its_closed_span(ote
     llm, = otel.spans()["llm"]
     assert "langfuse.observation.metadata.interrupted" not in llm.attributes
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "ended span" in r.getMessage()]
+
+
+async def test_a_discovery_turn_that_sends_nothing_still_puts_the_titles_on_screen():
+    """Rehearsal, 2026-09-20: the follow-up cycle spoke about the recommendations
+    and dispatched nothing, leaving the viewer on the old grid. What was fetched
+    goes up. A cycle that dispatched anything made its own choice and is left alone."""
+    bus, tools = RecordingBus(), FakeTools()
+    silent = ('{"intent":"recommend","request":{"operation":"discover","title":null,"title_id":null},'
+              '"say":"Here is a tense one to unwind with.","actions":[]}')
+    agent = _agent(FakeOpenAI([RECO_1, silent]), bus, tools=tools)
+    await _run(agent, TimingSink(), [LLMContextFrame(context=_ctx("You pick. Crime and thrillers."))])
+    assert bus.dispatched == ["show_titles"]
+    assert (await bus.next_outbound()).args["title_ids"] == ["949", "27205"]

@@ -225,6 +225,8 @@ class CycleOutcome:
     #: What the viewer asked for, as this cycle decoded it; the next cycle is
     #: pinned to its operation.
     request: Request | None = None
+    #: How many actions this cycle actually dispatched (both gates passed).
+    n_dispatched: int = 0
 
     @property
     def done(self) -> bool:
