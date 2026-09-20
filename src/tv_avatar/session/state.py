@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from tv_avatar.catalog import SessionPersona, get_catalog
 from tv_avatar.control.protocol import ScreenState
+from tv_avatar.shop import get_shop
 
 
 @dataclass
@@ -42,9 +43,15 @@ class SessionState:
         lines = [f"View: {s.view}"]
         if s.rail_id:
             lines.append(f"Rail: {s.rail_id}")
+        catalog = get_shop()
         for tile in s.tiles:
             marker = " <- focused" if tile.position == s.focus_index else ""
-            shop = " [shop]" if tile.shoppable else ""
+            # The TV says whether it can show a shelf; the backend's catalogue says what
+            # is on it, so the agent can name the item while the TV slides it in.
+            shop = ""
+            if tile.shoppable:
+                items = catalog.render_for_prompt(tile.title_id)
+                shop = f" [shop: {items}]" if items else " [shop]"
             lines.append(f"  [{tile.position}] {tile.name} (id={tile.title_id}){shop}{marker}")
         pb = s.playback
         if pb.state == "stopped":

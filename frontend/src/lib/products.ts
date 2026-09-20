@@ -1,6 +1,7 @@
-// The mock shop: three products per title, keyed by the backend's title_id (str(tmdb_id)),
-// served as a static file next to the dataset. A real integration would swap the fetch for
-// the OS's commerce API; nothing else here would move.
+// The shop: three products per title, keyed by the backend's title_id (str(tmdb_id)).
+// The backend owns the catalogue (GET /shop) so the agent can name an item while the TV
+// slides it in; the whole map is held here because `show_products` opens the shelf on the
+// ack, not after a round trip. Only the photos are TV assets.
 import type { Title } from '../types/title';
 import { toWireId } from './tvBridge';
 
@@ -18,15 +19,15 @@ export interface Product {
 
 export type ProductMap = Record<string, Product[]>;
 
-export const PRODUCTS_URL = `${import.meta.env.BASE_URL}data/products.json`;
+// Same origin like /config and /sessions: the Vite proxy in dev, the OS's reverse proxy on a set.
+export const SHOP_URL = '/shop';
 
 export async function loadProducts(): Promise<ProductMap> {
-  const r = await fetch(PRODUCTS_URL);
+  const r = await fetch(SHOP_URL);
+  // No backend is "no shop": the shelf is optional, browsing is not.
   if (!r.ok) return {};
-  const text = await r.text();
-  // Dev servers answer unknown paths with index.html; that is "no shop", not an error.
-  if (text.trimStart().startsWith('<')) return {};
-  return JSON.parse(text) as ProductMap;
+  const body = (await r.json()) as { products?: ProductMap };
+  return body.products ?? {};
 }
 
 export function productsFor(map: ProductMap, title: Title): Product[] {

@@ -26,6 +26,7 @@ from tv_avatar.pipeline.transport import build_transport
 from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionState, SessionStore
+from tv_avatar.shop import get_shop
 
 #: How often expired sessions (and their command buses) are reaped.
 SWEEP_INTERVAL_S = 60.0
@@ -77,6 +78,7 @@ def create_app(
     # Fail at boot on a broken avatars.yaml, as Settings does on a bad .env,
     # rather than turning every /config and POST /sessions into a 500.
     get_catalog()
+    get_shop()
 
     def sweep(now: float | None = None) -> list[str]:
         """Reap expired sessions together with their buses. Returns the ids."""
@@ -226,6 +228,19 @@ def create_app(
              "poster_path": i.poster_path}
             for i in rt.catalog.sample(limit)
         ]}
+
+    @app.get("/shop")
+    async def shop() -> dict:
+        """The whole shop catalogue, for the TV to hold in memory: `show_products` must
+        open the shelf on the ack, not after a round trip."""
+        return get_shop().public()
+
+    @app.get("/shop/{title_id}")
+    async def shop_for_title(title_id: str) -> dict:
+        products = get_shop().products_for(title_id)
+        if not products:
+            raise HTTPException(404, f"nothing to shop for title {title_id}")
+        return {"title_id": title_id, "products": [p.model_dump() for p in products]}
 
     for mount, directory in (("/mock", _TOOLS / "mock_tv_client"), ("/demo", _TOOLS / "demo")):
         if directory.is_dir():

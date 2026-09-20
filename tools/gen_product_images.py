@@ -1,6 +1,6 @@
 """Render the mock shop's product photos with fal.ai (FLUX schnell).
 
-Reads frontend/public/data/products.json and writes one JPEG per product
+Reads products.json (repo root, served by the backend at /shop) and writes one JPEG per product
 under frontend/public/products/<title_id>/. Idempotent: existing files are
 skipped, so a failed run can be resumed. FAL_KEY comes from the environment
 or .env and is never printed.
@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTS = ROOT / "frontend/public/data/products.json"
+PRODUCTS = ROOT / "products.json"
 OUT = ROOT / "frontend/public"
 
 #: Synchronous endpoint — schnell answers in a few seconds, no need for the queue API.

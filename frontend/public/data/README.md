@@ -14,8 +14,7 @@ To load the data from a server instead, change `DATA_URL` in `src/config.ts`.
 
 ## The shop
 
-`products.json` is the mock commerce catalogue: three products per title, keyed by the
-backend's title id (the TMDB id as a string), with photos under `public/products/<id>/`.
-The agent's `show_products` slides them in under the row; titles missing from this file
-are reported to the agent as having nothing to shop. Regenerate the photos with
+The shelf's catalogue is the backend's (`products.json` at the repo root, served at
+`GET /shop`); only the photos live here, under `public/products/<title_id>/`, because they
+are sized and cached for the set. Regenerate them with
 `uv run python tools/gen_product_images.py` from the repo root (needs `FAL_KEY`).

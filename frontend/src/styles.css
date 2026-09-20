@@ -483,7 +483,7 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 }
 .kind.cur { background: var(--primary); }
 .kind:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
-.snote { margin: var(--gap-group) 0 0; font-size: 19px; color: var(--ink-3); }
+.pnote { margin: var(--gap-group) 0 0; font-size: 19px; color: var(--ink-3); }
 .pid { margin: var(--gap-block) 0 0; font-size: 17px; color: var(--ink-3); }
 .pid b { margin-left: 8px; font-family: 'Courier New', monospace; font-weight: 400; letter-spacing: 0.06em; color: var(--ink-2); }
 .pform .actions { margin-top: var(--gap-section); }

@@ -118,7 +118,7 @@ _VERB_DOCS: dict[str, str] = {
     Verb.CLOSE: "close the current overlay/details",
     Verb.BACK: "go back one screen",
     Verb.HOME: "return to the home grid",
-    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title — its outfits and merchandise; only for tiles marked [shop]",
+    Verb.SHOW_PRODUCTS: "slide in the shop shelf for a title — its outfits and merchandise; only for tiles marked [shop: ...]",
     Verb.SEARCH_CATALOG: "free-text catalog search on the TV; returns results to you",
     Verb.SHOW_TITLES: "put a labelled rail of titles on screen, first one focused — for recommendations and search hits",
     "recommend_titles": "INTERNAL — ask the recommendation engine; you receive titles and then speak them",
