@@ -12,7 +12,8 @@
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": { "@contracts/*": ["../contracts/*"] }
   },
-  "include": ["src"]
+  "include": ["src", "../contracts"]
 }

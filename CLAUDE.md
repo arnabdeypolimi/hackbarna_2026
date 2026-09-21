@@ -12,11 +12,12 @@ comments (`spec §9`, `D5`) point at that file.
 
 ```bash
 uv sync                                              # install; uv.lock is authoritative
-uv run pytest                                        # 81 tests, ~3 s, no keys or network
+uv run pytest                                        # 401 tests, ~17 s, no keys or network
 uv run pytest tests/test_command_bus.py -k cancel    # single test
 uvx ruff check src tests tools                       # lint (see note below)
 uv run uvicorn tv_avatar.app:app --reload --port 8000
 uv run python tools/export_schemas.py                # regenerate contracts/
+uv run python tools/langfuse_smoke.py                # one span to Langfuse + read-back (needs keys)
 ```
 
 Always `uv run`; never invoke `.venv/bin/python` or bare `pip` directly.
@@ -25,6 +26,15 @@ Ruff is the agreed linter (`.claude/rules.md`, 88 columns) but is **not** a decl
 dependency and the repo carries no ruff config, so `uv run ruff` fails — use `uvx ruff`.
 Scope it to `src tests tools`: a bare `ruff check .` also walks the vendored skills under
 `.claude/` and drowns the real findings in hundreds of third-party ones.
+
+## Telemetry verification
+
+`uv run python tools/langfuse_smoke.py --agent-fixture` sends a synthetic two-cycle
+search through the real agent and simulated TV, then verifies generations, parsed plans,
+speech submissions and command replies in Langfuse. It uses no model/speech APIs and
+no viewer data. Repeat with `TRACE_CONTENT=false` to verify metadata-only ingestion.
+`LOG_FORMAT=json` enables correlated structured logs; `TELEMETRY_MAX_CHARS` defaults to
+16384 per captured value, and `APP_REVISION` identifies the deployed revision.
 
 ## Platform
 
@@ -47,7 +57,21 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   the wire format but not the agent. `pipeline/builder.py` knows Pipecat but not the
   protocol. Keep it that way.
 - **Commands are fire-and-forget.** Only `search_catalog` (`AWAITS_RESULT` in `commands.py`)
-  blocks an LLM turn, for at most 400 ms. Awaiting the TV app anywhere else stalls speech.
+  blocks an LLM turn, waiting for a result or turn cancellation with no default deadline.
+  Follow-up speech deadlines are also off by default (`CYCLE_FIRST_BYTE_S=0`); a positive
+  value opts back into the budget and templated fallback. Awaiting the TV app anywhere else
+  stalls speech. The `/demo/` console logs commands but does not answer catalog searches.
+- **Viewer input has two doors and one path.** Speech arrives as STT
+  `TranscriptionFrame`s; `POST /sessions/{id}/text` (control-token authenticated, like the
+  socket) queues the very same frame into the running pipeline, because Titan OS exposes no
+  microphone API and the browser tests must not synthesise audio. Turn-taking, barge-in,
+  memory and the agent therefore stay on one code path — never add an entry point that
+  reaches the agent without passing `pipeline/turns.py`.
+- **The cycle cap is the schema's, not the loop's.** The last allowed cycle is decoded against
+  `turn_plan_schema(final=True)`, whose actions union has no observation-returning tools, and
+  `parse_action(final=True)` validates against the same union. The loop (`agent/loop.py`) only
+  iterates: a cycle with no observation ends the turn. Never reintroduce a runtime "skip this
+  action because we are at the cap" branch or a prompt hint that stands in for it.
 - **Commands are turn-scoped.** Barge-in drops a turn's queued-but-unsent commands
   (`CommandBus.cancel_turn`). Commands already handed to the WebSocket are never rolled back.
 - **Every wire message carries `"v": 1`.** An unknown version is an explicit `error`, never
@@ -58,6 +82,16 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   a new setting also goes into `.env.example` with a blank value.
 - **`SessionEventsObserver` is an observer, not a processor** — it must never sit in the
   media path and add latency to speech.
+- **Tracing is off the media path and off by default.** Spans are attribute writes; export is
+  batched on a background thread; there is no `if tracing_enabled` in business code —
+  `tracing.py`, `pipeline/builder.py` and `pipeline/runner.py` own the toggle and the session
+  scope. Tests never construct a network exporter: `tests/conftest.py::otel` is the only place
+  that installs a provider (OTel allows one per process).
+- **Every span declares a Langfuse observation type and puts filterable facts under
+  `langfuse.observation.metadata.*`.** Open spans through `tracing.observation()`, never
+  `tracer.start_span` directly, and take attribute keys from the constants in `tracing.py` —
+  the vocabulary table in `docs/superpowers/plans/2026-09-19-tv-avatar-observability.md` is
+  the contract.
 
 ## Gotchas
 
@@ -79,6 +113,19 @@ Each of these cost real debugging time; the code comments record them at the cal
 - **Tests run without API keys.** `create_app()` must keep starting with no `.env`;
   `_missing_settings()` absorbs only `ValidationError`, so keep other failures propagating.
 - **Pytest is `asyncio_mode = "auto"`** — async tests need no decorator.
+- **Langfuse ingests OTLP HTTP/protobuf only.** Never add `opentelemetry-exporter-otlp` (it
+  pulls the gRPC exporter). An explicit OTLP `endpoint=` needs `/v1/traces` appended — the
+  env-var path adds it, the constructor does not (`tracing.build_exporter`).
+- **`opentelemetry-semantic-conventions`, `-instrumentation` and `-processor-baggage` are
+  pre-releases.** Keep their explicit `>=0.54b0` markers in `pyproject.toml`; under
+  `prerelease = "explicit"` uv will not resolve them otherwise.
+- **Pipecat's `traced_llm` closes the `llm` span before the `InterruptionFrame` arrives** (it
+  cancels the frame task first), so the interruption stamp happens in `_run_turn`'s
+  cancellation handler, not in `_cancel_turn`. `AIService.setup()` also resets
+  `_tracing_enabled` from the StartFrame — tests re-apply it after setup (`_traced()`).
+- **A self-hosted Langfuse v3 serves `/api/public/traces` but `langfuse-cli` refuses it** as
+  deprecated, and the v4 `/api/public/v2/observations` 404s there. `tools/langfuse_smoke.py`
+  reads back over plain HTTP, trying both.
 
 ## Conventions
 
@@ -92,19 +139,48 @@ Each of these cost real debugging time; the code comments record them at the cal
 
 ## Current state
 
-M0–M2 are done (voice loop, avatar with interruption, control protocol + mock client).
-The agent is still `StubLLMService` for tests plus a plain `OpenAILLMService` in production:
-**no tool calls and no screen-state injection are wired yet.** That is phase 2 / M3, and the
-seam is the `TODO(phase 2)` in `pipeline/builder.py` — `ScreenContextInjector` belongs
-between the user aggregator and the LLM so `SessionState.render_for_prompt()` is injected
-fresh on every run.
+M0–M2 are done (voice loop, avatar with interruption, control protocol + mock client), and
+phase 2 is live under `AGENT_IMPL=sgr`: `SGRAgentService` (`agent/service.py`) is the Pipecat
+glue, `TurnRunner` (`agent/loop.py`) the Pipecat-free plan → act → observe loop. Each cycle
+streams one `{intent, say, actions[]}` envelope under constrained decoding; `say` reaches TTS
+sentence by sentence while actions dispatch; an awaited tool's reply (including a successful
+TV search) is the observation that buys the next cycle, up to `AGENT_MAX_CYCLES`. The agent is the
+only writer of the system prompt — `ScreenContextInjector` serves the `stub` pipeline only.
+`StubLLMService` remains for tests.
 
 ## The frontend
 
 `frontend/` is a separate application with its own toolchain (`npm`, Vite, Node 20.19+) and
 its own `README.md`, `PRODUCT.md` and `design.md`. Do not run `uv` in it or `npm` outside it.
 
-It is **not yet connected to this backend**: it speaks no control protocol, and Watch,
-Episodes and Continue only record local history. Wiring those seams to `contracts/protocol.d.ts`
-is the work that joins the two halves — and the generated TypeScript is what it should import
-rather than hand-writing the command shapes.
+It is **connected to this backend**: the avatar uses WebRTC, while the control WebSocket
+carries commands, screen state and viewer events. Command types come from
+`contracts/protocol.d.ts`; never hand-write them. `show_titles` displays an ordered rail,
+and successful `search_catalog` results feed the next agent cycle for speech.
+
+The cycle owns its action tasks: interruption cancels and awaits them before the service
+drops queued commands, so a delayed action cannot enqueue after turn cancellation.
+Verify integrations with `uv run pytest` at the root and `npm run build` in `frontend/`.
+The frontend auto-connects to paid providers when the backend is configured; use a static
+build server without the backend proxy for a UI-only preview.
+
+Shop context is rendered by the shared `agent/prompt.py` helpers: `SGRAgentService` and
+`ScreenContextInjector` each include it on their own path. Keep off-screen shelves in
+`# Shop` and `[shop]` markers in `# Screen`; neither path may depend on the other's prompt.
+A failed command acknowledgment releases a pending search with an error observation;
+a successful acknowledgment still waits for the catalog result.
+
+## Routing verification
+
+`uv run python tools/smoke_turn.py --routing-suite --repeat 3 --max-requests 72`
+runs the real configured text model against isolated synthetic catalog, memory and TV
+fixtures. It does not open the app's Runtime, write viewer profiles, or start voice/avatar
+sessions. It is opt-in and incurs text inference charges; provider retries are disabled
+and the request cap is enforced before each call. A wrong action exits nonzero even when
+the generated JSON is valid. Use `--case watch_shop_id --ablate-context --max-requests 8`
+with `--routing-suite` to compare clean/history-only/memory-only/combined contexts.
+
+The smoke TV consumes commands concurrently with inference. Never move catalog replies
+after the turn finishes: an awaited search cannot finish until the TV answers it.
+Routing assertions with canned model outputs prove plumbing only, not model behavior;
+real-model failures must remain visible rather than relaxing the expected action sequences.

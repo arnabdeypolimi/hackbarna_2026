@@ -25,6 +25,10 @@ class Tile(BaseModel):
     title_id: str
     name: str
     position: int = Field(ge=0)
+    #: The TV has a product shelf for this title. Commands are fire-and-forget, so a
+    #: failed `show_products` ack never reaches the model; this is how it knows in
+    #: advance whether "what's that jacket?" has an answer or an apology.
+    shoppable: bool = False
 
 
 class Playback(BaseModel):
@@ -39,6 +43,9 @@ class ScreenState(BaseModel):
     focus_index: int | None = Field(default=None, ge=0)
     tiles: list[Tile] = Field(default_factory=list)
     playback: Playback
+    #: The ambient scene on full screen, if one is (frontend/src/ambient). Optional:
+    #: a TV app from before the field reports the same screen without it.
+    ambient: str | None = None
 
 
 # --- client -> server --------------------------------------------------

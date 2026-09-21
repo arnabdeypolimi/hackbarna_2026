@@ -1,11 +1,23 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import {
+  forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState,
+  type KeyboardEvent, type RefObject,
+} from 'react';
 import type { Rect, Title } from '../types/title';
+import type { PlaybackReport } from '../lib/tvBridge';
 import { clock, loadYouTube, type YTPlayer } from '../lib/youtube';
 import { Back10Icon, CloseIcon, Fwd10Icon, PauseIcon, PlayIcon } from './Icons';
 import { Chips } from './Meta';
 
 const SKIP = 10; // seconds the transport buttons jump
 const NUDGE = 5; // seconds left/right moves while the scrubber has focus
+
+/** The transport the agent drives: the same operations the on-screen buttons perform. */
+export interface TrailerPlayerHandle {
+  pause(): void;
+  resume(): void;
+  seekTo(seconds: number): void;
+  seekBy(delta: number): void;
+}
 
 interface Props {
   item: Title;
@@ -15,10 +27,15 @@ interface Props {
   full?: boolean;
   scopeRef: RefObject<HTMLDivElement>;
   onClose: () => void;
+  /** Fired from the existing ticker and on play/pause, so the screen state can carry a truthful position. */
+  onPlayback?: (report: PlaybackReport) => void;
 }
 
 /** Cinema-style popup: the video fills the surface, the chrome floats over it. */
-export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: Props) {
+export const TrailerPlayer = forwardRef<TrailerPlayerHandle, Props>(function TrailerPlayer(
+  { item, from, full = false, scopeRef, onClose, onPlayback }: Props,
+  ref,
+) {
   const frameRef = useRef<HTMLDivElement>(null);
   const api = useRef<YTPlayer | null>(null);
   const playRef = useRef<HTMLButtonElement>(null);
@@ -50,13 +67,21 @@ export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: P
     });
     return () => {
       dead = true;
-      try { api.current?.destroy(); } catch { /* already gone with the iframe */ }
+      try { api.current?.destroy(); } catch (err) { console.debug('[trailer] player already gone with the iframe', err); }
       api.current = null;
       if (frameRef.current) frameRef.current.innerHTML = '';
     };
   }, [item.trailerKey]);
 
   useEffect(() => { playRef.current?.focus(); }, []);
+
+  // The big play button unmounts the moment playback starts, and a control that unmounts while
+  // focused drops the remote on <body>, where spatial navigation has nothing to score and the
+  // viewer is stranded. The transport's play button is the safe home. Checked after every
+  // render rather than on one dependency, because the agent's resume() can start playback too.
+  useLayoutEffect(() => {
+    if (document.activeElement === document.body) playRef.current?.focus();
+  });
 
   // One frame at the tile's size, then let CSS carry it up to fill the panel.
   useEffect(() => {
@@ -75,17 +100,39 @@ export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: P
     return () => clearInterval(tick);
   }, []);
 
+  // Reported on state change and once a second, not on the 250 ms tick: the backend reads
+  // it only at turn start, and the report re-sends the whole screen state.
+  const report = useRef(onPlayback);
+  report.current = onPlayback;
+  const second = Math.floor(time);
+  useEffect(() => {
+    report.current?.({ state: playing ? 'playing' : 'paused', position_s: second });
+  }, [playing, second]);
+
   // The player object exists before onReady but its methods are attached only then.
   const toggle = () => {
     const p = api.current;
     if (!p?.playVideo) return;
     if (playing) p.pauseVideo(); else p.playVideo();
   };
-  const seek = (by: number) => {
+  const seekTo = (seconds: number) => {
     const p = api.current;
     if (!p?.seekTo) return;
-    p.seekTo(Math.max(0, Math.min(length || Infinity, p.getCurrentTime() + by)), true);
+    p.seekTo(Math.max(0, Math.min(length || Infinity, seconds)), true);
   };
+  const seek = (by: number) => {
+    const p = api.current;
+    if (!p?.getCurrentTime) return;
+    seekTo(p.getCurrentTime() + by);
+  };
+  // Block bodies on purpose: YouTube's command methods return the player for chaining,
+  // and a handle method's return value is read as a failure reason by the ack path.
+  useImperativeHandle(ref, () => ({
+    pause: () => { api.current?.pauseVideo?.(); },
+    resume: () => { api.current?.playVideo?.(); },
+    seekTo,
+    seekBy: seek,
+  }));
   const onScrubKey = (e: KeyboardEvent) => {
     if (e.keyCode === 37) { e.preventDefault(); seek(-NUDGE); }
     if (e.keyCode === 39) { e.preventDefault(); seek(NUDGE); }
@@ -109,12 +156,17 @@ export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: P
       <div className="playerbox">
         <div className="playerframe" ref={frameRef} />
         <div className="playertop">
-          <h4>{item.title}</h4>
+          <h2>{item.title}</h2>
           <Chips values={full ? ['Trailer', ...chips] : chips} />
         </div>
 
         {ready && !playing && (
-          <button className="bigplay f" aria-label={`Play trailer for ${item.title}`} onClick={toggle}>
+          <button
+            className="bigplay f"
+            aria-label={`Play trailer for ${item.title}`}
+            // Focus moves before the press takes effect, so it never has to be rescued above.
+            onClick={() => { playRef.current?.focus(); toggle(); }}
+          >
             <PlayIcon />
           </button>
         )}
@@ -144,4 +196,4 @@ export function TrailerPlayer({ item, from, full = false, scopeRef, onClose }: P
       </div>
     </div>
   );
-}
+});

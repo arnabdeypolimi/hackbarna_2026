@@ -5,11 +5,12 @@ from tv_avatar.agent.stream_parse import (
     Done,
     EnvelopeStreamer,
     IntentReady,
+    RequestReady,
     SayDelta,
     SayDone,
 )
 
-ENVELOPE = '{"intent":"control","say":"Putting that on.","actions":[{"verb":"play","title_id":"1"}]}'
+ENVELOPE = '{"intent":"control","request":{"operation":"play","title":null,"title_id":"1"},"say":"Putting that on.","actions":[{"verb":"play","title_id":"1"}]}'
 
 
 def _feed_chars(text: str) -> list:
@@ -27,10 +28,29 @@ def _say(events) -> str:
 def test_streamer_emits_say_deltas_then_actions():
     events = _feed_chars(ENVELOPE)
     kinds = [type(e).__name__ for e in events]
-    assert kinds[0] == "IntentReady" and kinds[1] == "SayDelta"
+    assert kinds[:3] == ["IntentReady", "RequestReady", "SayDelta"]
     assert "ActionReady" in kinds and kinds[-1] == "Done"
     assert _say(events) == "Putting that on."
     assert [e.action for e in events if isinstance(e, ActionReady)] == [{"verb": "play", "title_id": "1"}]
+
+
+def test_request_object_is_emitted_whole_before_say_and_never_as_an_action():
+    """The cascade's second step: `request` closes before `say` opens, so the
+    loop knows the operation before the first action streams. Chunk boundaries
+    inside it and a nested "request" key elsewhere must not confuse it."""
+    events = _feed_chars(ENVELOPE)
+    kinds = [type(e).__name__ for e in events]
+    assert kinds.index("RequestReady") < kinds.index("SayDelta") < kinds.index("ActionReady")
+    (request,) = [e.request for e in events if isinstance(e, RequestReady)]
+    assert request == {"operation": "play", "title": None, "title_id": "1"}
+    s = EnvelopeStreamer()
+    split = s.feed(ENVELOPE[:30]) + s.feed(ENVELOPE[30:52]) + s.feed(ENVELOPE[52:])
+    assert [e.request for e in split if isinstance(e, RequestReady)] == [request]
+    nested = ('{"intent":"search","request":{"operation":"lookup","title":"a {b} \\"request\\"","title_id":null},'
+              '"say":"ok","actions":[{"verb":"search_catalog","query":"request"}]}')
+    events = _feed_chars(nested)
+    assert [e.request["title"] for e in events if isinstance(e, RequestReady)] == ['a {b} "request"']
+    assert [e.action for e in events if isinstance(e, ActionReady)] == [{"verb": "search_catalog", "query": "request"}]
 
 
 def test_say_done_follows_the_last_delta_and_precedes_actions():
@@ -41,7 +61,7 @@ def test_say_done_follows_the_last_delta_and_precedes_actions():
         assert "SayDelta" not in kinds[i:] and "ActionReady" not in kinds[:i]
     # Whole envelope in one chunk: the delta gathered across the chunk still lands before SayDone.
     whole = EnvelopeStreamer().feed(ENVELOPE)
-    assert [type(e) for e in whole[:3]] == [IntentReady, SayDelta, SayDone]
+    assert [type(e) for e in whole[:4]] == [IntentReady, RequestReady, SayDelta, SayDone]
     assert not any(isinstance(e, SayDone) for e in _feed_chars('{"intent":"chitchat","actions":[]}'))
 
 

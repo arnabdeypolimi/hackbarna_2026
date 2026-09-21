@@ -38,6 +38,13 @@ def test_stack_defaults_match_the_chosen_providers(monkeypatch):
     assert s.slng_tts_sample_rate == 24000
 
 
+def test_echo_guard_defaults_off_and_reads_the_env(monkeypatch):
+    _set_required(monkeypatch)
+    assert Settings(_env_file=None).echo_filter is False
+    monkeypatch.setenv("ECHO_FILTER", "true")
+    assert Settings(_env_file=None).echo_filter is True
+
+
 def test_missing_required_key_fails_fast(monkeypatch):
     for key in (*REQUIRED, "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
@@ -63,6 +70,23 @@ def test_phase2_defaults(monkeypatch):
     assert s.qdrant_path.endswith("qdrant_db")
     assert s.embedding_model == "Qwen/Qwen3-Embedding-8B"
     assert s.llm_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_cycle_loop_bounds(monkeypatch):
+    _set_required(monkeypatch)
+    s = Settings(_env_file=None)
+    assert s.agent_max_cycles == 2 and s.cycle_first_byte_s == 0.0
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, CYCLE_FIRST_BYTE_S=-1)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, agent_max_cycles=5)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, agent_max_cycles=0)
+    # The old name keeps working for .env files written against it.
+    monkeypatch.setenv("CYCLE2_FIRST_BYTE_S", "0.7")
+    assert Settings(_env_file=None).cycle_first_byte_s == 0.7
+    monkeypatch.setenv("CYCLE_FIRST_BYTE_S", "0.9")
+    assert Settings(_env_file=None).cycle_first_byte_s == 0.9
 
 
 def test_openai_env_names_are_accepted_as_aliases(monkeypatch):

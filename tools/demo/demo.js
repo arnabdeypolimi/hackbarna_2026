@@ -25,14 +25,16 @@ const state = {
 
 const stamp = () => ((performance.now() - state.t0) / 1000).toFixed(2).padStart(7);
 
+// Everything rendered into the console is built with DOM nodes, never HTML strings:
+// transcript text and wire frames come straight off the network.
+const span = (cls, text) => { const s = document.createElement("span"); s.className = cls; s.textContent = text; return s; };
+
 function wire(kind, text) {
-  const line = document.createElement("span");
-  line.className = kind;
-  line.innerHTML = `<span class="t">${stamp()}</span> ${kind === "in" ? "<" : kind === "out" ? ">" : "·"} ${escape(text)}\n`;
+  const line = span(kind, "");
+  line.append(span("t", stamp()), ` ${kind === "in" ? "<" : kind === "out" ? ">" : "·"} ${text}\n`);
   el.wire.appendChild(line);
   el.wire.scrollTop = el.wire.scrollHeight;
 }
-const escape = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 $("clear-wire").onclick = () => (el.wire.textContent = "");
 
 // ---- status + turn timing --------------------------------------------
@@ -68,13 +70,20 @@ function renderTurn(t) {
     while (el.turns.children.length > 6) el.turns.lastChild.remove();
   }
   const grade = think < 1200 ? "good" : think < 2000 ? "" : "slow";
-  li.innerHTML = `
-    <span class="n num">#${t.n}</span>
-    <span class="bar">
-      <span class="seg think" style="width:${(think / total) * 100}%" title="user stop → first word"></span>
-      <span class="seg speak" style="width:${(speak / total) * 100}%" title="speaking"></span>
-    </span>
-    <span class="lat num" data-grade="${grade}"><b>${Math.round(think)}</b> ms${t.done ? ` · ${(speak / 1000).toFixed(1)}s` : ""}</span>`;
+  const seg = (cls, frac, title) => {
+    const s = span(`seg ${cls}`, "");
+    s.style.width = `${frac * 100}%`;
+    s.title = title;
+    return s;
+  };
+  const bar = span("bar", "");
+  bar.append(seg("think", think / total, "user stop → first word"), seg("speak", speak / total, "speaking"));
+  const lat = span("lat num", "");
+  lat.dataset.grade = grade;
+  const b = document.createElement("b");
+  b.textContent = String(Math.round(think));
+  lat.append(b, ` ms${t.done ? ` · ${(speak / 1000).toFixed(1)}s` : ""}`);
+  li.replaceChildren(span("n num", `#${t.n}`), bar, lat);
 }
 
 // ---- transcript -------------------------------------------------------
@@ -93,8 +102,7 @@ function addTranscript({ role, text, final }) {
     li.dataset.role = role;
     li.dataset.final = final;
     li.dataset.open = role === "assistant" ? "true" : "false";
-    li.innerHTML = `<span class="role">${role === "user" ? "you" : "avatar"}</span><span class="text"></span><span class="at num">${stamp().trim()}</span>`;
-    li.querySelector(".text").textContent = text;
+    li.append(span("role", role === "user" ? "you" : "avatar"), span("text", text), span("at num", stamp().trim()));
     el.transcript.appendChild(li);
     if (role === "user" && !final) state.partialRow = li;
   }
@@ -111,8 +119,11 @@ function openControl(session) {
   const ws = new WebSocket(`${proto}://${location.host}${session.control_url}?token=${session.control_token}`);
   ws.onopen = () => { tone(el.idWs, "open", "ok"); wire("sys", "control socket open"); };
   ws.onclose = () => { tone(el.idWs, "closed", "bad"); wire("sys", "control socket closed"); };
+  const expectedOrigin = `${proto}://${location.host}`;
   ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
+    if (ev.origin && ev.origin !== expectedOrigin) return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { wire("err", "unreadable control frame"); return; }
     switch (msg.type) {
       case "agent_status":
         if (msg.state === "listening") closeAssistantRow();
@@ -143,6 +154,10 @@ async function openMedia(session, withAvatar, halfDuplex) {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   state.mic = mic;
+  // Browsers may silently drop AEC (some external devices, Firefox). Without it
+  // the avatar's own voice reaches Silero and no backend setting fully saves you.
+  const { echoCancellation, noiseSuppression, autoGainControl } = mic.getAudioTracks()[0].getSettings();
+  wire("sys", `mic aec=${echoCancellation} ns=${noiseSuppression} agc=${autoGainControl}`);
   meter(mic);
 
   const pc = new RTCPeerConnection();

@@ -1,0 +1,39 @@
+{
+  "catalog": [
+    {"title_id": "346698", "name": "Barbie", "year": 2023, "genres": ["Comedy", "Adventure"]},
+    {"title_id": "27205", "name": "Inception", "year": 2010, "genres": ["Science Fiction", "Action"]},
+    {"title_id": "17431", "name": "Moon", "year": 2009, "genres": ["Science Fiction"]},
+    {"title_id": "329865", "name": "Arrival", "year": 2016, "genres": ["Science Fiction", "Drama"]},
+    {"title_id": "976573", "name": "Elemental", "year": 2023, "genres": ["Animation", "Comedy"]},
+    {"title_id": "790493", "name": "Spy Kids: Armageddon", "year": 2023, "genres": ["Family", "Comedy"]},
+    {"title_id": "10001", "name": "The Signal (2007)", "year": 2007},
+    {"title_id": "10002", "name": "The Signal (2014)", "year": 2014}
+  ],
+  "profiles": {
+    "clean": "",
+    "biased": "## Preferences\nResponded positively to animated action adventures.\n## Open threads\nPending confirmation on whether to continue with animated adventures. Should offer similar picks with a fun, colorful style."
+  },
+  "histories": {
+    "clean": [],
+    "biased": [
+      {"role": "user", "content": "What should I watch?"},
+      {"role": "assistant", "content": "Let me find some colorful animated adventures. Try Elemental or Spy Kids: Armageddon."},
+      {"role": "user", "content": "Show me Barbie movie."},
+      {"role": "assistant", "content": "Here is the Barbie merchandise, and some animated adventures with a similar vibe."}
+    ]
+  },
+  "cases": [
+    {"id": "watch_visible", "request": "I want to watch Inception.", "visible_ids": ["27205"], "operation": "play", "sequences": [["play"]], "target_id": "27205"},
+    {"id": "watch_shop_id", "request": "I want to watch Barbie.", "visible_ids": ["27205"], "operation": "play", "sequences": [["play"]], "target_id": "346698"},
+    {"id": "watch_lookup", "request": "I want to watch Moon.", "visible_ids": ["27205"], "operation": "play", "sequences": [["search_catalog", "play"]], "target_id": "17431", "search_query": "Moon"},
+    {"id": "show_visible", "request": "Show me Inception.", "visible_ids": ["27205"], "operation": "open", "sequences": [["open_details"], ["focus", "open_details"]], "target_id": "27205"},
+    {"id": "show_lookup", "request": "Show me Arrival.", "visible_ids": ["27205"], "operation": "open", "sequences": [["search_catalog", "open_details"], ["search_catalog", "focus", "open_details"]], "target_id": "329865", "search_query": "Arrival"},
+    {"id": "search_only", "request": "Search for Moon.", "visible_ids": ["27205"], "operation": "lookup", "sequences": [["search_catalog", "show_titles"], ["search_catalog", "open_details"], ["search_catalog", "show_titles", "open_details"]], "target_id": "17431", "search_query": "Moon"},
+    {"id": "similar", "request": "Recommend something like Barbie.", "visible_ids": ["346698"], "operation": "discover", "sequences": [["recommend_titles", "show_titles"]], "recommendation_ids": ["976573", "790493"]},
+    {"id": "merch", "request": "Show me the Barbie merch.", "visible_ids": ["27205"], "operation": "shop", "sequences": [["show_products"]], "target_id": "346698"},
+    {"id": "ambiguous", "request": "Play The Signal.", "visible_ids": ["27205"], "operation": "play", "sequences": [["search_catalog"], ["search_catalog", "show_titles"]], "search_query": "The Signal", "final_intent": "clarify"},
+    {"id": "missing", "request": "Play The Glass Lighthouse.", "visible_ids": ["27205"], "operation": "play", "sequences": [["search_catalog"]], "search_query": "The Glass Lighthouse"},
+    {"id": "watch_biased", "request": "I want to watch Barbie.", "visible_ids": ["27205"], "profile": "biased", "history": "biased", "operation": "play", "sequences": [["play"]], "target_id": "346698"},
+    {"id": "show_biased", "request": "Show me Barbie movie.", "visible_ids": ["27205"], "profile": "biased", "history": "biased", "operation": "open", "sequences": [["open_details"], ["focus", "open_details"]], "target_id": "346698"}
+  ]
+}

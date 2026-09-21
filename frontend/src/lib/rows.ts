@@ -8,13 +8,27 @@ export const TAB_TITLES: Record<Tab, string> = {
   list: 'My List',
 };
 
+/**
+ * The search bar's matcher. The agent's `search_catalog` uses it too, so a spoken and a
+ * typed search agree. Every word must appear somewhere in the title or genres, but not as
+ * one phrase: speech arrives without punctuation, so "2001 space odyssey" has to find
+ * "2001: A Space Odyssey".
+ */
+export function matches(x: Title, query: string): boolean {
+  const hay = `${x.title} ${x.genres.join(' ')}`.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w && !FILLER.has(w));
+  return words.length > 0 && words.every((w) => hay.includes(w));
+}
+
+// Words a spoken request carries that no title or genre does: "space movie" must still
+// find 2001: A Space Odyssey. A query made only of these matches nothing.
+const FILLER = new Set([
+  'a', 'an', 'the', 'some', 'any', 'me', 'for', 'of', 'to', 'in', 'on', 'with', 'about', 'like',
+  'movie', 'movies', 'film', 'films', 'show', 'shows', 'series', 'title', 'titles', 'something',
+]);
+
 export function buildRow(items: Title[], tab: Tab, query: string, myList: string[]): Title[] {
-  if (query) {
-    const q = query.toLowerCase();
-    return items
-      .filter((x) => x.title.toLowerCase().includes(q) || x.genres.some((g) => g.toLowerCase().includes(q)))
-      .slice(0, ROW_MAX);
-  }
+  if (query) return items.filter((x) => matches(x, query)).slice(0, ROW_MAX);
   switch (tab) {
     case 'popular':
       return (items.some((x) => x.pop) ? [...items].sort((a, b) => b.pop - a.pop) : items).slice(0, ROW_MAX);
@@ -29,11 +43,4 @@ export function buildRow(items: Title[], tab: Tab, query: string, myList: string
     case 'list':
       return items.filter((x) => myList.includes(x.id));
   }
-}
-
-/** The title for "You watched last time": the most recent from local history or the CSV's own watch columns. */
-export function pickResume(items: Title[], history: Record<string, number>): Title | null {
-  const merged = items.map((x) => (history[x.id] ? { ...x, last: history[x.id] } : x));
-  const inProgress = merged.filter((x) => x.position || x.episode || x.last).sort((a, b) => b.last - a.last);
-  return inProgress[0] || null;
 }

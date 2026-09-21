@@ -251,7 +251,8 @@ class ReferenceChecker:
 
     def _check_caption_latex(self, labels: list[LabelInfo]) -> None:
         """LaTeX caption check — outer-float-only with inner-env depth tracking."""
-        assert self._figure_env_end_re is not None
+        if self._figure_env_end_re is None:
+            raise RuntimeError("_check_caption_latex called in non-LaTeX mode")
         envs: list[tuple[int, int, str]] = []
         stack: list[tuple[int, str]] = []
         inner_depth: int = 0  # depth of SKIP_INNER (subfigure/subtable/minipage) envs

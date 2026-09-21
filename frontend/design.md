@@ -56,8 +56,8 @@ Five surfaces:
    track slides under a fixed selection point.
 2. **Detail block** — metadata, genre chips, clamped synopsis, Watch / Save, and a
    trailer card.
-3. **Resume panel** — "You watched last time", tilted in 3D, with continue / episodes /
-   remind actions.
+3. **Resume panel** — "You watched last time", the browse panel's height beside it and
+   turned to face the same centre, with continue / episodes / remind actions on its floor.
 4. **Trailer player** — expands *out of the trailer card* to fill the main panel, with
    custom transport chrome over a YouTube embed.
 5. **Tab bar + search** — Popular, Top rated, New releases, My List.
@@ -126,11 +126,16 @@ The whole UI is a frosted-glass language — but `backdrop-filter` is a per-fram
 everything behind a panel, and it will melt a TV board.
 
 Instead: a `.room` layer of pre-blurred radial gradients sits behind the panels, and the
-panels are simply semi-transparent white with a 1.5 px light edge.
+panels are simply semi-transparent smoke with a 1.5 px light edge.
 
 ```css
-.panel { background: rgba(255,255,255,0.15); border: 1.5px solid rgba(255,255,255,0.3); }
+.panel { background: var(--glass); border: 1.5px solid var(--glass-edge); }
 ```
+
+The fill is not a fixed value. `lib/theme.ts` mixes it from the sky's own deepest stop —
+70 % of the way to black, at 0.6 alpha — so spring's panels are a deep violet glass,
+autumn's a burnt umber and winter's an ink. It used to be a flat `rgba(255,255,255,0.15)`
+white, which read as grey against every sky and as a smear against the light ones.
 
 | | |
 | --- | --- |
@@ -320,32 +325,128 @@ deletes a character.
 
 ## 5. Visual design language
 
-**Type** — Sora (400/500/600/700) with system fallbacks. Sizes are 10-foot sizes: H1
-56 px, panel headings 34–40 px, body 19–24 px, metadata 17 px. Nothing below 15 px.
+**Type** — Schibsted Grotesk (400/600/700) with system fallbacks, on a seven-step scale of tokens:
+
+| Token | Size | Use |
+| --- | --- | --- |
+| `--t-1` | 72 px | a profile's initials |
+| `--t-2` | 56 px | panel heading, "Who's watching?" |
+| `--t-3` | 40 px | section heads: a title, a dialog, the full-screen player |
+| `--t-4` | 32 px | sub-heads, the lead line of an empty state |
+| `--t-5` | 24 px | synopsis lead, typed fields |
+| `--t-6` | 20 px | every control: buttons, tabs, chips, the toast |
+| `--t-7` | 17 px | metadata, and the floor |
+
+Seven steps, not the seventeen sizes this used to carry. Eight of those seventeen sat
+inside an 8 px span and were handed to roles meant to differ — at ten feet a 4 px
+difference is below what the eye resolves, which is the same reason the spacing steps are
+far apart. Two steps in the first pass still broke that rule: 15 against 17 and 56 against
+64, 1.13× and 1.14× apart, which is not a step anyone sees. The 15 is gone — the clock and
+the kids tag read better at 17 anyway, and 17 is a better floor for a screen ten feet away
+— and the top step moved to 72. No adjacent pair is now closer than 1.18×.
+
+**Weight** — three, by role: `--w-body` 400, `--w-control` and `--w-head` 600,
+`--w-display` 700. There was a 500 between body and head; it did no work that size was not
+already doing, since controls are 20 px and heads 32 px and up, and at ten feet 400 against
+500 is barely a difference. Dropping it is one font file fewer at startup.
+
+The sizes on the generated poster cards are deliberately not on this scale:
+`posterFontSize()` fits each title to its card, so it computes whatever makes the longest
+word fit, and the text is hidden the moment real artwork lands.
 
 **Colour** — everything is a token in `:root`:
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `--glass` | `rgba(255,255,255,.15)` | panel fill |
+| `--glass` | sky's deepest stop → black, 0.6α | panel fill |
 | `--glass-edge` | `rgba(255,255,255,.30)` | 1.5 px panel edge |
-| `--chip` | `rgba(255,255,255,.16)` | chips, buttons |
+| `--primary` / `--chip` / `--chip-quiet` | white at .28 / .16 / .10 | controls, by rank |
 | `--ink` / `--ink-2` / `--ink-3` | `#fff` / 78% / 60% | three-level text hierarchy |
-| `--focus-bg` / `--focus-ink` | `#fff` / `#23211f` | focus inversion |
+| `--focus-bg` / `--focus-ink` | `#fff` / sky's stop → black 0.4 | focus inversion |
+| `--key-red` / `--key-yellow` / `--kids` / `--alert` | fixed | the four meaning-bearing colours |
+
+The tinted rows are regenerated per sky by `tokensOf()`; the rest never change. Anything
+that sits on the room or the glass goes through a token — a literal there stays the colour
+of whichever sky happened to be on screen when it was written. The four white alphas that
+had drifted outside the ladder (.18, .20, .22, .24) are gone.
 
 **Focus** — the most important visual state on a TV, and unmissable by design. Two
 treatments: buttons **invert to solid white**; images take a **5 px white ring**. The
 selected poster is also physically larger (262×334 vs 214×272), so the selection reads
 from across a room, even in peripheral vision.
 
-**Depth** — the resume panel is rotated `perspective(2200px) rotateY(-7deg)`, giving the
-screen a sense of physical space for the price of one composited transform.
+**Depth** — the stage is a room seen through a 2400 px lens (`perspective` on `#stage`,
+vanishing point dead centre), and the two panels are its two walls. Each is hinged on the
+edge nearest the screen's rim and turned away towards the middle: the browse
+panel on its left edge, the avatar panel on its right. What the two share is a *depth*, not
+an angle: both far edges recede to `--tilt-depth` (150 px), so each wall's angle follows from
+its own width — 7.2° across the 1204 px browse panel, 15.9° across the 548 px avatar panel.
+An equal angle on both was the first attempt and it was wrong: it put the far edges 188 px
+and 86 px back, and the avatar panel's edge stood 33 px taller than the browse panel's across
+the gap, so the seam read as two unrelated skews instead of one corner. Their layout boxes never move, so
+every measurement in this document is still the flat one — only the paint is turned. The
+search field and the tab bar stand on the browse panel's plane, hinged on the same edge and
+floated `--tilt-lift` off it, which is why they read as slabs lying in the room rather than
+chrome pasted on the glass.
+
+The cost is deliberate and worth naming: a turned panel does not read as the same size as
+the one beside it, and the far edge of each stands about 7% shorter than its near edge. An
+earlier revision flattened both panels for exactly that reason. The tilt is back because
+depth from the room alone — sky, lights, smoked glass — never gave the screen a floor.
+Overlays (Who's watching?, the theme picker, the exit dialog, the full-screen player) stay
+flat and level: they are the one thing on the stage that is in front of the room, not in it.
+
+Inside the walls, three more surfaces have a plane of their own. The poster row curves around
+whatever is selected — `--fan-step` (4°) of turn and `--fan-depth` (−18 px) of retreat per
+tile, holding after two — while the selected tile comes `--sel-lift` forward and stands
+square, so the selection is marked by depth as well as by size. The trailer card hangs off
+the browse panel, turned back towards the viewer. The talking head lifts `--lift-face` off
+the avatar panel and stays parallel to it. It briefly turned 10° back against the wall's
+−15.9°, on the argument that a talking head should face the room — but the video frame then
+sat at a visibly different angle from the card holding it, and two nested rectangles
+disagreeing about which way the wall faces is worse to look at than a head in three-quarter
+view. Depth from the lift alone. Each of those surfaces carries its own `perspective`
+rather than sharing the stage's: `.rowwrap`, `.side` and `.face` are all `overflow: hidden`,
+which forces `transform-style: flat` and severs any 3D chain coming down from `#stage`.
+
+**The room opens once, when the avatar arrives.** From the moment a profile is pressed until
+the avatar's phase settles, the stage carries `data-solo`: the browse panel runs frame to
+frame at 1792 px, the search field and tab bar centre on the screen, everything stands flat,
+and the avatar panel is `visibility: hidden` — hidden rather than transparent, so the remote
+cannot arrow off the edge of the screen into a panel nobody can see. Then the room opens as
+one move: the panel gives back the 588 px the second wall needs, the bars slide onto its
+axis, both walls turn, and the avatar panel fades up.
+
+`error` counts as arrived, because with no backend the panel reads "Backend not running" and
+that belongs in the room, not behind an intro that never ends; a 7-second cap covers a
+connect that hangs without ever failing. It is latched: switching profile restarts the
+session and pushes the phase back to `connecting`, and the room collapsing behind the picker
+to re-open as the viewer left it would be a worse thing than a missing flourish. The opening
+belongs to arriving at the television, not to every session on it.
+
+**Playback folds the room flat**, the same rule and the same tokens. A moving image is the
+one thing on this screen the viewer looks *through* rather than at, and a turned wall beside
+it is a distraction with a vanishing point. The room unfolds on close.
+
+Both folds run on `--t-room` (1200 ms) and `--ease-room`, the one curve in the stylesheet
+that is not `--ease`. `--ease` is an exponential ease-out, and over a movement this large it
+is front-loaded to the point of reading as a snap with a long tail — measured, 95% travelled
+in the first 325 ms of 700. `--ease-room` is symmetric: 8% at 300 ms, 52% at the midpoint,
+at rest by 1200. A camera move starts at rest and ends at rest.
 
 **Radii** — large and consistent: 48 px panels, 24–30 px cards, full pills on buttons.
 
-**Motion** — 320 ms row glide, 700 ms player expansion, 250 ms toasts, all on
-`cubic-bezier(.22,1,.36,1)`. The row's easing is *disabled* during free scroll, because
-easing a continuous scroll feels like lag. All of it respects `prefers-reduced-motion`.
+**Motion** — one curve and four lengths, as tokens: `--ease` is
+`cubic-bezier(.22,1,.36,1)`, an exponential ease-out, and the lengths are `--t-quick`
+250 ms (toasts, a poster taking focus), `--t-base` 320 ms (the row's glide, the avatar's
+first frame), `--t-slow` 700 ms (the player opening) and `--t-veil` 1200 ms (the moving sky
+arriving over the still one). The 450 ms delay on the player's chrome is tied to the 700 ms
+expansion rather than to a step on the scale, so it stays a literal.
+
+This claimed to be one curve long before it was: five easings were in use, two of them the
+browser's own `ease`, which decelerates too early. The row's easing is *disabled* during
+free scroll, because easing a continuous scroll feels like lag. All of it respects
+`prefers-reduced-motion`.
 
 ---
 
@@ -397,12 +498,13 @@ environment or a `.env` file.
 
 | | |
 | --- | --- |
-| JS bundle | **164 KB** (React included), compiled to Chrome 84 |
-| CSS bundle | **10 KB** |
+| JS bundle | **196 KB** (React included), compiled to Chrome 84 |
+| CSS bundle | **19.8 KB** (4.4 KB gzipped) |
 | Dataset | 280 KB / 600 titles |
 | Runtime dependencies | 2 (`react`, `react-dom`) |
 | DOM nodes in the row | ≤ 30 posters |
-| Per-frame GPU work | 1 stage transform, 1 track translate — no filters, no blurs |
+| Composited layers, browsing | ≤ 12: stage, track, two walls, two bars, trailer card, face, actions, and the ≤ 5 tiles in the row's arc — no filters, no blurs |
+| Layout animation | once per launch: `width` on the browse panel and `left` on the two bars for the 1200 ms room opening; nothing else animates layout |
 
 The build targets `chrome84` for both JS and CSS, and uses `base: './'` so `dist/` can be
 hosted from any folder or served straight off the TV.
@@ -437,8 +539,8 @@ doesn't:
 - **My List keys on title text**, not on a stable id. Two films sharing a name collide.
 - The README documents a `SHOW_TMDB_CREDIT` flag and a TMDB credit line; neither is in
   the code yet. TMDB's terms require the attribution before this ships with their data.
-- The on-screen footer hint only advertises the red key; the yellow (import) key is
-  undocumented on screen.
+- No key is advertised on screen any more: the footer hint that named the red key was
+  removed. The red, green and yellow keys are documented only in the README's remote table.
 - **Fonts load from Google Fonts.** Self-hosting would remove a network round-trip from
   startup on a slow TV connection.
 - No automated tests. `lib/csv.ts`, `lib/rows.ts` and `lib/spatialNav.ts` are pure

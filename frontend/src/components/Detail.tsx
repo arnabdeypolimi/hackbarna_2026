@@ -15,7 +15,7 @@ export function Detail({ item, saved, onWatch, onSave, onTrailer }: Props) {
   return (
     <div className="detail">
       <div className="info">
-        <h3>{item.title}</h3>
+        <h2>{item.title}</h2>
         <Meta item={item} />
         <Chips values={item.genres} />
         <p className="desc">{item.desc}</p>

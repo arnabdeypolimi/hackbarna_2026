@@ -1,21 +1,35 @@
 /* Layout is drawn at 1920×1080 inside #stage and scaled to the screen.
    Avoids CSS newer than Chrome 84 (no inset, aspect-ratio, :has, backdrop-filter). */
 :root {
-  /* Surfaces. The room is the light; the glass is smoked, not milky, because a living
-     room is dim in the evening and white ink needs a dark plane to sit on. */
-  --glass: rgba(26, 22, 18, 0.58);
+  /* The whole palette is set by lib/theme.ts from the sky of the season, or the one the viewer
+     picked; the values here are the winter sky's, which is what a room with no saved choice and
+     no script yet paints. Ink, chips, ring and lights never change; every tinted surface below
+     is mixed from that sky's deepest stop, so no panel is a neutral grey. */
+  --sky: linear-gradient(135deg, #919397 12.5%, #686b71 37.5%, #40444b 62.5%, #171c25 87.5%);
+  --grain: none;
+  --shade: rgba(6, 7, 9, 0.18);      /* the veil or scrim over the room, graded per sky */
+  --surround: #141820;          /* under the room, seen only if the room fails to paint */
+  --lights:
+    radial-gradient(900px 700px at 12% 18%, rgba(255, 255, 255, 0.28), transparent 70%),
+    radial-gradient(700px 500px at 92% 10%, rgba(255, 255, 255, 0.18), transparent 70%),
+    radial-gradient(1400px 420px at 35% 105%, rgba(0, 0, 0, 0.3), transparent 70%),
+    radial-gradient(600px 900px at 75% 60%, rgba(0, 0, 0, 0.12), transparent 70%);
+
+  /* Surfaces. The room is the light; the glass is smoked with the sky's own deepest stop, never a neutral black. */
+  --glass: rgba(7, 8, 11, 0.6);
   --glass-edge: rgba(255, 255, 255, 0.3);
-  --solid: #322e2a;            /* dialogs and the profile form: glass with nothing behind it */
-  --shade: rgba(20, 18, 16, 0.28);
+  --solid: #090b0f;            /* dialogs and the profile form: glass with nothing behind it */
+  --toast: rgba(9, 11, 15, 0.9);
 
   /* Two scrims, because two kinds of overlay sit on them. One dims the screen behind a panel
      that carries its own fill; the other IS the surface, so it has to put the room out. */
-  --scrim: rgba(20, 18, 16, 0.55);
-  --scrim-full: rgba(20, 18, 16, 0.96);
+  --scrim: rgba(6, 7, 9, 0.55);
+  --scrim-full: rgba(6, 7, 9, 0.96);
 
   /* One ring width for every focusable that takes a ring rather than inverting. Focus is the
      state a viewer hunts for from the sofa, so it is never thinner on one control than another. */
   --ring: 5px;
+  --ring-color: #fff;
 
   /* Controls, by rank. Value carries the hierarchy so no hue is spent on it. */
   --primary: rgba(255, 255, 255, 0.28);
@@ -23,11 +37,56 @@
   --chip: rgba(255, 255, 255, 0.16);
   --chip-quiet: rgba(255, 255, 255, 0.1);
 
+  /* Type, in eight steps. Sizes used to run 15,16,17,18,19,20,21,22,24,32,34,36,40,42,46,56,64:
+     eight of them inside an 8px span, handed to roles that are meant to differ. At ten feet a
+     4px difference is below what the eye resolves, which is the same reason the spacing steps
+     below are far apart — typography needs the rule more, not less, because more things use it. */
+  --t-1: 72px;   /* a profile's initials, the largest thing on screen */
+  --t-2: 56px;   /* the panel heading, and "Who's watching?" */
+  --t-3: 40px;   /* section heads: a title, a dialog, the full-screen player */
+  --t-4: 32px;   /* sub-heads and the lead line of an empty state */
+  --t-5: 24px;   /* long-form: a synopsis lead, a typed field, a note in the avatar box */
+  --t-6: 20px;   /* every control: buttons, tabs, chips, the toast */
+  --t-7: 17px;   /* metadata, and the floor. Nothing on a television is smaller. */
+
+  /* Leading. Only six rules set this before now, so most copy fell to the browser's `normal`
+     — about 1.26 on this face, tight for a paragraph and tighter still for white text on
+     a dark room, where the glyphs bloom into the line above. Headings keep their own. */
+  --lead-display: 1.1;   /* one line, set large: the panel heading, "Who's watching?" */
+  --lead-tight: 1.15;    /* headings that wrap to two */
+  --lead-snug: 1.3;      /* a short label or a question, one or two lines */
+  --lead-body: 1.5;      /* anything a viewer reads a sentence of */
+
+  /* Weight, by role. Three, not four: 500 sat between body and head doing no work that size
+     was not already doing — controls are 20px and heads are 32px and up, so nothing relied on
+     weight alone to tell them apart, and at ten feet 400 against 500 is barely a difference.
+     Controls take the head weight, and the television fetches one font file fewer at startup. */
+  --w-body: 400;
+  --w-control: 600;      /* every button, tab, chip and pill */
+  --w-head: 600;
+  --w-display: 700;      /* the largest type, and the uppercase tags */
+
+  /* Tracking goes with size, not with the element. The large sizes want pulling in and
+     the uppercase tags opened out; mid sizes are left alone. It was applied to some 40px text
+     and not to other 40px text, which is the kind of thing only the eye notices. */
+  --track-display: -0.02em;   /* --t-1, --t-2 */
+  --track-head: -0.01em;      /* --t-3, --t-4 */
+  --track-caps: 0.04em;       /* uppercase tags */
+
   --ink: #fff;
   --ink-2: rgba(255, 255, 255, 0.78);
-  --ink-3: rgba(255, 255, 255, 0.6);
+  /* 0.66, not 0.6. Measured on the glass over the brightest patch of each room, 0.6 gave
+     4.22 / 4.17 / 4.19 on blossom, blue and golden — under the 4.5:1 that the 17px metadata
+     using it needs. 0.66 gives 4.73 / 4.68 / 4.70, and 5.62 on ink. */
+  --ink-3: rgba(255, 255, 255, 0.66);
   --focus-bg: #fff;
-  --focus-ink: #23211f;
+  --focus-ink: #0e1116;
+
+  /* The placeholder card behind a poster: three tints of the sky and a glow. */
+  --card-a: #1d1f22;
+  --card-b: #0d0f14;
+  --card-c: #16181c;
+  --card-glow: rgba(104, 107, 113, 0.45);
 
   /* The four meaning-bearing colours. Each one means exactly one thing, and two of them
      are the colours of the physical keys on the remote in the viewer's hand. */
@@ -35,11 +94,15 @@
   --key-yellow: #f5c542;       /* the YELLOW key: the import path, shown on the drop overlay */
   --kids: #5fd0bb;             /* a kids profile, the one cool note in a warm room */
   --alert: #a33a2b;            /* consequence: destructive, or an action that did not happen */
+  --alert-fill: rgba(163, 58, 43, 0.92);  /* the same red as a toast's ground, at the toast's alpha */
 
   /* Spacing, on a 4px base, named for the relationship each value expresses. The steps are
      far apart on purpose: at 10 feet a 4px difference is below what the eye resolves, so two
      intervals closer together than one step would read as the same interval. */
-  --frame: 64px;         /* the stage's margin, identical on all four sides */
+  /* The stage's side margin. The top and bottom bands are not this: the search field sits at
+     --gap-block from the top and the tab bar 32px off the bottom, so both read as chrome
+     against the panels rather than as a fourth and fifth edge of the same frame. */
+  --frame: 64px;         /* left and right only */
   --gutter: 40px;        /* between the two panels */
   --pad-panel: 40px;     /* a panel's own inner padding */
   --pad-text: 56px;      /* the text column inset inside the browse panel */
@@ -48,186 +111,520 @@
   --gap-group: 16px;     /* between related lines of one block */
   --gap-item: 12px;      /* between peers in a set, such as chips */
   --gap-tight: 8px;      /* inside a single group */
+  --gap-major: 56px;     /* under a full-screen question, and above the control that leaves it */
+
+  /* Control insets. The scale above names relationships *between* things; nothing named the
+     space inside a control, so fourteen different paddings grew there — 28 and 26 for two
+     buttons that sit on the same bar, 20, 18, 16 and 14 across four chips. Four steps now. */
+  --inset-lg: 32px;      /* a field the viewer types into */
+  --inset-md: 28px;      /* a button */
+  --inset-sm: 22px;      /* a standalone chip */
+  --inset-xs: 16px;      /* a chip that sits in running text */
+
+  /* Radii. A pill is not a number: nine of these were hand-computed as half the control's
+     height, so changing a height and forgetting its radius quietly squared off a corner. */
+  --r-panel: 48px;
+  --r-card: 30px;
+  --r-tile: 24px;
+  --r-pill: 999px;
+
+  /* The room's one turn, and it is a depth, not an angle. Both panels are hinged on the edge
+     nearest the screen's rim, and both far edges recede to this same 150px — which is what
+     makes the seam between them read as one corner. An equal *angle* does not: the panels
+     are 1204 and 548 wide, so 9° on both put their far edges 188px and 86px back, and the
+     avatar panel's edge stood 33px taller than the browse panel's across the gap.
+     The angle each wall needs therefore follows from its own width, and CSS has no asin, so
+     the arithmetic is here rather than in the value:
+       --tilt-main = asin(150 / 1204) =  7.2°
+       --tilt-side = asin(150 /  548) = 15.9°
+     Both far edges then project at the same 0.941 and stand the same 781px tall. Keep the
+     depth under about 190px: past that the browse panel passes 9°, and poster titles at the
+     far end of the row start losing their thinner strokes on a 720p set. */
+  --tilt-depth: 150px;   /* documentation for the two angles below; nothing reads it */
+  --tilt-main: 7.2deg;
+  --tilt-side: 15.9deg;
+  --tilt-lean: 2deg;     /* the chrome bars' extra lean, so they read as lying in the room */
+  --tilt-lift: 24px;     /* and how far off their panel's plane they float */
+
+  /* What stands off a wall, and by how much. Everything angled or lifted on the stage reads
+     from one of these, which is what lets playback fold the whole room flat by zeroing them
+     in a single rule rather than unwinding a dozen transforms. */
+  --fan-step: 4deg;      /* a poster's turn per step away from the selected one */
+  --fan-depth: -18px;    /* and how far it falls back over that step */
+  --sel-lift: 24px;      /* the selected poster, stood proud of the arc */
+  --lean-trailer: -5deg; /* the trailer card, turned back towards the viewer */
+  --lift-trailer: 30px;
+  --lift-face: 40px;     /* the talking head, off the wall it is hung on */
+  /* The face does not counter-turn. It was at 10° against the wall's -15.9°, on the argument
+     that a talking head should face the room — but the video frame then sat at a visibly
+     different angle from the card holding it, and two nested rectangles disagreeing about
+     which way the wall faces is a worse thing to look at than a head in three-quarter view.
+     It keeps the lift: parallel to the wall and standing off it is depth without dissent. */
+  --lean-face: 0deg;
+  --lift-action: 20px;
+
+  /* Motion. One curve, four lengths. The curve is an exponential ease-out: things decelerate
+     the way objects do. It used to be five different easings — two of them the browser's own
+     `ease`, which decelerates too early — and seven lengths written in two unit styles. */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-quick: 250ms;      /* a toast, a poster taking focus */
+  --t-base: 320ms;       /* the row's glide, the avatar's first frame */
+  --t-slow: 700ms;       /* the player opening: the largest movement in the app */
+  /* The room folding open or flat, which is slower than anything else here and deliberately
+     so: it is the set turning to face the viewer, not a control responding to a press. It
+     also gets the one curve in this file that is not --ease. --ease is an exponential
+     ease-out, and at this distance it is front-loaded to the point of looking like a snap
+     with a long tail — measured, it was 95% travelled in the first 325ms of 700. A camera
+     move starts at rest and ends at rest, so this one is symmetric. */
+  --t-room: 1200ms;
+  --ease-room: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-veil: 1200ms;      /* the moving sky arriving over the still one */
 }
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 body {
-  background: #8d8a86;
+  background: var(--surround);
   color: var(--ink);
-  font-family: 'Sora', system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
+  /* Schibsted Grotesk. Sora was the widest of twenty-five faces measured — "New releases" set
+     1341 units against this one's 1258 — on a stage that cannot grow and a product that still
+     has to fit German and Dutch. It also drew I, l and 1 as three near-identical bars, which
+     is why profiles.ts keeps i, l, o and u out of a user id "to misread on a TV": the
+     ambiguity was being worked around in the data because the type wasn't solving it. This
+     face gives the l a tail, and its x-height is within 1.3% of Sora's, so nothing is lost at
+     ten feet. Same four weights, same load. */
+  font-family: 'Schibsted Grotesk', system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 input { caret-color: var(--ink); }
-::selection { background: rgba(255, 255, 255, 0.26); color: var(--ink); }
+::selection { background: var(--primary); color: var(--ink); }
 
 
-#stage { position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; }
-
-/* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter. */
-.room {
-  position: absolute; top: 0; right: 0; bottom: 0; left: 0;
-  background:
-    radial-gradient(900px 700px at 12% 18%, rgba(255, 240, 219, 0.55), transparent 70%),
-    radial-gradient(700px 500px at 92% 10%, rgba(255, 247, 234, 0.35), transparent 70%),
-    radial-gradient(1400px 420px at 35% 105%, rgba(52, 48, 45, 0.85), transparent 70%),
-    radial-gradient(600px 900px at 75% 60%, rgba(120, 112, 104, 0.5), transparent 70%),
-    linear-gradient(180deg, #b9b5b0 0%, #9a9690 55%, #7b7771 100%);
+/* The room stands flat in two situations, and they are the same rule.
+   Playback, because a trailer is the one thing on this screen the viewer is meant to look
+   *through* rather than at, and a turned wall beside a moving image is a distraction with a
+   vanishing point. And the opening, before the avatar has answered: until there is a second
+   wall to turn towards there is no corner, only a panel at an angle for no reason.
+   Zeroing the tokens is the whole of it — the walls swing back to square, the chrome bars
+   lie down, the row's arc opens out and the face settles onto the panel, each over --t-room,
+   because every surface carries a transform transition.
+   The perspective on #stage stays: with nothing rotated there is nothing for it to project,
+   and leaving it avoids re-establishing a containing block mid-transition. */
+#stage[data-flat], #stage[data-solo] {
+  --tilt-main: 0deg; --tilt-side: 0deg; --tilt-lean: 0deg; --tilt-lift: 0px;
+  --fan-step: 0deg; --fan-depth: 0px; --sel-lift: 0px;
+  --lean-trailer: 0deg; --lift-trailer: 0px;
+  --lean-face: 0deg; --lift-face: 0px; --lift-action: 0px;
 }
-.room::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--shade); }
 
-.panel { position: absolute; background: var(--glass); border: 1.5px solid var(--glass-edge); border-radius: 48px; }
-.main { left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0; }
-/* Its right edge lands on the frame, so the screen has one right edge instead of two. The
-   tilt is deliberate and gives the screen depth, which is why its top is not aligned to
-   the browse panel's. */
+/* Before the avatar answers, the browse panel has the screen to itself: it runs frame to
+   frame, and the two chrome bars centre on the screen rather than on a panel that is no
+   longer off to one side. Then the room opens — the panel gives back the 588px the avatar
+   panel needs, the bars slide left onto its axis, the walls turn, and the second wall fades
+   up out of nothing. One move, --t-room.
+   .side is hidden, not merely transparent: a transparent panel still takes focus, and the
+   viewer would be able to arrow off the edge of the screen into a panel nobody can see. */
+#stage[data-solo] .main { width: 1792px; }
+#stage[data-solo] .search { left: 720px; }   /* 960 - 480/2 */
+#stage[data-solo] .tabs { left: 530px; }     /* 960 - 860/2 */
+#stage[data-solo] .side { visibility: hidden; opacity: 0; transform: translateX(80px); }
+
+/* The camera for the room. Everything on the stage that is tilted shares this one vanishing
+   point at the centre of the screen, so the two panels read as two walls of the same room
+   rather than two independently skewed rectangles. 2400px is a long lens: enough depth to
+   see, little enough that the far edge of a panel is still only ~7% smaller than the near
+   one, which is what keeps 214px poster art readable at ten feet. The scale() this element
+   already carries is 2D and does not flatten its children's 3D. */
+#stage {
+  position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
+  perspective: 2400px; perspective-origin: 960px 540px;
+}
+
+/* The "room" behind the glass: pre-blurred gradients instead of a live backdrop-filter.
+   It fills the window, not the stage: on a desktop the window is rarely 16:9, and the sky
+   running edge to edge beats bars the colour of --surround either side of the panels. On a
+   television the window is the stage, so nothing differs.
+   Bottom to top: the still sky; the moving sky, a muted loop that fades in once it is playing
+   and is left out under reduced motion or on a set that cannot decode it; then one
+   pseudo-element holding the four lights, the grain and the scrim. The lights are white and
+   black only, so one set of them reads as the same room at dawn and at midnight, and the sky
+   carries every bit of the hue. Lights, grain and scrim share one background stack, so they
+   are one paint, and that paint never repeats: the only per-frame work is the decoder, which
+   on a television is a hardware block, and the compositor placing its frame. No filters.
+   The grain is not pixelated on purpose: at 2–4% strength, letting the stage's scale smooth
+   the tile loses nothing and avoids aliasing on a 720p set. */
+.room { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--sky); }
+.room .sky { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-veil) var(--ease); }
+.room .sky.on { opacity: 1; }
+.room::after {
+  content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  background-image:
+    linear-gradient(var(--shade), var(--shade)),
+    var(--grain),
+    var(--lights);
+  background-repeat: no-repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: auto, 128px 128px, auto, auto, auto, auto;
+}
+
+.panel { position: absolute; background: var(--glass); border: 1.5px solid var(--glass-edge); border-radius: var(--r-panel); }
+.main {
+  left: var(--frame); top: 110px; width: 1204px; height: 830px; padding: var(--pad-panel) 0 0;
+  transform-origin: left center; transform: rotateY(var(--tilt-main));
+  transition: transform var(--t-room) var(--ease-room), width var(--t-room) var(--ease-room);
+}
+/* The two panels are the room's two walls, each hinged on the edge nearest the screen's rim
+   and turned away towards the centre: the browse panel on its left edge, this one on its
+   right. The rim edges stay exactly on --frame, so the screen keeps one left edge and one
+   right edge; the turn is absorbed entirely by the centre, where the 40px seam between the
+   flat panels opens into a ~66px gap. Each wall turns by its own angle so that both far
+   edges arrive at the same --tilt-depth and meet the gap at the same height — see the token.
+   They stand ~6% shorter than the near edges. That size difference is the cost of the tilt
+   and it is deliberate — the panels no longer read as a matched pair, they read as depth.
+   Their layout boxes do not move, so every measurement below (and the search and tab bars'
+   centring arithmetic) is still the flat one. Only the paint is turned. */
 .side {
-  left: 1308px; top: 74px; width: 548px; height: 900px; overflow: hidden;
+  left: 1308px; top: 110px; width: 548px; height: 830px; overflow: hidden;
   padding: var(--pad-panel) var(--pad-panel) var(--gap-section);
-  transform: perspective(2200px) rotateY(-7deg); transform-origin: 0 50%;
   display: flex; flex-direction: column;
+  transform-origin: right center; transform: rotateY(calc(-1 * var(--tilt-side)));
+  /* visibility with no duration so the panel becomes focusable the instant the room starts
+     opening rather than 1200ms into it; it is the solo rule above that hides it again. */
+  transition: transform var(--t-room) var(--ease-room), opacity var(--t-room) var(--ease-room), visibility 0s;
+  perspective: 1600px;
 }
 
-h1 { margin: 0 0 0 56px; font-size: 56px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
-h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spacing: -0.01em; }
+h1 { margin: 0 0 0 var(--pad-text); font-size: var(--t-2); font-weight: var(--w-display); letter-spacing: var(--track-display); line-height: var(--lead-display); }
+h2 { margin: 0 0 var(--gap-group); font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-tight); }
 
 /* Search */
+/* Centred on the browse panel, not on the stage: 64 + 1204/2 = 666, so left = 666 - 480/2.
+   It searches that panel's row, and reads as belonging to it.
+   It also stands on that panel's plane. The hinge is the panel's left edge, which is 362px
+   to the left of this field's own box — hence the negative transform-origin. Sharing the
+   hinge rather than spinning on its own centre is what makes the bar look like it is lying
+   in the room instead of skewed for decoration. The lean and the lift float it off the
+   glass, the way the bar is drawn above the panel rather than printed on it. */
 .search {
-  left: 720px; top: var(--gap-block); width: 480px; height: 70px; border-radius: 35px;
-  display: flex; align-items: center; gap: var(--gap-group); padding: 0 var(--gap-section);
+  left: 426px; top: var(--gap-block); width: 480px; height: 70px; border-radius: var(--r-pill);
+  display: flex; align-items: center; gap: var(--gap-group); padding: 0 var(--inset-lg);
+  transform-origin: -362px center;
+  transform: rotateY(var(--tilt-main)) rotateX(var(--tilt-lean)) translateZ(var(--tilt-lift));
+  transition: transform var(--t-room) var(--ease-room), left var(--t-room) var(--ease-room);
 }
 .search svg { flex: none; opacity: 0.85; }
-.search input { flex: 1; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
+.search input { flex: 1; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: var(--t-5); }
 .search input::placeholder { color: var(--ink-3); }
-.search:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+.search:focus-within { background: var(--primary); box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 
 
 /* Poster row */
-.rowwrap { position: relative; height: 344px; margin-top: var(--gap-group); overflow: hidden; }
+/* The row is its own camera, not the stage's. It has to be: overflow: hidden here (and on
+   .side, and on .face) forces transform-style to flat, so a poster's depth can never come
+   down the chain from #stage — it has to be born inside this box. The vanishing point sits
+   on the selected tile, 268px in: --pad-text 56 + the 80px of peek the track leaves + half
+   a selected poster. Tiles either side turn away from that point, so the row curves around
+   whatever the viewer is on rather than around the middle of the panel. */
+.rowwrap {
+  position: relative; height: 344px; margin-top: var(--gap-group); overflow: hidden;
+  perspective: 1200px; perspective-origin: 268px 50%;
+}
 /* With no posters there is no detail block under the row either, so the row takes the panel
    it would otherwise leave empty and the message sits in the middle of it. */
 .rowwrap.bare { height: 660px; }
 .track {
   position: absolute; left: 0; top: 0; height: 100%;
   display: flex; align-items: center; gap: var(--gap-block); padding: 0 var(--pad-text);
-  transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: transform var(--t-base) var(--ease);
+  /* The track is transformed (it is how the row scrolls), and a transformed element
+     flattens its children by default — which put every poster's turn and lift onto the
+     track's own plane, where a perspective on .rowwrap cannot reach them. The arc shipped
+     as a cos(θ) squeeze with no depth at all before this line. */
+  transform-style: preserve-3d;
 }
-.poster { position: relative; flex: none; width: 214px; height: 272px; border-radius: 24px; overflow: hidden; background: #46423e; transition: transform 0.2s; }
-.poster.sel { width: 262px; height: 334px; border-radius: 28px; }
-.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; transform: scale(1.03); }
+/* A poster is flat paint unless it is in the arc. A 3D transform, even an identity one, is a
+   composited layer with a rounded-corner mask, and thirty of them on a 1GB set is a real cost
+   on every glide; only the four tiles either side of the selection (.fan, set by PosterRow)
+   and the selected tile itself carry one. Everything else has no transform at all. */
+.poster {
+  position: relative; flex: none; width: 214px; height: 272px; border-radius: var(--r-tile);
+  overflow: hidden; background: var(--card-b); transition: transform var(--t-quick) var(--ease);
+}
+/* PosterRow hands a fanned tile two unitless numbers — --fan-steps, signed and clamped to
+   ±2, and --fan-away, its absolute value — and the angle is worked out here rather than there.
+   Inline numbers, not an inline transform: an inline transform beats every stylesheet rule,
+   which would have silently killed the :focus grow below and the selected tile's lift. */
+.poster.fan {
+  --fan-a: calc(var(--fan-steps, 0) * var(--fan-step));
+  --fan-d: calc(var(--fan-away, 0) * var(--fan-depth));
+  transform: rotateY(var(--fan-a)) translateZ(var(--fan-d));
+}
+/* A larger tile carries a proportionally larger corner, so the two read as the same shape. */
+/* 24px of lift, and no more: the tile is 334px inside a 344px row, and coming forward
+   magnifies it — at the row's 1200px lens 24px is ×1.02, 341px, with 3px to spare. */
+.poster.sel { width: 262px; height: 334px; border-radius: 28px; transform: translateZ(var(--sel-lift)); }
+.poster:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); transform: scale(1.03); }
+.poster.fan:focus { transform: rotateY(var(--fan-a)) translateZ(var(--fan-d)) scale(1.03); }
+/* Named explicitly, because .poster:focus is declared after .poster.sel and weighs the same:
+   without this the selected tile dropped back onto the wall the moment it took focus.
+   And no scale(1.03) here: the lift is already this tile's "forward", and the two together
+   are 351px in a 344px row — the bottom of the focused selection was being clipped. */
+.poster.sel:focus { transform: translateZ(var(--sel-lift)); }
 
 /* Over artwork of any colour, so the mark brings its own dark ground. */
 .savemark {
-  position: absolute; z-index: 1; right: 12px; top: 12px; width: 40px; height: 40px; border-radius: 50%;
+  position: absolute; z-index: 1; right: var(--gap-item); top: var(--gap-item); width: 40px; height: 40px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(18, 15, 13, 0.9); box-shadow: 0 2px 10px rgba(20, 18, 16, 0.45);
+  background: var(--toast); box-shadow: 0 2px 10px var(--scrim);
   color: var(--key-red);
 }
 .savemark svg { width: 22px; height: 22px; fill: var(--key-red); stroke: var(--key-red); }
-.poster.sel .savemark { right: 16px; top: 16px; width: 46px; height: 46px; }
+.poster.sel .savemark { right: var(--gap-group); top: var(--gap-group); width: 46px; height: 46px; }
 .poster.sel .savemark svg { width: 25px; height: 25px; }
 
-.art { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; padding: 22px; text-align: left; }
+/* The card behind a poster that has not arrived, or never will. Its tints are the theme's, so a row
+   of them reads as one sky; the angle and the glow's place are the title's, so the row is not a wall. */
+.art {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; padding: var(--inset-sm); text-align: left;
+  background:
+    radial-gradient(120% 90% at var(--art-x) var(--art-y), var(--card-glow), transparent 60%),
+    linear-gradient(var(--art-angle), var(--art-a), var(--art-b));
+}
 /* Painted after the fallback title (it comes later in the markup), so artwork covers the title
    the moment it lands. Waiting for the load event to hide it leaves both on screen for a frame.
    Order rather than z-index: the panels above this one are stacked by document order too. */
 .art img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-.art .t { position: relative; font-weight: 700; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35); }
+.art .t { position: relative; font-weight: var(--w-display); line-height: 1; letter-spacing: var(--track-display); text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35); }
 .art.has-img .t { display: none; }
 
-.empty { padding: 0 var(--pad-text); height: 100%; display: flex; flex-direction: column; justify-content: center; gap: var(--gap-item); color: var(--ink-2); font-size: 24px; max-width: 760px; }
+.empty { padding: 0 var(--pad-text); height: 100%; display: flex; flex-direction: column; justify-content: center; gap: var(--gap-item); color: var(--ink-2); font-size: var(--t-5); line-height: var(--lead-body); max-width: 760px; }
 /* The track already carries that inset; taking it twice put the message a step to the right
    of the heading it sits under. */
 .track .empty { padding: 0; }
-.empty b { color: var(--ink); font-size: 32px; font-weight: 600; }
+.empty b { color: var(--ink); font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-tight); }
 .data-state { height: 560px; }
-/* Fills the panel under the heading so the message sits in the middle of the space it has,
-   instead of pooling at the top and leaving the tallest element on screen looking unfinished. */
-.side-empty { padding: 0; flex: 1; height: auto; margin-top: 0; }
 
 /* Detail */
-.detail { display: flex; gap: var(--gutter); padding: var(--gap-block) var(--pad-text) 0; }
+/* The detail block's own camera, for the trailer card below. The text column is deliberately
+   left on the wall: the synopsis and the metadata row are the smallest type on the screen and
+   they are already riding the panel's 9°, which is as much as they can take at ten feet. */
+.detail { display: flex; gap: var(--gutter); padding: var(--gap-block) var(--pad-text) 0; perspective: 1600px; }
 .info { flex: 1; min-width: 0; }
 /* Two lines, always reserved: a third of this catalogue is franchise titles that need the
    second one, and the part number at the end is what tells two of them apart. Reserved rather
    than grown, so Watch stays on the same line as the viewer arrows along the row. */
-.info h3 {
-  margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15;
+.info h2 {
+  margin: 0; font-size: var(--t-3); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-tight);
   min-height: 92px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.meta { display: flex; gap: var(--gap-group); margin-top: var(--gap-tight); font-size: 17px; color: var(--ink-3); }
+.meta { display: flex; gap: var(--gap-group); margin-top: var(--gap-tight); font-size: var(--t-7); font-variant-numeric: tabular-nums; color: var(--ink-3); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--gap-item); margin-top: var(--gap-group); }
-.chip { padding: 5px 16px; border-radius: 18px; background: var(--chip-quiet); font-size: 16px; color: var(--ink-2); }
+.chip { padding: 5px var(--inset-xs); border-radius: var(--r-pill); background: var(--chip-quiet); font-size: var(--t-7); color: var(--ink-2); }
 .desc {
-  margin: var(--gap-group) 0 0; font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 62ch;
+  margin: var(--gap-group) 0 0; font-size: var(--t-6); line-height: var(--lead-body); color: var(--ink-2); max-width: 62ch;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .actions { display: flex; gap: var(--gap-group); margin-top: var(--gap-block); }
 
-.btn { display: inline-flex; align-items: center; gap: 12px; height: 56px; padding: 0 28px; border-radius: 28px; background: var(--chip); font-size: 19px; font-weight: 500; white-space: nowrap; }
-.btn.wide { width: 100%; justify-content: center; height: 62px; font-size: 21px; }
+.btn { display: inline-flex; align-items: center; gap: var(--gap-item); height: 56px; padding: 0 var(--inset-md); border-radius: var(--r-pill); background: var(--chip); font-size: var(--t-6); font-weight: var(--w-control); white-space: nowrap; }
+.btn.wide { width: 100%; justify-content: center; height: 62px; font-size: var(--t-6); }
 /* Watch and Continue are why the screen exists, so they are the brightest plane on it. */
 .btn.primary { background: var(--primary); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
-.btn:focus, .tab:focus, .link:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+/* .tab.cur is listed here as well as on its own below. Both selectors weigh the same, so the
+   later one wins, and .tab.cur is declared further down: without this the current tab — the
+   one a viewer arrows onto first — showed no focus state at all. */
+.btn:focus, .btn.cur:focus, .tab:focus, .tab.cur:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+/* Declared after the focus rule and weighing the same, so `.btn.cur:focus` above has to be
+   named explicitly — this is the pair that left the current tab with no focus state at all. */
+.btn.cur { background: var(--primary); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
 .btn.primary:focus { box-shadow: none; }
 /* Delete and Exit cost something. Focus makes that plain instead of looking like consent. */
-.btn.danger:focus { background: var(--alert); color: var(--ink); }
+.btn.danger:focus { background: var(--alert); color: #fff; }
 /* A filled heart is the saved state; the row carries the same mark on the poster itself. */
 .btn.saved svg { fill: var(--key-red); stroke: var(--key-red); }
 
-.trailer { position: relative; flex: none; width: 470px; height: 268px; border-radius: 30px; overflow: hidden; align-self: flex-start; }
-.trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+/* Hung off the wall and turned back towards the viewer, so the one thing on this panel that
+   is a moving image is also the one thing not lying flat against the glass. */
+.trailer {
+  position: relative; flex: none; width: 470px; height: 268px; border-radius: var(--r-card);
+  overflow: hidden; align-self: flex-start;
+  transform-origin: right center;
+  transform: rotateY(var(--lean-trailer)) translateZ(var(--lift-trailer));
+  transition: transform var(--t-room) var(--ease-room);
+}
+.trailer:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .trailer .scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
-.trailer .bar { position: absolute; left: 18px; right: 22px; bottom: 18px; display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
-.trailer .pill { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 24px; background: rgba(255, 255, 255, 0.2); }
-.trailer:focus .pill { background: #fff; color: var(--focus-ink); }
+.trailer .bar { position: absolute; left: var(--gap-group); right: var(--gap-group); bottom: var(--gap-group); display: flex; align-items: center; justify-content: space-between; font-size: var(--t-6); }
+.trailer .pill { display: flex; align-items: center; gap: var(--gap-tight); padding: 10px var(--inset-sm); border-radius: var(--r-pill); background: var(--chip); }
+/* #23211f was frozen here from a palette two revisions old; --focus-ink is mixed from the sky. */
+.trailer:focus .pill { background: var(--focus-bg); color: var(--focus-ink); }
+
+/* Shop shelf. Lives in the Detail block's slot so the row above stays put: the viewer asked
+   about something in the title they are looking at, and that title must still be in view.
+   It arrives from the right, the side the avatar speaks from, so the motion reads as the
+   answer sliding in rather than the page changing. */
+.shelf { padding: var(--gap-block) var(--pad-text) 0; animation: shelf-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes shelf-in { from { opacity: 0; transform: translateX(80px); } }
+.shelfhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap-block); }
+.shelfhead h3 { margin: 0; font-size: 34px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shelfhint { flex: none; font-size: 17px; color: var(--ink-3); }
+.shelfrow { display: flex; gap: var(--gap-block); margin-top: var(--gap-group); }
+/* 348 x 3 + two gaps fills the text column exactly. The photo is square and shown whole:
+   a product cropped to a banner is a product the viewer cannot judge. The card's height
+   is the photo's, which also keeps the shelf inside the panel above the tab bar. */
+.product {
+  flex: none; display: flex; width: 348px; height: 196px; border-radius: 28px; overflow: hidden; text-align: left;
+  background: var(--chip-quiet);
+  animation: shelf-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(var(--i) * 70ms);
+}
+.product:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); background: var(--chip); }
+/* 150 wide on a 196 card trims 12% off the square's sides — a 168px text column is what
+   that buys, and it is the least width at which every name in the catalogue fits two lines. */
+.simg { flex: none; width: 150px; height: 100%; background: #f3ede6; }
+.simg img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 14px 16px; }
+/* Two lines for the name: a shopper will not buy a "Pink Satin Bomber…". */
+.sname { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sbrand { font-size: 15px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sprice { font-size: 21px; font-weight: 600; color: var(--ink); }
+.snote { margin-top: auto; font-size: 14px; line-height: 1.3; color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* Side panel */
-/* flex: none because the panel is a column now — the backdrop keeps its height when a long
-   title fills the rest, rather than being squeezed to make room. */
-.resume-art { position: relative; flex: none; height: 250px; border-radius: 30px; overflow: hidden; }
-.side h3 { margin: var(--gap-group) 0 0; font-size: 38px; font-weight: 600; }
-.side .chips { margin-top: var(--gap-item); }
-.side .label { margin-top: var(--gap-group); }
-/* Three lines, as in the browse panel: this panel exists to resume a title, not to read
-   about one, and the fourth line was what pushed a series past the panel's edge. */
-.side .desc { -webkit-line-clamp: 3; }
-.label { margin: var(--gap-block) 0 0; font-size: 19px; color: var(--ink-2); }
-.side-actions { display: flex; flex-direction: column; gap: var(--gap-item); margin-top: var(--gap-group); }
-.link { display: block; margin: var(--gap-tight) auto 0; padding: var(--gap-item) var(--gap-block); border-radius: 24px; font-size: 19px; color: var(--ink-2); }
+.label { margin: var(--gap-block) 0 0; font-size: var(--t-6); line-height: var(--lead-snug); color: var(--ink-2); }
+.side-actions {
+  display: flex; flex-direction: column; gap: var(--gap-item); margin-top: auto; padding-top: var(--gap-group);
+  transform: translateZ(var(--lift-action));
+  transition: transform var(--t-room) var(--ease-room);
+}
+
+/* The avatar panel keeps the resume panel's slot, glass and tilt. The room has one
+   right-hand plane and the face belongs on it, not floating in front of it. */
+.avatarpanel { gap: var(--gap-group); }
+
+/* Anam sends a 2:3 portrait. At the panel's 468px of inner width that is 702px tall, so the
+   frame is cropped to head and shoulders — the part of a talking head that carries at ten feet
+   anyway. 570px is what it takes when the panel has room.
+
+   It shrinks rather than holding a height, because the column below it is not fixed: 830px
+   of panel is 755px of content once the border and the 40/32 padding come off, and the live
+   column wants 43 for the name, 97 for the captions (one heard line, two reply lines), 100
+   for the chips (two rows — four languages do not fit on one) and 48 of gaps, leaving 467
+   for the face. A fixed height here was overflowing into `overflow: hidden` and cutting the
+   language picker in half. Everything below the face is the size it needs; the face gives up
+   the difference. */
+/* Lifted off the wall, and parallel to it: the frame's edges stay square to the card that
+   holds them, and the depth comes from the lift alone. */
+.face {
+  position: relative; flex: 0 1 570px; min-height: 240px;
+  border-radius: var(--r-card); overflow: hidden; background: var(--scrim);
+  transform: rotateY(var(--lean-face)) translateZ(var(--lift-face));
+  transition: transform var(--t-room) var(--ease-room);
+}
+.face video {
+  display: block; width: 100%; height: 100%;
+  object-fit: cover; object-position: top;
+  opacity: 0; transition: opacity var(--t-base) var(--ease);
+}
+.face[data-state="live"] video { opacity: 1; }
+.face-note {
+  position: absolute; left: var(--gap-block); right: var(--gap-block); top: 50%;
+  margin: 0; transform: translateY(-50%);
+  text-align: center; font-size: var(--t-5); line-height: var(--lead-body); color: var(--ink-2);
+}
+
+.avatar-name {
+  margin: 0; font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head);
+  display: flex; align-items: center; gap: var(--gap-group);
+}
+/* The pill is the only moving part of the panel, so the states have to be told apart at a
+   glance and without reading: hue for listening, and a value ladder for the rest — idle sits
+   on the base rule, thinking a step up, speaking brightest. idle and thinking are the two a
+   viewer waits through, so they must not look the same. */
+.pill {
+  padding: 4px var(--inset-xs); border-radius: var(--r-pill); background: var(--chip-quiet);
+  font-size: var(--t-7); font-weight: var(--w-control); color: var(--ink-2);
+}
+.pill[data-state="thinking"] { background: var(--chip); color: var(--ink); }
+.pill[data-state="listening"] { background: rgba(95, 208, 187, 0.22); color: var(--kids); }
+.pill[data-state="speaking"] { background: rgba(255, 255, 255, 0.28); color: var(--ink); }
+
+/* flex: none because the captions are the only child with overflow: hidden, which makes
+   their automatic minimum size 0 — any overflow in the column would land entirely on them
+   and crush the rows before they get to clip. */
+.captions {
+  margin: 0; flex: none; display: grid; grid-template-columns: auto 1fr;
+  column-gap: var(--gap-item); row-gap: 8px; align-items: end;
+}
+.captions dt {
+  font-size: 16px; font-weight: 500; color: var(--ink-2); opacity: 0.7;
+  line-height: 29px; white-space: nowrap;
+}
+/* Each row is a fixed-height window onto text that may run longer than it, anchored at the
+   bottom so the clipped part is the oldest: the words just heard and the sentence being
+   spoken are what the viewer is checking against their ears. */
+.say {
+  margin: 0; font-size: 21px; line-height: 1.4; color: var(--ink-2);
+  display: flex; align-items: flex-end; overflow: hidden;
+}
+.say span { display: block; width: 100%; overflow-wrap: anywhere; }
+.heard { height: 29px; color: var(--ink); }
+/* An interim guess the recogniser may still revise reads as provisional until it settles. */
+.heard[data-settled="false"] { color: var(--ink-2); font-style: italic; }
+.reply { height: 59px; }
+
+/* No margin-top: auto here. It had one, and so did .side-actions above — two auto margins in
+   one column split the free space between them instead of pushing anything to the bottom, so
+   the button sat 91px adrift of where the comment claimed it was pinned. The off phase pins
+   its group with the one auto margin on .side-actions; the live phase has no slack to pin
+   against, because the face absorbs it. */
+.langs { display: flex; flex-wrap: wrap; gap: var(--gap-item); }
+.lang {
+  padding: 10px var(--inset-sm); border-radius: var(--r-pill);
+  background: var(--chip); font-size: var(--t-6); font-weight: var(--w-control); color: var(--ink-2);
+}
+.lang.cur { background: var(--primary); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--primary-edge); }
+.lang:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); box-shadow: none; }
 
 /* Tab bar */
-/* Centred on the browse panel, because four of its five controls filter that panel's row.
-   A 16px gap to the panel against a 32px gap to the screen edge is what makes it read as
-   belonging to the panel instead of floating at the bottom of the screen. */
+/* Centred on the browse panel, on the same 666 axis as the search field above it: four of its
+   five controls filter that panel's row, so the bar lines up with what it acts on rather than
+   with the stage. 236 = 666 - 860/2, and its right edge lands at 1096, inside the panel. A
+   16px gap to the panels against 32px to the screen edge keeps it reading as bottom chrome
+   rather than a third panel. */
 .tabs {
-  left: 276px; top: 956px; width: 780px; height: 92px; border-radius: 46px;
-  display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-item) 0 var(--gap-group);
+  left: 236px; top: 956px; width: 860px; height: 92px; border-radius: var(--r-pill);
+  display: flex; align-items: center; gap: var(--gap-tight); padding: 0 var(--gap-group);
+  /* Same hinge as the search field, 172px to the left of this bar's box, and leaning the
+     other way: it sits below the eye, so its near edge is the one that drops towards us. */
+  transform-origin: -172px center;
+  transform: rotateY(var(--tilt-main)) rotateX(calc(-1 * var(--tilt-lean))) translateZ(var(--tilt-lift));
+  transition: transform var(--t-room) var(--ease-room), left var(--t-room) var(--ease-room);
 }
-.tab { height: 62px; padding: 0 26px; border-radius: 31px; font-size: 19px; color: var(--ink-2); white-space: nowrap; }
-.tab.cur { background: rgba(255, 255, 255, 0.22); color: var(--ink); }
-.avatar { position: relative; margin-left: auto; width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #3e3a36; font-weight: 600; font-size: 20px; }
-.avatar:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.tab { height: 62px; padding: 0 var(--inset-sm); border-radius: var(--r-pill); font-size: var(--t-6); font-weight: var(--w-control); color: var(--ink-2); white-space: nowrap; }
+.tab.cur { background: var(--primary); color: var(--ink); }
+/* The theme disc and the avatar sit together at the bar's end: the two things about the viewer, not the catalogue. */
+.skyknob { margin-left: auto; width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--chip); }
+.skyknob:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
+.skydisc { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--glass-edge); }
+.avatar { position: relative; margin-left: var(--gap-tight); width: 66px; height: 66px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--chip); font-weight: var(--w-head); font-size: var(--t-6); }
+.avatar:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 
 /* Kids profiles are named the same everywhere: one cool tag against the warm room. */
 .ktag, .ptag {
   position: absolute; left: 50%; transform: translateX(-50%);
   background: var(--kids); color: var(--focus-ink);
-  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  font-weight: var(--w-display); letter-spacing: var(--track-caps); text-transform: uppercase; line-height: 1;
 }
-.ktag { bottom: -7px; padding: 3px 11px; border-radius: 11px; font-size: 15px; }
-.ptag { bottom: 14px; padding: 4px 16px; border-radius: 14px; font-size: 17px; }
+/* Tighter than its sibling .ptag: this one rides a 66px avatar, and at the metadata size
+   the 11px it used to carry made the pill wider than the circle under it. */
+.ktag { bottom: -7px; padding: 3px var(--gap-tight); border-radius: var(--r-pill); font-size: var(--t-7); }
+.ptag { bottom: 14px; padding: 4px var(--inset-xs); border-radius: var(--r-pill); font-size: var(--t-7); }
 .kidsflag {
-  display: inline-block; vertical-align: 12px; margin-left: 22px; padding: 5px 18px; border-radius: 20px;
-  background: var(--kids); color: var(--focus-ink); font-size: 20px; font-weight: 600; letter-spacing: 0.02em;
+  display: inline-block; vertical-align: 12px; margin-left: var(--gap-block); padding: 5px var(--inset-sm); border-radius: var(--r-pill);
+  background: var(--kids); color: var(--focus-ink); font-size: var(--t-6); font-weight: var(--w-head); letter-spacing: var(--track-caps);
 }
 
-/* Footer */
 /* bottom: 32px puts its lower edge on the tab bar's, so the bottom chrome shares one line. */
-.hint { position: absolute; right: var(--frame); bottom: var(--gap-section); display: flex; gap: var(--gap-block); font-size: 17px; color: var(--ink-2); }
-.dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -1px; }
-.dot.red { background: var(--key-red); }
 
 /* Overlays */
 /* Aligned to the browse panel's left edge, in the top band beside the search field rather than
@@ -235,33 +632,34 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
    reports on something the viewer just did to that panel. It wraps instead of running off. */
 .toast {
   position: absolute; left: var(--frame); top: var(--gap-block); transform: translateY(-30px); opacity: 0;
-  max-width: 620px; padding: 16px 30px; border-radius: 30px; background: rgba(35, 33, 31, 0.85); font-size: 20px;
-  transition: opacity 0.25s, transform 0.25s; pointer-events: none;
+  max-width: 620px; padding: var(--gap-group) var(--inset-md); border-radius: var(--r-card); background: var(--toast); font-size: var(--t-6); line-height: var(--lead-snug);
+  transition: opacity var(--t-quick) var(--ease), transform var(--t-quick) var(--ease); pointer-events: none;
 }
-.toast.alert { background: rgba(140, 49, 37, 0.92); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.24); }
+.toast.alert { background: var(--alert-fill); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--glass-edge); }
 .toast.show { opacity: 1; transform: translateY(0); }
 /* The player expands to fill the Recommended panel it lives in, nothing beyond it.
    The embed letterboxes itself inside the box, so the chrome sits over the black. */
 .player {
-  position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 30px; overflow: hidden;
-  transition: left 0.7s cubic-bezier(0.22, 1, 0.36, 1), top 0.7s cubic-bezier(0.22, 1, 0.36, 1),
-    right 0.7s cubic-bezier(0.22, 1, 0.36, 1), bottom 0.7s cubic-bezier(0.22, 1, 0.36, 1),
-    border-radius 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: var(--r-card); overflow: hidden;
+  transition: left var(--t-slow) var(--ease), top var(--t-slow) var(--ease),
+    right var(--t-slow) var(--ease), bottom var(--t-slow) var(--ease),
+    border-radius var(--t-slow) var(--ease);
 }
-.player.grown { border-radius: 48px; }
+.player.grown { border-radius: var(--r-panel); }
 /* Watch owns the whole stage, so it ends square to the screen edges rather than rounded
    inside a panel. A 16:9 trailer fills a 16:9 screen exactly, with no letterboxing left. */
-.player.full { border-radius: 48px; }
+.player.full { border-radius: var(--r-panel); }
 .player.full.grown { border-radius: 0; }
 /* Older sets overscan, so full-screen chrome sits inside a safe margin instead of the
    44px that was fine while the player lived inside an already-inset panel. */
 .player.full .playertop { left: 96px; top: 76px; right: 96px; }
-.player.full .playertop h4 { font-size: 46px; }
-.player.full .playerbar { left: 88px; right: 88px; bottom: 72px; }
-.player.full .bigplay { width: 128px; height: 128px; margin: -64px 0 0 -64px; }
+.player.full .playertop h2 { font-size: var(--t-3); }
+.player.full .playerbar { left: 96px; right: 96px; bottom: 72px; }
+.player.full .bigplay { width: 128px; height: 128px; }
 .player.full .bigplay svg { width: 50px; height: 50px; }
-/* Chrome waits for the box to finish opening, then fades up. */
-.playertop, .playerbar, .bigplay { opacity: 0; transition: opacity 0.4s ease 0.45s; }
+/* Chrome waits for the box to finish opening, then fades up. The 450ms delay is tied to the
+   700ms expansion above, not to a step on the scale, so it stays a literal. */
+.playertop, .playerbar, .bigplay { opacity: 0; transition: opacity var(--t-base) var(--ease) 450ms; }
 .player.grown .playertop, .player.grown .playerbar, .player.grown .bigplay { opacity: 1; }
 .playerbox { position: relative; width: 100%; height: 100%; background: #000; }
 .playerframe { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 0; pointer-events: none; }
@@ -272,35 +670,38 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .playerbox::before { top: 0; height: 200px; background: linear-gradient(rgba(0, 0, 0, 0.6), transparent); }
 .playerbox::after { bottom: 0; height: 260px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.72)); }
 
+/* Title and transport share one vertical line. They were on 44px and 34px, and full screen on
+   96px and 88px, so the chrome never squared up with itself. */
 .playertop { position: absolute; left: 44px; top: 38px; right: 44px; z-index: 2; pointer-events: none; }
-.playertop h4 { margin: 0; font-size: 36px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.playertop .chips { margin-top: 10px; }
-.playertop .chip { background: rgba(255, 255, 255, 0.18); }
+.playertop h2 { margin: 0; font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-tight); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.playertop .chips { margin-top: var(--gap-item); }
+.playertop .chip { background: var(--chip); }
 
-.bigplay { position: absolute; z-index: 2; left: 50%; top: 50%; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.22); border: 1.5px solid var(--glass-edge); color: var(--ink); }
+/* Centred by transform rather than by half its own width in a margin: the margin had to be
+   restated every time the size changed, and the full-screen rule below had its own copy. */
+.bigplay { position: absolute; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 104px; height: 104px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--primary); border: 1.5px solid var(--glass-edge); color: var(--ink); }
 .bigplay svg { width: 40px; height: 40px; margin-left: 4px; }
 .bigplay:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
 
-.playerbar { position: absolute; z-index: 2; left: 34px; right: 34px; bottom: 32px; display: flex; align-items: center; gap: 16px; }
-.transport { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 32px; background: rgba(28, 26, 24, 0.66); border: 1.5px solid var(--glass-edge); }
+.playerbar { position: absolute; z-index: 2; left: 44px; right: 44px; bottom: 32px; display: flex; align-items: center; gap: var(--gap-group); }
+.transport { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: var(--r-pill); background: var(--glass); border: 1.5px solid var(--glass-edge); }
 .ctl { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink); }
 .ctl:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
 
-.scrub { position: relative; flex: 1; min-width: 0; height: 64px; padding: 0 26px; border-radius: 32px; background: rgba(28, 26, 24, 0.66); border: 1.5px solid var(--glass-edge); display: flex; align-items: center; }
-.scrub:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
-.scrubtrack { position: absolute; left: 26px; right: 26px; top: 50%; height: 5px; margin-top: -2px; border-radius: 3px; background: rgba(255, 255, 255, 0.28); }
-.scrubfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #fff; }
-.scrubnow, .scrubend { position: absolute; bottom: 4px; font-size: 15px; color: var(--ink-2); }
+.scrub { position: relative; flex: 1; min-width: 0; height: 64px; padding: 0 26px; border-radius: var(--r-pill); background: var(--glass); border: 1.5px solid var(--glass-edge); display: flex; align-items: center; }
+.scrub:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
+.scrubtrack { position: absolute; left: 26px; right: 26px; top: 50%; height: 5px; margin-top: -2px; border-radius: 3px; background: var(--primary); }
+.scrubfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--ink); }
+.scrubnow, .scrubend { position: absolute; bottom: 4px; font-size: var(--t-7); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .scrubnow { left: 26px; }
 .scrubend { right: 26px; }
 
 .shut { flex: none; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink); }
-.shut svg { width: 20px; height: 20px; }
 .shut:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
 
 .dialog { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; }
 .dialog .panel { position: relative; width: 640px; padding: var(--pad-panel); text-align: center; background: var(--solid); }
-.dialog p { margin: 0 0 30px; font-size: 32px; font-weight: 600; }
+.dialog p { margin: 0 0 var(--gap-section); font-size: var(--t-4); font-weight: var(--w-head); letter-spacing: var(--track-head); line-height: var(--lead-snug); }
 .dialog .actions { justify-content: center; margin: 0; }
 /* Profiles — "Who's watching?" over the whole stage, same glass, same focus rules.
    Its tiles sit on the scrim itself rather than on a panel, the way the exit dialog does, so
@@ -311,7 +712,7 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   background: var(--scrim-full);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
-.profiles h2 { margin: 0 0 56px; font-size: 56px; font-weight: 700; letter-spacing: -0.02em; }
+.profiles h2 { margin: 0 0 var(--gap-major); font-size: var(--t-2); font-weight: var(--w-display); letter-spacing: var(--track-display); line-height: var(--lead-display); }
 
 .pgrid { display: flex; align-items: flex-start; gap: var(--gutter); }
 .ptile { width: 208px; display: flex; flex-direction: column; align-items: center; }
@@ -320,19 +721,19 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
   position: relative; width: 196px; height: 196px; border-radius: 40px;
   display: flex; align-items: center; justify-content: center;
   border: 1.5px solid var(--glass-edge);
-  font-size: 64px; font-weight: 600; letter-spacing: -0.02em;
+  font-size: var(--t-1); font-weight: var(--w-head); letter-spacing: var(--track-display); line-height: 1;
 }
-.ptile:focus .pface { box-shadow: 0 0 0 var(--ring) #fff; }
+.ptile:focus .pface { box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .pface.add { background: var(--chip); color: var(--ink-2); }
 .pface.add svg { width: 56px; height: 56px; }
 /* Manage mode dims the face and puts a pencil on it, so the tile still reads as that viewer. */
 .pmask {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 40px;
-  display: flex; align-items: center; justify-content: center; background: rgba(20, 18, 16, 0.55);
+  display: flex; align-items: center; justify-content: center; background: var(--scrim);
 }
 .pmask svg { width: 48px; height: 48px; }
 .pname {
-  margin-top: var(--gap-block); max-width: 100%; font-size: 22px; color: var(--ink-3);
+  margin-top: var(--gap-block); max-width: 100%; font-size: var(--t-5); color: var(--ink-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ptile:focus .pname { color: var(--ink); }
@@ -340,45 +741,89 @@ h2 { margin: 0 0 var(--gap-group); font-size: 34px; font-weight: 600; letter-spa
 .ptile.cur .pname::after {
   content: ''; display: block; width: 28px; height: 3px; margin: 10px auto 0; border-radius: 2px; background: var(--ink);
 }
-.pmanage { margin-top: 56px; }
+.pmanage { margin-top: var(--gap-major); }
+/* Bottom right of the picker, on the frame's edge and the tab bar's bottom line, so it sits
+   where the screen's chrome sits rather than in the middle with the viewers. */
+.pvideo { position: absolute; right: var(--frame); bottom: 32px; }
 
 /* One profile's form */
 .pform { position: relative; width: 760px; padding: var(--pad-panel); background: var(--solid); }
-.pform h2 { margin: 0 0 28px; font-size: 40px; font-weight: 600; }
+.pform h2 { margin: 0 0 var(--gap-section); font-size: var(--t-3); font-weight: var(--w-head); letter-spacing: var(--track-head); }
 .pformtop { display: flex; align-items: center; gap: var(--gap-block); }
-.pformtop .pface { flex: none; width: 124px; height: 124px; border-radius: 28px; font-size: 42px; }
+.pformtop .pface { flex: none; width: 124px; height: 124px; border-radius: 28px; font-size: var(--t-3); }
 .field {
-  flex: 1; min-width: 0; display: flex; align-items: center; height: 70px; padding: 0 28px;
-  border-radius: 35px; background: var(--chip); border: 1.5px solid var(--glass-edge);
+  flex: 1; min-width: 0; display: flex; align-items: center; height: 70px; padding: 0 var(--inset-md);
+  border-radius: var(--r-pill); background: var(--chip); border: 1.5px solid var(--glass-edge);
 }
-.field input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: 22px; }
+.field input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ink); font: inherit; font-size: var(--t-5); }
 .field input::placeholder { color: var(--ink-3); }
-.field:focus-within { background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 var(--ring) #fff; }
+.field:focus-within { background: var(--primary); box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .swatches { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
 .swatch { width: 54px; height: 54px; border-radius: 50%; border: 1.5px solid var(--glass-edge); }
-.swatch.cur { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.5); }
-.swatch:focus { outline: none; box-shadow: 0 0 0 var(--ring) #fff; }
+.swatch.cur { box-shadow: 0 0 0 3px var(--primary-edge); }
+.swatch:focus { outline: none; box-shadow: 0 0 0 var(--ring) var(--ring-color); }
 .pkinds { display: flex; gap: var(--gap-group); margin-top: var(--gap-item); }
 .kind {
-  height: 56px; padding: 0 32px; border-radius: 28px;
-  background: var(--chip); border: 1.5px solid var(--glass-edge); font-size: 20px; font-weight: 500;
+  height: 56px; padding: 0 var(--inset-md); border-radius: var(--r-pill);
+  background: var(--chip); border: 1.5px solid var(--glass-edge); font-size: var(--t-6); font-weight: var(--w-control);
 }
-.kind.cur { background: rgba(255, 255, 255, 0.3); }
+.kind.cur { background: var(--primary); }
 .kind:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
-.pnote { margin: var(--gap-group) 0 0; font-size: 19px; color: var(--ink-3); }
-.pid { margin: var(--gap-block) 0 0; font-size: 17px; color: var(--ink-3); }
-.pid b { margin-left: 8px; font-family: 'Courier New', monospace; font-weight: 400; letter-spacing: 0.06em; color: var(--ink-2); }
+.pnote { margin: var(--gap-group) 0 0; font-size: var(--t-6); line-height: var(--lead-body); color: var(--ink-3); }
+.pid { margin: var(--gap-block) 0 0; font-size: var(--t-7); color: var(--ink-3); }
+.pid b { margin-left: var(--gap-tight); font-family: 'Courier New', monospace; font-weight: var(--w-body); letter-spacing: 0.06em; color: var(--ink-2); }
 .pform .actions { margin-top: var(--gap-section); }
 
 .drop {
-  position: absolute; top: 24px; right: 24px; bottom: 24px; left: 24px;
-  border: 4px dashed var(--key-yellow); border-radius: 48px; display: flex; align-items: center; justify-content: center;
-  font-size: 40px; font-weight: 600; background: var(--scrim);
+  position: absolute; top: var(--gap-block); right: var(--gap-block); bottom: var(--gap-block); left: var(--gap-block);
+  border: 4px dashed var(--key-yellow); border-radius: var(--r-panel); display: flex; align-items: center; justify-content: center;
+  font-size: var(--t-3); font-weight: var(--w-head); letter-spacing: var(--track-head); background: var(--scrim);
 }
+
+/* Theme picker. A panel over the dimmed room, not the profiles' near-opaque scrim, because
+   the point of the screen is watching the room change behind it. */
+.dialog .tpanel { width: 1120px; }
+.themes h2 { margin: 0 0 var(--gap-section); font-size: var(--t-3); letter-spacing: var(--track-head); }
+.tgrid { display: flex; justify-content: center; gap: var(--gap-block); }
+.ttile { display: block; width: 220px; }
+.ttile:focus { outline: none; }
+.tsky { display: block; height: 124px; border-radius: var(--r-tile); border: 1.5px solid var(--glass-edge); }
+.ttile:focus .tsky { box-shadow: 0 0 0 var(--ring) var(--ring-color); }
+/* Names run long in German and Dutch, so they clip like a profile's instead of wrapping the tile taller. */
+.tname, .tseason { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); }
+.tname { margin-top: var(--gap-group); font-size: var(--t-6); }
+.tseason { margin-top: 2px; font-size: var(--t-7); }
+.ttile:focus .tname, .ttile.cur .tname { color: var(--ink); }
+/* Reserved on every tile and painted on the current one, so marking a tile never shifts its neighbours. */
+.ttile::after { content: ''; display: block; width: 28px; height: 3px; margin: var(--gap-item) auto 0; border-radius: 2px; }
+.ttile.cur::after { background: var(--ink); }
+.tauto { margin-top: var(--gap-section); }
+.tauto.cur { background: var(--primary); }
+.tauto:focus { background: var(--focus-bg); color: var(--focus-ink); }
+.themes .tnote { margin: var(--gap-group) auto 0; max-width: 62ch; font-size: var(--t-6); font-weight: var(--w-body); line-height: var(--lead-body); color: var(--ink-3); }
+/* Adjustments for the sky on screen: a label and a row of chips, one of them current. */
+.themes .tsub { margin: var(--gap-section) 0 0; font-size: var(--t-6); font-weight: var(--w-control); color: var(--ink-3); }
+/* One grid for all three rows, not three centred rows of their own. Centred separately, each
+   row's label landed wherever its chips left it — Room at 332, Glass at 316, Sky at 406 — so
+   three lines that read as a table sat on three different axes. */
+.tadjust {
+  display: grid; grid-template-columns: max-content max-content; justify-content: center;
+  align-items: center; column-gap: var(--gap-item); row-gap: var(--gap-item); margin-top: var(--gap-item);
+}
+.trow { display: flex; align-items: center; gap: var(--gap-item); }
+.tkey { width: 84px; text-align: right; font-size: var(--t-6); color: var(--ink-3); }
+.tchip { height: 48px; padding: 0 var(--inset-sm); border-radius: var(--r-pill); background: var(--chip); font-size: var(--t-6); font-weight: var(--w-control); white-space: nowrap; }
+.tchip.cur { background: var(--primary); }
+.tchip:focus { outline: none; background: var(--focus-bg); color: var(--focus-ink); }
+.tdone { margin-top: var(--gap-block); min-width: 200px; justify-content: center; }
 
 @media (prefers-reduced-motion: reduce) {
   /* The player's 700ms expansion is the largest movement in the app, so it is the one this
      setting exists for. Its chrome fades on a delay, which has to go with it or the controls
      arrive late on a player that is already open. */
   .track, .poster, .toast, .player, .playertop, .playerbar, .bigplay { transition: none; }
+  /* The room opening is the same size of movement as the player, and the same argument: the
+     state it arrives at is correct, so cut to it. */
+  .main, .side, .search, .tabs, .trailer, .face, .side-actions { transition: none; }
+  .shelf, .product { animation: none; }
 }

@@ -243,6 +243,7 @@ class LaTeXCompiler:
                 cmd,
                 cwd=self.work_dir,
                 capture_output=False,
+                check=False,
             )
             if result.returncode == 0:
                 pdf_file = self.tex_file.with_suffix(".pdf")
@@ -323,6 +324,7 @@ class LaTeXCompiler:
                     cmd,
                     cwd=self.work_dir,
                     capture_output=False,
+                    check=False,
                 )
                 if result.returncode != 0:
                     # bibtex/biber may return non-zero for warnings, continue anyway
@@ -366,7 +368,7 @@ class LaTeXCompiler:
         cmd.append(str(self.tex_file))
 
         try:
-            result = subprocess.run(cmd, cwd=self.work_dir, capture_output=True)
+            result = subprocess.run(cmd, cwd=self.work_dir, capture_output=True, check=False)
             if result.returncode == 0:
                 print("[SUCCESS] Auxiliary files cleaned")
             return result.returncode

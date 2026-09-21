@@ -6,14 +6,26 @@ and it is speculative: warmed from STT partials and bounded by the tool
 timeout, never awaited naked on the turn.
 """
 import asyncio
+import json
 import time
 
 from loguru import logger
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.recs.catalog import CatalogFilter, CatalogItem, CatalogStore
 from tv_avatar.recs.embedder import Embedder
+from tv_avatar.tracing import (
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    ATTR_RECS_CHANNELS,
+    ATTR_RECS_LIMIT,
+    ATTR_RECS_N,
+    META_QUERY_EMBED,
+    OBS_TYPE_RETRIEVER,
+    observation,
+)
 
 W_MATCH = 1.0
 W_TASTE = 0.6
@@ -85,24 +97,32 @@ class RecsEngine:
         return vec
 
     async def _query_vector(self, ctx: RecsContext) -> list[float] | None:
-        assert ctx.query_text is not None
+        if ctx.query_text is None:
+            return None
         key = (ctx.user_id, _norm_query(ctx.query_text))
         log = logger.bind(user_id=ctx.user_id)
+        span = trace.get_current_span()  # the `recs.recommend` span (gather copies the context)
         hit = self._query_cache.get(key)
         if hit and time.monotonic() - hit[0] < QUERY_CACHE_TTL_S:
             log.debug("query embed cache hit")
+            span.set_attribute(META_QUERY_EMBED, "cache")
             return hit[1]
         pending = self._inflight.get(key)
         try:
             if pending is not None:
-                return await asyncio.wait_for(asyncio.shield(pending), timeout=self._timeout)
-            return await asyncio.wait_for(self._embed_and_cache(key, ctx.query_text), timeout=self._timeout)
+                vec = await asyncio.wait_for(asyncio.shield(pending), timeout=self._timeout)
+            else:
+                vec = await asyncio.wait_for(self._embed_and_cache(key, ctx.query_text), timeout=self._timeout)
         except TimeoutError:
             log.debug("query embed timeout; falling back to taste/popular")
+            span.set_attribute(META_QUERY_EMBED, "timeout")
             return None
         except Exception as err:  # noqa: BLE001 — a rec is degraded, never a failed turn
             log.warning("query embed failed", error=type(err).__name__)
+            span.set_attribute(META_QUERY_EMBED, "error")
             return None
+        span.set_attribute(META_QUERY_EMBED, "hit")
+        return vec
 
     # --- taste ------------------------------------------------------------
 
@@ -121,6 +141,21 @@ class RecsEngine:
     # --- public -----------------------------------------------------------
 
     async def recommend(self, ctx: RecsContext) -> list[RecoItem]:
+        # A lookup that changes no state: `retriever` (D19). `query_embed` is
+        # overwritten by `_query_vector` when there is a query to embed.
+        with observation("recs.recommend", type=OBS_TYPE_RETRIEVER, **{
+            META_QUERY_EMBED: "none", ATTR_RECS_LIMIT: ctx.limit,
+            ATTR_OBS_INPUT: ctx.model_dump_json(exclude={"user_id", "memory_text"}, exclude_none=True),
+        }) as span:
+            recs = await self._recommend(ctx)
+            span.set_attributes({
+                ATTR_RECS_N: len(recs),
+                ATTR_OBS_OUTPUT: json.dumps([{"title_id": r.title_id, "score": round(r.score, 3),
+                                              "reasons": r.reasons} for r in recs], ensure_ascii=False),
+            })
+            return recs
+
+    async def _recommend(self, ctx: RecsContext) -> list[RecoItem]:
         t0 = time.perf_counter()
         watched, rejected = await asyncio.gather(
             self._history.watched_ids(ctx.user_id), self._history.rejected_ids(ctx.user_id))
@@ -149,6 +184,7 @@ class RecsEngine:
             channels.append(([(i, 0.0) for i in popular if self._passes(i, filters)], 1.0, "popular"))
 
         recs = self._merge(channels)[: ctx.limit]
+        trace.get_current_span().set_attribute(ATTR_RECS_CHANNELS, [tag for _, _, tag in channels])
         logger.bind(user_id=ctx.user_id).debug(
             "recommend", step="recs", n=len(recs), excluded_watched=len(watched),
             channels={tag: len(hits) for hits, _, tag in channels},

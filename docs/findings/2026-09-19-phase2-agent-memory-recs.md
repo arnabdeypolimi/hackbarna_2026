@@ -175,3 +175,53 @@ earlier in the system prompt. Live text-mode, new session per run:
 History renders names only (no ids), so the greeting stays action-free; `focus` on the offered
 title would need ids in `Recent activity` and a rule exception. The greeting turn is still never
 ingested into VoiceMem (`startswith(GREETING_INSTRUCTION)`).
+
+## Agent cleanup (plan: `docs/superpowers/plans/2026-09-19-agent-sgr-cleanup.md`)
+
+Ten commits, `d13428f..7aa8f13`; suite 214 → 239 passed. What changed for the viewer:
+
+- **`Recent activity` carries ids** (`The Dark Knight (2008) (id=155, yesterday)`), and the
+  rules allow acting on them — so "want to carry on with X?" → "yes, play it" works without X
+  being on screen. Supersedes the note above ("History renders names only").
+- **`rec_shown` is written at turn end for what was actually offered**: the candidates the agent
+  focused/opened/played or named in `say` (or in the templated fallback), not the ≤ 8 titles the
+  tool returned before the model spoke. An interrupted turn records nothing.
+- **The system prompt is written once, by the agent.** The injector had stamped
+  `# Recent activity` and `build_messages` appended it again (two fetches, two copies per turn).
+  `ScreenContextInjector` is now wired only for `AGENT_IMPL=stub`; the SGR agent rebuilds the
+  system message from live `SessionState` every turn without inspecting what arrived.
+
+Internals: `envelope.REGISTRY` (one `ActionSpec` per verb; `tests/fixtures/turn_plan_schema.json`
+pins the constrained-decoding schema byte-for-byte), `parse_action()` + `InternalTools.run(action)`
+route on the typed union, `turn.py` (`TurnContext`/`TurnMetrics`/`ToolResult`/`CycleOutcome`/
+`TurnTrace`), `loop.TurnRunner` runs the bounded cycle loop behind a `TurnHost` protocol,
+`AGENT_MAX_CYCLES` (default 2, 1–4) with `CYCLE_FIRST_BYTE_S` budgeting every follow-up cycle
+(`CYCLE2_FIRST_BYTE_S` still accepted). Removed: the canned TTFT filler (`FILLER_AFTER_MS`),
+`HistoryRecorder.on_command` / `REC_ACCEPTED` / `SEARCH_ISSUED` (never called). `service.py`
+454 → 251 lines.
+
+Live text-mode check after the cleanup (`tools/smoke_turn.py`, Nemotron-3_5-Lightning, 500-title catalog):
+
+| Turn | intent | said | commands | cycles | TTFT | total |
+|---|---|---|---|---|---|---|
+| "something like Sicario, but newer" | recommend | "Let me look." + "…Retribution from 2023, Fast X, and Saw X…" | `focus 762430` | 2 | 528 ms (884 cold) | 1462 ms |
+| "play the first one" | control | "On it." | `play 762430` | 1 | 452 ms | 555 ms |
+| "what did I just start watching?" | answer | "You started watching Blue Beetle from 2023." | — | 1 | 504 ms | 568 ms |
+| *new session* greeting | — | "Welcome back — want to carry on with Retribution?" | — | 1 | 689 ms | 778 ms |
+| "yes, play it" | control | "On it." | `play 762430` | 1 | 741 ms | 835 ms |
+
+`rec_shown` for the first turn: exactly the three titles named (717930, 744278, 299054 in an
+earlier run), not the five the tool returned. The greeting → "yes, play it" path plays the
+offered title although it is not on screen — the id came from `Recent activity`. The live run
+also surfaced two small defects fixed in `05bded4`: cycle-2 speech was appended to cycle-1's in
+the memory transcript with no space, and `smoke_turn.py` ingested every turn a second time.
+Note on n=1: in one of two recommend runs the model named three titles but emitted no `focus`;
+the prompt asks for one, the schema does not require it.
+
+Follow-ups from the plan's §4b, both taken: `recall_memory` is **gone** (`aa20b27`) — with the
+rolling-profile lane it returned the profile already in `# Memory`, buying a ~1 s second cycle
+for nothing; the schema fixture was regenerated (13-way `anyOf`). And the profile is now
+**refreshed mid-session** (`e0530b9`): every `MEMORY_REFRESH_EVERY_TURNS` (default 6) ingests
+the lane runs `finish_session` off the turn, so what the viewer said in turn 1 is back in the
+prompt by turn 7 even though the conversation window is 10 messages. `_commit` archives only
+the turns the summariser saw, so a turn appended while it ran is not lost.

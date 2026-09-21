@@ -1103,13 +1103,13 @@ def export_phase0_context(result: AuditResult) -> str:
     if result.literature_context is not None:
         try:
             from literature_search import render_literature_summary
-
+        except ImportError as exc:
+            print(f"[WARN] literature summary skipped: {exc}", file=sys.stderr)
+        else:
             lines.append("## Related Literature Summary")
             lines.append("")
             lines.append(render_literature_summary(result.literature_context))
             lines.append("")
-        except Exception:
-            pass
 
     return "\n".join(lines)
 

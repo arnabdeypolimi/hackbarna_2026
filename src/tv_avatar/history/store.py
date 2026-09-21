@@ -20,9 +20,7 @@ class EventKind(StrEnum):
     PLAY_COMPLETED = "play_completed"
     PLAY_ABANDONED = "play_abandoned"
     FOCUS_DWELL = "focus_dwell"
-    SEARCH_ISSUED = "search_issued"
     REC_SHOWN = "rec_shown"
-    REC_ACCEPTED = "rec_accepted"
     #: The viewer declined a title the agent offered ("no, not that one").
     REC_REJECTED = "rec_rejected"
     USER_EVENT = "user_event"
@@ -189,14 +187,16 @@ class HistoryStore:
     async def render_for_prompt(self, user_id: str, catalog: _Named | None = None, limit: int = 5) -> str:
         """Episodic memory for the prompt: what was watched and what was recommended
         (with when). Durable preferences live in the memory profile; this is the event log."""
-        def name(title_id: str) -> str:
+        def name(title_id: str, *suffix: str) -> str:
+            """`The Dark Knight (2008) — Action (id=155, yesterday)` — the id rides along
+            because the agent may only emit ids it can see in the prompt."""
             item = catalog.lookup(title_id) if catalog else None
-            return item.label() if item is not None else f"id={title_id}"
+            label = item.label() if item is not None else "unknown title"
+            return f"{label} ({', '.join((f'id={title_id}', *suffix))})"
 
         watched = await self.recent_titles(user_id, limit)
         recommended = await self.recent_recommended(user_id, limit + 1)
         lines = ["Recently watched: " + ("; ".join(name(t) for t in watched) if watched else "(none yet)")]
         if recommended:
-            lines.append("Recently recommended: " + "; ".join(
-                f"{name(t)} ({_when(ts)})" for t, ts in recommended))
+            lines.append("Recently recommended: " + "; ".join(name(t, _when(ts)) for t, ts in recommended))
         return "\n".join(lines)

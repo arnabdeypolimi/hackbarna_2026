@@ -12,7 +12,24 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from loguru import logger
+from opentelemetry.trace import Span, StatusCode
 from pydantic import BaseModel
+
+from tv_avatar.tracing import (
+    ATTR_MEMORY_CHARS,
+    ATTR_MEMORY_INTERRUPTED,
+    ATTR_MEMORY_PENDING_TURNS,
+    ATTR_MEMORY_SAID_CHARS,
+    ATTR_MEMORY_WAITED_MS,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    META_REFRESH_TRIGGERED,
+    META_SOURCE,
+    OBS_TYPE_RETRIEVER,
+    OBS_TYPE_SPAN,
+    observation,
+    set_attributes,
+)
 
 PREFETCH_TTL_S = 4.0
 PREFIX_CHARS = 20
@@ -121,16 +138,27 @@ class BaseMemoryLane(ABC):
     async def _prefetch_task(self, user_id: str, prefix: str, text: str) -> MemoryBlock:
         log = logger.bind(user_id=user_id)
         t0 = time.perf_counter()
-        try:
-            block = await self._search(user_id, text)
-        except Exception as err:  # noqa: BLE001 — memory is best-effort on the turn
-            log.warning("memory prefetch failed", error=type(err).__name__)
-            block = MemoryBlock(stale=True)
-        self._prefetched[user_id] = _Prefetched(prefix, time.monotonic(), block)
+        # Fired from the tap on the media path: the span lives on this task, not there.
+        with observation("memory.prefetch", type=OBS_TYPE_RETRIEVER, **{ATTR_OBS_INPUT: text}) as span:
+            try:
+                block = await self._search(user_id, text)
+            except Exception as err:  # noqa: BLE001 — memory is best-effort on the turn
+                log.warning("memory prefetch failed", error=type(err).__name__)
+                block = MemoryBlock(stale=True)
+            self._prefetched[user_id] = _Prefetched(prefix, time.monotonic(), block)
+            span.set_attribute(ATTR_MEMORY_CHARS, len(block.render_for_prompt()))
         log.debug("memory prefetch done", ms=round((time.perf_counter() - t0) * 1000, 1))
         return block
 
     async def recall(self, user_id: str, final: str) -> MemoryBlock:
+        # `source` says why the turn got the block it got — the same branches the
+        # DEBUG lines below report — so a slow turn can be blamed on the right hop.
+        with observation("memory.recall", type=OBS_TYPE_RETRIEVER, **{ATTR_OBS_INPUT: final}) as span:
+            source, block = await self._recall(user_id, final, span)
+            span.set_attributes({META_SOURCE: source, ATTR_OBS_OUTPUT: block.render_for_prompt()})
+            return block
+
+    async def _recall(self, user_id: str, final: str, span: Span) -> tuple[str, MemoryBlock]:
         log = logger.bind(user_id=user_id)
         prefix = _prefix(final)
         t0 = time.perf_counter()
@@ -138,39 +166,48 @@ class BaseMemoryLane(ABC):
         if pending is not None and not pending.done():
             with contextlib.suppress(asyncio.CancelledError, Exception, TimeoutError):  # logged by the task
                 await asyncio.wait_for(asyncio.shield(pending), timeout=self._recall_budget_s)
+            span.set_attribute(ATTR_MEMORY_WAITED_MS, round((time.perf_counter() - t0) * 1000))
         cached = self._prefetched.get(user_id)
         if cached is not None:
             age = time.monotonic() - cached.done_at
             if age < PREFETCH_TTL_S and (prefix.startswith(cached.prefix) or cached.prefix.startswith(prefix)):
                 log.debug("memory prefetch hit", age_ms=round(age * 1000))
-                return cached.block
+                return "prefetch_hit", cached.block
         remaining = self._recall_budget_s - (time.perf_counter() - t0)
         log.debug("memory prefetch miss", budget_ms=round(max(remaining, 0) * 1000))
         if remaining <= 0.02:
             return self._stale_or_empty(user_id, log, "budget spent waiting for prefetch")
         try:
-            return await asyncio.wait_for(self._search(user_id, final), timeout=remaining)
+            return "search", await asyncio.wait_for(self._search(user_id, final), timeout=remaining)
         except TimeoutError:
             return self._stale_or_empty(user_id, log, "search over budget")
         except Exception as err:  # noqa: BLE001
             log.warning("memory recall failed", error=type(err).__name__)
-            return MemoryBlock(stale=True)
+            return "empty", MemoryBlock(stale=True)
 
-    def _stale_or_empty(self, user_id: str, log, reason: str) -> MemoryBlock:
+    def _stale_or_empty(self, user_id: str, log, reason: str) -> tuple[str, MemoryBlock]:
         cached = self._prefetched.get(user_id)
         block = cached.block.model_copy(update={"stale": True}) if cached else MemoryBlock(stale=True)
         log.debug("memory recall degraded", reason=reason, has_stale=cached is not None)
-        return block
+        return ("stale" if cached else "empty"), block
 
     async def ingest_turn(self, user_id: str, user_text: str, assistant_text: str) -> None:
         log = logger.bind(user_id=user_id)
         if not user_text.strip():
             return
-        try:
-            result = await self._ingest(user_id, user_text, assistant_text)
-        except Exception:  # noqa: BLE001 — visible in the log, invisible to the conversation
-            log.opt(exception=True).warning("memory ingest failed")
-            return
+        # Scheduled off the turn but inside its context: parents on the `llm`
+        # span and may end after it, which OTel and Langfuse both accept.
+        with observation("memory.ingest", type=OBS_TYPE_SPAN, **{
+            ATTR_MEMORY_SAID_CHARS: len(assistant_text), ATTR_MEMORY_INTERRUPTED: not assistant_text.strip(),
+        }) as span:
+            try:
+                result = await self._ingest(user_id, user_text, assistant_text)
+            except Exception:  # noqa: BLE001 — visible in the log, invisible to the conversation
+                log.opt(exception=True).warning("memory ingest failed")
+                span.set_status(StatusCode.ERROR)
+                return
+            set_attributes(span, {ATTR_MEMORY_PENDING_TURNS: result.get("pending_turns"),
+                                  META_REFRESH_TRIGGERED: result.get("refresh_triggered")})
         facts = result.get("facts") or result.get("results") or []
         log.info("memory ingest ok", facts_count=len(facts) if hasattr(facts, "__len__") else 0,
                  memory_ids=result.get("memory_ids") or result.get("ids") or [])

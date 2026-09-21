@@ -257,8 +257,11 @@ def build_result(
             prediction = scorer.predict(merged)
             merged["overall"] = prediction.predicted_score
             label = prediction.decision
-        except Exception:
-            pass  # Fall back to weighted average
+        except (ImportError, OSError, ValueError, KeyError) as exc:
+            # Fall back to the weighted average, but say so: a silently ignored
+            # model makes the regression flag look like it worked.
+            print(f"[WARN] regression scorer unavailable ({exc}); using weighted average",
+                  file=sys.stderr)
 
     # Collect evidence from LLM scores
     evidence: dict[str, str] = {}

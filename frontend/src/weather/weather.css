@@ -1,0 +1,23 @@
+/* Weather backdrops (src/weather). Everything here is scoped to the plug-in's own classes, or
+   to the room while a backdrop is up; nothing in styles.css is overridden.
+
+   The backdrop goes into .room after the season's loop and before the room's ::after, which
+   holds the lights, the grain and the shade and is painted last, so all three still sit over
+   it. No z-index: paint order is document order, as the room's own layers rely on. */
+.room .wx-video {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+  opacity: 0; transition: opacity 1.2s ease;
+}
+.room .wx-video.on { opacity: 1; }
+/* The scrim that brings the sky's shade up to the light skies' grade; see floorOf(). */
+.room .wx-floor { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+
+/* While the weather is up the season's loop is out: it would only be decoding behind it. */
+html.wx-live .room .sky { display: none; }
+
+/* A weather not made on this TV yet: outlined, glyph-free, so it reads on any font. */
+.tchip.wx-new { box-shadow: inset 0 0 0 1.5px var(--glass-edge); }
+
+@media (prefers-reduced-motion: reduce) {
+  .room .wx-video { transition: none; }
+}

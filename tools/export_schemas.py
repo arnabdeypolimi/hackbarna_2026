@@ -163,10 +163,13 @@ def render_typescript(bundle: dict) -> str:
 def main() -> None:
     bundle = build_schema_bundle()
     OUT_DIR.mkdir(exist_ok=True)
+    # Explicit encoding: write_text() defaults to the platform codec, and on Windows
+    # that is cp1252 — the em-dash in the .d.ts header came out as a lone 0x97 byte,
+    # which is not UTF-8 and made the contract unreadable on Linux (PR #15).
     (OUT_DIR / "protocol.schema.json").write_text(
-        json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+        json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    (OUT_DIR / "protocol.d.ts").write_text(render_typescript(bundle))
+    (OUT_DIR / "protocol.d.ts").write_text(render_typescript(bundle), encoding="utf-8")
     print(f"wrote {OUT_DIR}/protocol.schema.json and protocol.d.ts")
 
 

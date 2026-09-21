@@ -1,22 +1,26 @@
 """The real agent: a Pipecat LLMService running SGR over an OpenAI-compatible
 endpoint (D8, D12).
 
-Receives LLMContextFrame, streams `say` downstream one complete sentence at a
-time as AggregatedTextFrames (see `_speak` for why not raw LLMTextFrames),
-dispatches actions in parallel as each array element completes, and runs a
-bounded second cycle when an internal tool returns data. InterruptionFrame
-cancels the in-flight completion and the turn's unsent commands, then keeps
-flowing so TTS and the avatar stop together.
+This module is the Pipecat glue. It receives LLMContextFrame, assembles the
+prompt (system prompt + memory + history, greeting brief), brackets the turn in
+LLMFullResponseStart/EndFrames, and hands the cycle loop to `TurnRunner`
+(loop.py), for which it is the `TurnHost`: `speak` pushes one complete
+sentence to TTS as an AggregatedTextFrame, `dispatch_action` routes internal
+tools in-process and TV verbs over the bus. InterruptionFrame cancels the
+in-flight turn and its unsent commands, then keeps flowing so TTS and the
+avatar stop together; the partial reply is still ingested into memory.
 """
 import asyncio
 import contextlib
+import hashlib
 import json
-import random
 import time
 from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI
+from opentelemetry import trace
+from opentelemetry.trace import Span, StatusCode
 from pipecat.frames.frames import (
     AggregatedTextFrame,
     Frame,
@@ -24,84 +28,86 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    TTSSpeakFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService, LLMSettings
 from pipecat.utils.text.base_text_aggregator import AggregationType
-from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
+from pipecat.utils.tracing.service_decorators import traced_llm
+from pydantic import BaseModel
 
-from tv_avatar.agent.envelope import AWAITED_VERBS, INTERNAL_AWAIT, INTERNAL_MODELS, turn_plan_schema
+from tv_avatar import tracing as tel
+from tv_avatar.agent.envelope import REGISTRY
+from tv_avatar.agent.loop import MAX_TOKENS, TEMPERATURE, TurnRunner
 from tv_avatar.agent.prompt import (
     build_system_prompt,
     greeting_brief,
     is_greeting,
+    render_screen,
+    render_shop,
     volatile_sections,
 )
-from tv_avatar.agent.stream_parse import (
-    ActionReady,
-    Done,
-    EnvelopeStreamer,
-    IntentReady,
-    SayDelta,
-    SayDone,
-)
 from tv_avatar.agent.tools import InternalTools
+from tv_avatar.agent.turn import TurnContext, TurnMetrics, TurnTrace
 from tv_avatar.config import Settings
 from tv_avatar.control.bus import CommandBus
+from tv_avatar.history.recorder import HistoryRecorder
 from tv_avatar.history.store import HistoryStore
 from tv_avatar.memory.lane import MemoryBlock, MemoryLane
 from tv_avatar.recs.catalog import CatalogStore
 from tv_avatar.recs.engine import RecsEngine
 from tv_avatar.session.state import SessionState
+from tv_avatar.tracing import (
+    ATTR_ACTION_AWAITS_RESULT,
+    ATTR_ACTION_MS,
+    ATTR_ACTION_RETURNS_OBSERVATION,
+    ATTR_HISTORY_CHARS,
+    ATTR_MEMORY_EMPTY,
+    ATTR_MEMORY_STALE,
+    ATTR_MEMORY_TOKEN_EST,
+    ATTR_OBS_INPUT,
+    ATTR_OBS_OUTPUT,
+    ATTR_OBS_STATUS_MESSAGE,
+    ATTR_TRACE_INPUT,
+    ATTR_TRACE_OUTPUT,
+    ATTR_TURN_DROPPED_COMMANDS,
+    ATTR_TURN_ID,
+    ATTR_TURN_OFFERED_IDS,
+    META_GREETING,
+    META_INTERRUPTED,
+    META_KIND,
+    META_STATUS,
+    META_VERB,
+    OBS_TYPE_RETRIEVER,
+    OBS_TYPE_TOOL,
+    observation,
+    set_attributes,
+)
 
-MAX_CYCLES = 2
-MAX_TOKENS = 220           # say is 1–2 spoken sentences; actions are small
-TEMPERATURE = 0.2
 #: Conversation history kept in the prompt (non-system messages). TTFT grows
 #: with context on the shared endpoint: 20 messages measured 2.3 s vs ~0.4 s.
 MAX_HISTORY_MESSAGES = 10
-#: Spoken via TTSSpeakFrame when the LLM has produced no `say` byte after
-#: `filler_after_ms` — masks a slow first token without talking over the reply.
-SLOW_FILLERS = ("One moment.", "Let me think.", "Hmm, one sec.")
 
 
-def render_fallback(results: list[tuple[str, dict]]) -> tuple[str, list[tuple[str, dict]]]:
-    """Spoken answer + TV actions built from tool results without an LLM call."""
-    for verb, result in results:
-        if verb == "recommend_titles":
-            titles = result.get("titles") or []
-            if not titles:
-                return ("I couldn't find anything matching that right now. Want to try something else?", [])
-            names = [f"{t['name']} from {t['year']}" if t.get("year") else t["name"] for t in titles[:3]]
-            spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f", or {names[-1]}"
-            return (f"How about {spoken}?", [("focus", {"title_id": titles[0]["title_id"]})])
-        if verb == "recall_memory":
-            memory = (result.get("memory") or "").strip()
-            if memory and memory != "(none yet)":
-                return (f"Here's what I remember: {memory.splitlines()[-1].lstrip('- ')}", [])
-            return ("I don't have that in my memory yet.", [])
-    return ("Sorry, that took too long. Could you say it again?", [])
+def _text_of(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
 
 
 def _last_user_text(messages: list[dict]) -> str:
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-    return ""
+    return next((_text_of(m) for m in reversed(messages) if m.get("role") == "user"), "")
 
 
 class SGRAgentService(LLMService):
     def __init__(self, settings: Settings, bus: CommandBus, lane: MemoryLane,
                  recs: RecsEngine | None, history: HistoryStore | None, session: SessionState,
                  *, catalog: CatalogStore | None = None, client: Any | None = None,
-                 tools: InternalTools | None = None, **kwargs) -> None:
+                 tools: InternalTools | None = None, recorder: HistoryRecorder | None = None,
+                 **kwargs) -> None:
         kwargs.setdefault("settings", LLMSettings(
             model=settings.llm_model, temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
             system_instruction=None, top_p=None, top_k=None, frequency_penalty=None,
@@ -116,15 +122,21 @@ class SGRAgentService(LLMService):
         self._catalog = catalog
         self._session = session
         self._client = client or AsyncOpenAI(api_key=settings.nebius_api_key, base_url=settings.nebius_base_url)
-        self._tools = tools or InternalTools(recs, lane, catalog, timeout_s=settings.tool_timeout_s)
+        self._tools = tools or InternalTools(recs, catalog, recorder=recorder,
+                                             timeout_s=settings.tool_timeout_s)
+        self._recorder = recorder
+        self._runner = TurnRunner(self._client, settings, self)
         self._turn_task: asyncio.Task | None = None
         self._turn_id: str | None = None
         self._interrupted = False
-        # What the current turn heard and has said so far — ingested into memory
+        # The decorator's `llm` span, captured at turn open: `_cancel_turn` runs
+        # from the InterruptionFrame's context, where get_current_span() is not it.
+        self._turn_span: Span = trace.INVALID_SPAN
+        self._trace_input_set = False
+        # What the current turn heard, said and pointed at — ingested into memory
         # at turn end, or on interruption with the partial reply (D6: the user's
         # words are a memory even when the answer was cut off).
-        self._turn_user_text = ""
-        self._turn_said: list[str] = []
+        self._trace = TurnTrace()
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -146,15 +158,28 @@ class SGRAgentService(LLMService):
         if self._turn_task is not None and not self._turn_task.done():
             self._turn_task.cancel()
             self._schedule_ingest(interrupted=True)
-        if self._turn_id is not None:
-            dropped = self._bus.cancel_turn(self._turn_id)
-            logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
-                "turn interrupted", dropped_commands=dropped)
+        self._drop_turn_commands()
+
+    def _drop_turn_commands(self) -> None:
+        """Barge-in: drop the turn's queued-but-unsent commands (spec §9), once.
+
+        Reached from `_run_turn`'s cancellation handler first (see there); the
+        InterruptionFrame's `_cancel_turn` then finds nothing left to drop."""
+        if self._turn_id is None:
+            return
+        dropped = self._bus.cancel_turn(self._turn_id)
+        logger.bind(session_id=self._session.session_id, turn_id=self._turn_id).info(
+            "turn interrupted", dropped_commands=dropped)
+        # A barge-in during playback of an already-finished turn still drops its
+        # queued commands, but that turn's span closed with the turn.
+        if self._turn_span.is_recording():
+            self._turn_span.set_attributes({META_INTERRUPTED: True, ATTR_TURN_DROPPED_COMMANDS: dropped})
+        self._turn_id = None
 
     def _schedule_ingest(self, *, interrupted: bool) -> None:
         """Off the turn: never awaited by the pipeline."""
-        user_text, said = self._turn_user_text, "".join(self._turn_said)
-        self._turn_user_text, self._turn_said = "", []
+        trace, self._trace = self._trace, TurnTrace()
+        user_text, said = trace.user_text, trace.spoken()
         if not user_text.strip() or is_greeting(user_text):
             return
         user_id = self._session.user_id or self._session.session_id
@@ -164,18 +189,32 @@ class SGRAgentService(LLMService):
 
     # --- the turn -----------------------------------------------------------
 
+    # `traced_llm` opens the `llm` span under Pipecat's turn span (D15): it captures
+    # the context messages and the model, and every span the loop opens inside the
+    # decorated coroutine nests under it via contextvars. Its own `output` stays
+    # empty because `speak` pushes AggregatedTextFrames, so `_turn` sets the
+    # Langfuse output from TurnTrace.spoken(). Engages only when `_tracing_enabled`.
+    @traced_llm
     async def _run_turn(self, context: LLMContext) -> None:
         turn_id = self._session.new_turn()
         self._turn_id = turn_id
         self._interrupted = False
-        self._turn_task = asyncio.create_task(self._turn(context, turn_id))
+        with tel.attribute_scope({tel.META_TURN_ID: turn_id}), logger.contextualize(
+                session_id=self._session.session_id, turn_id=turn_id):
+            self._turn_task = asyncio.create_task(self._turn(context, turn_id))
         try:
             await self._turn_task
         except asyncio.CancelledError:
             # Pipecat cancels the processor's frame task *before* it delivers the
-            # InterruptionFrame; without this the inner turn kept streaming.
+            # InterruptionFrame; without this the inner turn kept streaming. The
+            # cancelled turn is awaited so its `finally` stamps the span before
+            # the decorator closes it — which is also why the interruption is
+            # recorded here and not in `_cancel_turn`.
             if not self._turn_task.done():
                 self._turn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._turn_task
+            self._drop_turn_commands()
             self._schedule_ingest(interrupted=True)
             if not self._interrupted:
                 raise
@@ -184,106 +223,93 @@ class SGRAgentService(LLMService):
 
     async def _turn(self, context: LLMContext, turn_id: str) -> None:
         user_id = self._session.user_id or self._session.session_id
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
-        t0 = time.perf_counter()
-        marks: dict[str, Any] = {"cycles": 0, "n_actions": 0, "intent": None}
+        ctx = TurnContext(turn_id, user_id, time.perf_counter(),
+                          logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id))
+        log, metrics = ctx.log, TurnMetrics()
+        span = self._turn_span = trace.get_current_span()
 
         await self.start_processing_metrics()
         messages = list(context.get_messages())
         user_text = _last_user_text(messages)
-        self._turn_user_text, self._turn_said = user_text, []
+        greeting = is_greeting(user_text)
+        # Kept locally too: on interruption `_cancel_turn` swaps `self._trace` out
+        # for ingest before this coroutine's `finally` gets to run.
+        turn_trace = self._trace = TurnTrace(user_text=user_text)
+        span.set_attributes({ATTR_TURN_ID: turn_id, META_GREETING: greeting, ATTR_OBS_INPUT: user_text,
+                             tel.ATTR_OBS_TYPE: tel.OBS_TYPE_AGENT, tel.META_TURN_ID: turn_id,
+                             tel.META_STATUS: "running",
+                             tel.ATTR_PROMPT_HASH: hashlib.sha256(build_system_prompt(
+                                 self._session.persona.language).encode()).hexdigest()})
+        if not greeting and not self._trace_input_set:
+            self._trace_input_set = True
+            span.set_attribute(ATTR_TRACE_INPUT, user_text)
         log.debug("turn open", step="start", user_text=user_text, history_msgs=len(messages),
                   screen=self._session.screen is not None)
 
-        memory = await self._lane.recall(user_id, user_text)
-        history_text = (await self._history.render_for_prompt(user_id, self._catalog)
-                        if self._history is not None else "Recently watched: (none yet)")
-        marks["recall_ms"] = round((time.perf_counter() - t0) * 1000)
-        log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
-                  memory_tokens=memory.token_est, ms=marks["recall_ms"])
-        log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
-
-        messages = self.build_messages(messages, memory, history_text)
-        if is_greeting(user_text):
-            messages[-1] = {"role": "user", "content": greeting_brief(
-                history_text, memory.render_for_prompt(), self._session.persona.language)}
-        log.debug("turn prompt", step="prompt", n_messages=len(messages),
-                  system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
-        log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
-
-        await self.push_frame(LLMFullResponseStartFrame())
-        memory_text = None if memory.empty else memory.render_for_prompt()
-        for cycle in (1,):
-            marks["cycles"] = cycle
-            log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages))
-            raw, results = await self._cycle(messages, turn_id, user_id, memory_text, cycle, marks, t0)
-            log.debug("cycle envelope", step="cycle", cycle=cycle, raw=raw)
-            if not self.needs_second_cycle(results):
-                log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=False,
-                          awaited=[v for v, _ in results])
-                break
-            feedback = json.dumps({verb: result for verb, result in results}, ensure_ascii=False)
-            log.debug("cycle end", step="cycle", cycle=cycle, second_cycle=True,
-                      awaited=[v for v, _ in results], feedback_chars=len(feedback))
-            log.debug("tool results fed back", step="feedback", results=feedback)
-            messages = messages + [
-                {"role": "assistant", "content": raw},
-                {"role": "user", "content": "[tool results]\n" + feedback
-                    + "\nNow answer the user using these results. Do not call internal tools again."},
-            ]
-            # Cycle 2 must start speaking within its budget or the tool results
-            # are spoken from a template — the loop never outlives the budget.
-            if not await self._cycle_with_budget(messages, turn_id, user_id, memory_text, marks, t0, log):
-                marks["cycles"] = 2
-                marks["fallback"] = True
-                await self._speak_fallback(results, turn_id, user_id, memory_text, log)
-            break
-        await self.push_frame(LLMFullResponseEndFrame())
-        await self.stop_processing_metrics()
-        marks["total_ms"] = round((time.perf_counter() - t0) * 1000)
-        log.debug("turn close", step="end", **marks)
-        log.info("turn", **marks)
-        self._schedule_ingest(interrupted=False)
-
-    async def _cycle_with_budget(self, messages: list[dict], turn_id: str, user_id: str,
-                                 memory_text: str | None, marks: dict, t0: float, log) -> bool:
-        """Run cycle 2; True if it produced speech within `cycle2_first_byte_s`."""
-        first_say = asyncio.Event()
-        log.debug("cycle start", step="cycle", cycle=2, n_messages=len(messages),
-                  budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
-        task = asyncio.create_task(
-            self._cycle(messages, turn_id, user_id, memory_text, 2, marks, t0, first_say=first_say))
-        waiter = asyncio.create_task(first_say.wait())
         try:
-            done, _ = await asyncio.wait({task, waiter}, timeout=self._cfg.cycle2_first_byte_s,
-                                         return_when=asyncio.FIRST_COMPLETED)
+            with observation("agent.recall", type=OBS_TYPE_RETRIEVER, **{ATTR_OBS_INPUT: user_text}) as recall:
+                memory = await self._lane.recall(user_id, user_text)
+                history_text = (await self._history.render_for_prompt(user_id, self._catalog)
+                                if self._history is not None else "Recently watched: (none yet)")
+                metrics.recall_ms = ctx.elapsed_ms()
+                # `source` (prefetch hit / search / stale) lives on the child
+                # `memory.recall` span; this one carries what the prompt got.
+                recall.set_attributes({
+                    ATTR_MEMORY_EMPTY: memory.empty, ATTR_MEMORY_STALE: memory.stale,
+                    ATTR_MEMORY_TOKEN_EST: memory.token_est, ATTR_HISTORY_CHARS: len(history_text),
+                    ATTR_OBS_OUTPUT: memory.render_for_prompt(),
+                })
+            log.debug("turn context", step="recall", memory_empty=memory.empty, memory_stale=memory.stale,
+                      memory_tokens=memory.token_est, ms=metrics.recall_ms)
+            log.debug("turn memory block", step="recall", memory=memory.render_for_prompt(), history=history_text)
+
+            messages = self.build_messages(messages, memory, history_text)
+            if greeting:
+                messages[-1] = {"role": "user", "content": greeting_brief(
+                    history_text, memory.render_for_prompt(), self._session.persona.language)}
+            log.debug("turn prompt", step="prompt", n_messages=len(messages),
+                      system_chars=len(messages[0]["content"]), model=self._cfg.llm_model)
+            log.trace("turn system prompt", step="prompt", system=messages[0]["content"])
+
+            await self.push_frame(LLMFullResponseStartFrame())
+            await self._runner.run(messages, ctx, metrics, turn_trace)
+            await self.push_frame(LLMFullResponseEndFrame())
+            await self.stop_processing_metrics()
+            self._record_offered(ctx)
+            metrics.total_ms = ctx.elapsed_ms()
+            log.debug("turn close", step="end", **metrics.as_log_fields())
+            log.info("turn", **metrics.as_log_fields())
+            self._schedule_ingest(interrupted=False)
+            span.set_attribute(tel.META_STATUS, "completed")
+        except asyncio.CancelledError:
+            span.set_attribute(tel.META_STATUS, "interrupted")
+            raise
+        except Exception as err:
+            span.set_attribute(tel.META_STATUS, "error")
+            span.set_attribute(tel.ATTR_ERROR_TYPE, type(err).__name__)
+            raise
         finally:
-            waiter.cancel()
-        if not done:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-            log.warning("cycle 2 over budget; speaking templated answer", step="cycle",
-                        budget_ms=round(self._cfg.cycle2_first_byte_s * 1000))
-            return False
-        raw, _results = await task
-        marks["cycles"] = 2
-        log.debug("cycle envelope", step="cycle", cycle=2, raw=raw)
-        log.debug("cycle end", step="cycle", cycle=2, second_cycle=False)
-        return True
+            # One producer, two sinks (D16): the `turn` log line above and the span.
+            # Runs on interruption too, with what the turn had by then.
+            spoken = turn_trace.spoken()
+            metrics.mark_once("total_ms", ctx.elapsed_ms())
+            log.info("agent.turn.completed", event="agent.turn.completed", **metrics.as_log_fields())
+            set_attributes(span, {
+                **metrics.as_span_attributes(),
+                ATTR_TURN_OFFERED_IDS: turn_trace.offered_ids() or None,
+                ATTR_OBS_OUTPUT: spoken, ATTR_TRACE_OUTPUT: spoken,
+                tel.ATTR_SPEECH_SUBMITTED: " ".join(turn_trace.submitted),
+            })
 
-    async def _speak_fallback(self, results: list[tuple[str, dict]], turn_id: str, user_id: str,
-                              memory_text: str | None, log) -> None:
-        text, actions = render_fallback(results)
-        log.debug("fallback", step="say", text=text, actions=actions)
-        # Deliberately not added to _turn_said: a template built from substitute
-        # results is not the agent's reply, and the memory profile must not learn
-        # the viewer "wanted" whatever the popular channel happened to return.
-        await self._speak(text)
-        for verb, args in actions:
-            await self.dispatch_action(verb, args, turn_id, user_id, memory_text)
+    def _record_offered(self, ctx: TurnContext) -> None:
+        """Viewing log: the recommendation candidates the agent actually named or
+        focused this turn — not everything the tool returned. Off the turn."""
+        offered = self._trace.offered_ids()
+        if offered and self._recorder is not None:
+            ctx.log.debug("recommendations offered", step="history", title_ids=offered)
+            self._recorder.spawn(self._recorder.on_rec_shown(ctx.user_id, offered))
 
-    async def _speak(self, text: str) -> None:
+    async def speak(self, text: str) -> None:
         """Hand one complete sentence to TTS.
 
         Not an LLMTextFrame: the TTS service's own sentence aggregator releases
@@ -297,162 +323,64 @@ class SGRAgentService(LLMService):
         if text:
             await self.push_frame(AggregatedTextFrame(text, AggregationType.SENTENCE))
 
-    async def _cycle(self, messages: list[dict], turn_id: str, user_id: str, memory_text: str | None,
-                     cycle: int, marks: dict, t0: float,
-                     first_say: asyncio.Event | None = None) -> tuple[str, list[tuple[str, dict]]]:
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
-        streamer = EnvelopeStreamer()
-        sentences = SimpleTextAggregator()  # same splitter the TTS would use, but we own the flush
-        raw: list[str] = []
-        said: list[str] = []
-        awaited: list[tuple[str, asyncio.Task]] = []
-        fire: list[asyncio.Task] = []
-        first_say_pending = True
-        t_req = time.perf_counter()
-        filler = (asyncio.create_task(self._slow_filler(t0, log))
-                  if cycle == 1 and self._cfg.filler_after_ms > 0 else None)
-        stream = None
-
-        await self.start_ttfb_metrics()
-        try:
-            stream = await self._client.chat.completions.create(
-                model=self._cfg.llm_model, messages=messages, stream=True,
-                temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
-                response_format={"type": "json_schema", "json_schema": turn_plan_schema()},
-                extra_body=self._cfg.llm_extra_body or None,
-            )
-            async for chunk in stream:
-                choice = chunk.choices[0] if chunk.choices else None
-                delta = choice.delta.content if choice and choice.delta else None
-                if not delta:
-                    continue
-                raw.append(delta)
-                for event in streamer.feed(delta):
-                    match event:
-                        case IntentReady(intent=intent):
-                            marks["intent"] = intent
-                            log.debug("intent", step="intent", cycle=cycle, intent=intent,
-                                      ms=round((time.perf_counter() - t_req) * 1000))
-                        case SayDelta(text=text):
-                            said.append(text)
-                            self._turn_said.append(text)
-                            if first_say_pending:
-                                first_say_pending = False
-                                if first_say is not None:
-                                    first_say.set()
-                                if filler is not None:
-                                    filler.cancel()
-                                await self.stop_ttfb_metrics()
-                                marks.setdefault("ttft_ms", round((time.perf_counter() - t0) * 1000))
-                                log.debug("first say byte", step="say", cycle=cycle,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
-                            async for sentence in sentences.aggregate(text):
-                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=sentence.text,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
-                                await self._speak(sentence.text)
-                        case SayDone():
-                            # The say string closed: speak the tail now rather
-                            # than after the actions array (or the next cycle).
-                            if (tail := await sentences.flush()) is not None:
-                                log.debug("sentence -> TTS", step="say", cycle=cycle, text=tail.text,
-                                          ms=round((time.perf_counter() - t_req) * 1000))
-                                await self._speak(tail.text)
-                        case ActionReady(action=action):
-                            verb = str(action.get("verb", ""))
-                            args = {k: v for k, v in action.items() if k != "verb" and v is not None}
-                            marks["n_actions"] += 1
-                            if verb in INTERNAL_AWAIT and cycle >= MAX_CYCLES:
-                                log.debug("action skipped", step="action", cycle=cycle, verb=verb,
-                                          reason="cycle cap")
-                                continue  # no open-ended loops on a voice interface
-                            log.debug("action ready", step="action", cycle=cycle, verb=verb, args=args,
-                                      awaited=verb in AWAITED_VERBS,
-                                      ms=round((time.perf_counter() - t_req) * 1000))
-                            task = asyncio.create_task(
-                                self.dispatch_action(verb, args, turn_id, user_id, memory_text))
-                            if verb in AWAITED_VERBS:
-                                awaited.append((verb, task))
-                            else:
-                                fire.append(task)
-                            marks.setdefault("first_action_ms", round((time.perf_counter() - t0) * 1000))
-                        case Done():
-                            break
-                if streamer.finished:
-                    break
-        finally:
-            # Covers cancellation during create() too — an orphaned filler used
-            # to speak "One moment." after the turn had been interrupted.
-            if filler is not None:
-                filler.cancel()
-            close = getattr(stream, "close", None)
-            if close is not None:
-                await close()
-        if (tail := await sentences.flush()) is not None:  # say never closed: truncated or malformed envelope
-            await self._speak(tail.text)
-        if first_say_pending:
-            await self.stop_ttfb_metrics()
-        log.debug("stream done", step="say", cycle=cycle, say="".join(said), chunks=len(raw),
-                  awaited=len(awaited), fire_and_forget=len(fire),
-                  ms=round((time.perf_counter() - t_req) * 1000))
-
-        results: list[tuple[str, dict]] = []
-        for verb, task in awaited:
-            try:
-                results.append((verb, await task))
-            except Exception as err:  # noqa: BLE001
-                log.opt(exception=err).debug("awaited action raised", step="action", verb=verb)
-                results.append((verb, {"status": "error", "reason": type(err).__name__}))
-        for task in fire:
-            with contextlib.suppress(Exception):  # failures are logged in dispatch_action
-                await task
-        return "".join(raw), results
-
-    async def _slow_filler(self, t0: float, log) -> None:
-        delay = self._cfg.filler_after_ms / 1000 - (time.perf_counter() - t0)
-        if delay > 0:
-            await asyncio.sleep(delay)
-        text = random.choice(SLOW_FILLERS)
-        log.debug("slow filler spoken", step="say", text=text,
-                  ms=round((time.perf_counter() - t0) * 1000))
-        await self.push_frame(TTSSpeakFrame(text))
-
-    # --- pieces the tests call directly -------------------------------------
+    # --- TurnHost + pieces the tests call directly ---------------------------
 
     def build_messages(self, messages: list[dict], memory: MemoryBlock, history_summary: str) -> list[dict]:
-        rest = [m for m in messages if m.get("role") != "system"][-MAX_HISTORY_MESSAGES:]
-        existing = next((m for m in messages if m.get("role") == "system"), None)
-        if existing is not None and isinstance(existing.get("content"), str) and "# Screen" in existing["content"]:
-            static = existing["content"]
-            volatile = "\n\n".join([f"# Memory\n{memory.render_for_prompt()}", f"# Recent activity\n{history_summary}"])
-        else:
-            static = build_system_prompt(self._session.persona.language)
-            volatile = volatile_sections(self._session.render_for_prompt(), memory.render_for_prompt(), history_summary)
-        return [{"role": "system", "content": static + "\n\n" + volatile}, *rest]
+        """The agent is the only writer of the system prompt: whatever arrived in
+        the system slot is replaced, never inspected (D9 — stamp, never store).
 
-    async def dispatch_action(self, verb: str, args: dict, turn_id: str, user_id: str = "",
-                              memory_text: str | None = None) -> dict:
-        log = logger.bind(session_id=self._session.session_id, user_id=user_id, turn_id=turn_id)
+        The greeting stage direction is dropped from the history once the turn
+        has moved on: it sits in the context as a *user* message, and a small
+        model that still sees "Greet them…" answers "hello" — and "yes" — with
+        the greeting again (seen live). The greeting turn itself keeps it as
+        its last message, where `_turn` swaps in the brief."""
+        rest = [m for m in messages if m.get("role") != "system"]
+        rest = [m for i, m in enumerate(rest)
+                if i == len(rest) - 1 or not is_greeting(_text_of(m))][-MAX_HISTORY_MESSAGES:]
+        system = build_system_prompt(self._session.persona.language) + "\n\n" + volatile_sections(
+            render_screen(self._session, self._catalog), memory.render_for_prompt(), history_summary,
+            render_shop(self._catalog))
+        return [{"role": "system", "content": system}, *rest]
+
+    async def dispatch_action(self, action: BaseModel, ctx: TurnContext) -> dict:
+        """Route one parsed action: internal tools in-process, TV verbs over the bus."""
+        log, turn_id, user_id = ctx.log, ctx.turn_id, ctx.user_id
         t0 = time.perf_counter()
-        if verb in INTERNAL_MODELS:
-            log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
-            result = await self._tools.run(verb, args, user_id, memory_text)
-            ms = round((time.perf_counter() - t0) * 1000)
-            log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
-            log.info("internal tool", verb=verb, status=result.get("status", "ok"),
-                     n=len(result.get("titles", [])), ms=ms)
+        verb = str(action.verb)
+        spec = REGISTRY[verb]
+        args = action.model_dump(exclude={"verb"}, exclude_none=True)
+        # A TV command is an action with a side effect, so both kinds are `tool` (D19).
+        with observation("agent.action", type=OBS_TYPE_TOOL, **{
+            META_VERB: verb, META_KIND: spec.kind, ATTR_ACTION_AWAITS_RESULT: spec.awaits_result,
+            ATTR_ACTION_RETURNS_OBSERVATION: spec.returns_observation,
+            ATTR_OBS_INPUT: json.dumps(args, ensure_ascii=False),
+        }) as span:
+            if spec.kind == "internal":
+                log.debug("dispatch internal", step="dispatch", verb=verb, args=args)
+                result = await self._tools.run(action, user_id)
+                ms = round((time.perf_counter() - t0) * 1000)
+                log.debug("internal tool result", step="dispatch", verb=verb, result=result, ms=ms)
+                log.info("internal tool", verb=verb, status=result.get("status", "ok"),
+                         n=len(result.get("titles", [])), ms=ms)
+            else:
+                log.debug("dispatch tv", step="dispatch", verb=verb, args=args)
+                try:
+                    result = await self._bus.dispatch(verb, args, turn_id=turn_id)
+                except ValueError as err:
+                    log.warning("rejected action", verb=verb, reason=str(err))
+                    span.set_status(StatusCode.ERROR, str(err))
+                    span.set_attribute(ATTR_OBS_STATUS_MESSAGE, str(err))
+                    result = {"status": "invalid", "reason": str(err)}
+                else:
+                    log.info("tv command", verb=verb, status=result.get("status"),
+                             ms=round((time.perf_counter() - t0) * 1000))
+            status = str(result.get("status", "ok"))
+            log.info("agent.action.completed", event="agent.action.completed", verb=verb,
+                     status=status, ms=round((time.perf_counter() - t0) * 1000))
+            if status in {"unavailable", "invalid", "error"}:
+                span.set_attribute(tel.ATTR_OBS_LEVEL, tel.LEVEL_WARNING)
+            span.set_attributes({
+                META_STATUS: status, ATTR_ACTION_MS: round((time.perf_counter() - t0) * 1000),
+                ATTR_OBS_OUTPUT: json.dumps(result, ensure_ascii=False, default=str),
+            })
             return result
-        log.debug("dispatch tv", step="dispatch", verb=verb, args=args)
-        try:
-            result = await self._bus.dispatch(verb, args, turn_id=turn_id)
-        except ValueError as err:
-            log.warning("rejected action", verb=verb, reason=str(err))
-            return {"status": "invalid", "reason": str(err)}
-        log.info("tv command", verb=verb, status=result.get("status"),
-                 ms=round((time.perf_counter() - t0) * 1000))
-        return result
-
-    @staticmethod
-    def needs_second_cycle(results: list[tuple[str, dict]]) -> bool:
-        """Any internal tool call earns a second cycle — including a failed one,
-        so the agent speaks the fallback instead of stopping at the filler."""
-        return any(verb in INTERNAL_AWAIT for verb, _ in results)

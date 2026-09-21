@@ -1,18 +1,31 @@
+import type { CSSProperties } from 'react';
+
 function hash(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
 
-/** A stable two-tone backdrop per title, shown until (or instead of) the real image. */
-export function artBackground(title: string): string {
+/** Which two of the theme's three card tints a title gets, and which way round. */
+const PAIRS: [string, string][] = [['a', 'b'], ['b', 'c'], ['c', 'a'], ['b', 'a']];
+
+/**
+ * A stable backdrop per title, shown until (or instead of) the real image.
+ *
+ * The colours are the theme's: lib/theme.ts sets --card-a, --card-b, --card-c and --card-glow,
+ * so a row of cards reads as one sky rather than a hand of playing cards. Only the angle, the
+ * glow's place and the pair of tints belong to the title, which is enough to tell cards apart.
+ */
+export function artStyle(title: string): CSSProperties {
   const h = hash(title);
-  const a = h % 360;
-  const b = (a + 30 + ((h >> 9) % 60)) % 360;
-  const angle = (h >> 4) % 180;
-  const x = 20 + ((h >> 3) % 60);
-  const y = 10 + ((h >> 6) % 40);
-  return `radial-gradient(120% 90% at ${x}% ${y}%, hsla(${b},60%,58%,.9), transparent 60%), linear-gradient(${angle}deg, hsl(${a},42%,16%), hsl(${a},38%,34%))`;
+  const [a, b] = PAIRS[h % PAIRS.length];
+  return {
+    '--art-a': `var(--card-${a})`,
+    '--art-b': `var(--card-${b})`,
+    '--art-angle': `${(h >> 4) % 180}deg`,
+    '--art-x': `${20 + ((h >> 3) % 60)}%`,
+    '--art-y': `${10 + ((h >> 6) % 40)}%`,
+  } as CSSProperties;
 }
 
 /** Sizes the title text so its longest word fits the poster width. */

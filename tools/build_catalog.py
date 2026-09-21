@@ -10,6 +10,8 @@ NEBIUS_API_KEY / NEBIUS_BASE_URL (+ EMBEDDING_*) from the environment or
 
     uv run python tools/build_catalog.py --limit 1000   # smoke slice first
     uv run python tools/build_catalog.py                # full run
+    uv run python tools/build_catalog.py --ids-from frontend/public/data/titles.csv
+                                                        # only what the TV app can show
 """
 import argparse
 import sys
@@ -26,7 +28,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from tv_avatar import e5
 from tv_avatar.logging import setup_logging
-from tv_avatar.recs.catalog import build_catalog
+from tv_avatar.recs.catalog import build_catalog, read_title_ids
 
 #: Whole rows (~700 chars) through E5 on CPU: bigger batches stop helping here.
 LOCAL_BATCH_SIZE = 64
@@ -80,10 +82,18 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None, help="override CATALOG_INDEX_LIMIT")
     parser.add_argument("--batch-size", type=int, default=None,
                         help=f"default {LOCAL_BATCH_SIZE} local, 256 nebius")
+    parser.add_argument("--ids-from", default=None, metavar="CSV",
+                        help="only index titles whose `id` appears in this CSV (the TV app's titles.csv)")
     args = parser.parse_args()
 
     settings = BuildSettings()
-    setup_logging(settings.log_level)
+    # Not `settings=`: ContentPolicy.from_settings reads the app's speech and
+    # Langfuse keys, which this offline job does not have. Redact the one it does.
+    setup_logging(settings.log_level, secrets=(settings.nebius_api_key,))
+    ids = None
+    if args.ids_from:
+        ids = read_title_ids(args.ids_from)
+        logger.info("restricting catalog to {} title ids from {}", len(ids), args.ids_from)
     if settings.embedding_provider == "local":
         embed, dims, batch = local_embed_fn, e5.E5_DIM, args.batch_size or LOCAL_BATCH_SIZE
         logger.info("embedding locally with multilingual-e5-small ({} dims)", dims)
@@ -95,7 +105,7 @@ def main() -> int:
     report = build_catalog(
         args.csv, settings.catalog_path, settings.qdrant_path,
         limit=args.limit if args.limit is not None else settings.catalog_index_limit,
-        embed_fn=embed, batch_size=batch, dims=dims,
+        embed_fn=embed, batch_size=batch, dims=dims, ids=ids,
     )
     logger.info(
         "catalog build done", rows=report.rows, embedded=report.embedded,

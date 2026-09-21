@@ -1,0 +1,30 @@
+{
+  "garden": {
+    "label": "Birds in a spring garden",
+    "prompt": "A continuous, unbroken, photorealistic ambient nature scene of a peaceful spring garden at sunrise. Soft pink cherry blossoms and lilac flowers sway gently in a light breeze, dew drops glisten on petals, and small songbirds perch and flutter between blossoming branches. Warm golden-pink morning light filters through the trees with soft bokeh and light ground mist. Pastel palette of blush pink, lavender, and pale periwinkle sky. Slow, calm camera movement, shallow depth of field. Preserve the same garden, lighting, and time of day throughout. No people, no text, no scene cuts. Audio: rich, natural stereo birdsong from several species, soft leaves rustling in the breeze, faint distant trickling water. No music, no voices.",
+    "beats": [
+      "Wide view of the blossoming garden as sunlight rises through the trees.",
+      "Slow push-in to a songbird singing on a cherry blossom branch.",
+      "Gentle pan across dew-covered lilac flowers swaying in the breeze.",
+      "Slowly pull back to the wide garden view in soft morning light."
+    ]
+  },
+  "beach": {
+    "label": "Waves on a summer beach",
+    "prompt": "A continuous, unbroken, photorealistic ambient scene of gentle turquoise ocean waves rolling slowly onto a pristine white sandy beach on a clear summer day. Crystal-clear water sparkles in sunlight, soft white foam spreads and retreats across smooth wet sand. Bright blue sky with a few thin drifting clouds. Palette of sky blue, aqua, mint, and warm sand. Static low-angle wide shot near the shoreline, steady and calm. Preserve the same beach, weather, and camera position throughout. No people, no boats, no text, no scene cuts. Audio: immersive stereo sound of soft rhythmic waves lapping on the shore, foam fizzing on sand, a light sea breeze, and occasional distant seagulls. No music, no voices.",
+    "beats": [
+      "Static wide shot of waves gently washing onto the sand.",
+      "Slightly closer view of foam spreading and sinking into the wet sand.",
+      "Return to the wide shoreline view with sunlight glittering on the water."
+    ]
+  },
+  "fireplace": {
+    "label": "Fireplace in a snowy cabin",
+    "prompt": "A continuous, unbroken, photorealistic ambient scene inside a cozy wooden log cabin at night. A stone fireplace holds a warm crackling fire with glowing orange embers and flickering flames casting soft light across rustic wooden walls. A large window beside the fireplace shows snow falling gently over a quiet pine forest under a deep navy night sky. A knitted blanket and a steaming mug of cocoa rest on a wooden table nearby. Warm amber firelight inside contrasts with cool indigo tones outside. Very slow, subtle camera movement, shallow depth of field. Preserve the same cabin layout, objects, and lighting throughout. No people, no text, no scene cuts. Audio: close, detailed stereo sound of a crackling fireplace with popping embers and shifting logs, soft muffled winter wind outside, an occasional faint creak of wood. No music, no voices.",
+    "beats": [
+      "Wide view of the fireplace and snowy window side by side.",
+      "Slow push-in toward the flames and glowing embers.",
+      "Gentle drift toward the window as snow falls over the dark pine forest."
+    ]
+  }
+}

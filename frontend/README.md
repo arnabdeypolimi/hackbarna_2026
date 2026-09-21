@@ -4,12 +4,85 @@ A 10-foot browse screen for Titan OS TVs: a "Recommended" poster row with detail
 
 ## Getting started
 
-Requires Node 20.19 or newer.
+Requires Node 20.19 or newer, and Git LFS for the sky loops in `public/sky/`: a clone made
+without it holds pointer files there instead of video, and the room simply stays still.
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173, use the arrow keys, Enter and Esc
 ```
+
+## The avatar panel
+
+The right-hand panel is a live conversational avatar, so the app needs the Python
+backend in this repository running alongside it:
+
+```bash
+# repository root, its own terminal
+uv run uvicorn tv_avatar.app:app --reload --port 8000
+
+# frontend/
+npm run dev
+```
+
+Vite proxies `/config` and `/sessions` (including the control WebSocket) to
+`localhost:8000`, which keeps the app same-origin — see `vite.config.ts`. Without
+the backend the panel reads "Backend not running" and the rest of the app browses
+normally. Without provider keys in the backend's `.env` it reads "Avatar
+unavailable" and names what is missing. Both are fixed outside the browser, so the
+panel's button re-checks rather than reloads: start the backend, press OK, and the
+panel catches up in place.
+
+Two things worth knowing:
+
+- **Picking a profile opens a paid session.** Every reload, including a hot reload, comes
+  back to "Who's watching?", and the first pick opens an Anam and Cartesia session. Stop the
+  dev server when you are not using it.
+- **On a real television it needs https.** `getUserMedia` is blocked on an insecure
+  origin, so a plain `http://` LAN address cannot reach the microphone at all.
+  Desktop development on `localhost` is exempt from that rule.
+
+The language chips pick the spoken language *and* the avatar who speaks it — one
+avatar per language, taken from the backend's `avatars.yaml`. Changing language
+opens a new session, because a session pins its voice and persona at creation. The
+choice is remembered in `localStorage` for the whole television, not per profile.
+
+### What the agent can do
+
+The agent drives the TV over the control socket. `App.tsx` supplies a `CommandHandler`
+(one method per verb) and `hooks/useTvControl.ts` dispatches into it, answering every
+command with an `ack` — `ok: false` carries a reason the agent can speak, such as
+"no trailer for Dune" — and `search_catalog` with a `result`.
+
+| Say | Verb | The TV |
+| --- | --- | --- |
+| "go right", "down twice" | `navigate` | moves focus like the remote |
+| "play the second one", "play Dune" | `play` | opens the trailer (the only footage there is) |
+| "pause", "resume", "skip ahead 30 seconds" | `pause`, `resume`, `seek` | drives the trailer player |
+| "show me Sicario", "the third one" | `focus`, `open_details` | focuses the tile; searches for it if it is on another rail |
+| "back", "close", "home" | `back`, `close`, `home` | as the remote, except "back" at home does not ask to exit |
+| "search for space movies" | `search_catalog` | filters the loaded CSV with the search bar's matcher and returns the hits |
+| "show me the products" | `show_products` | acked `ok: false`: not supported on this TV |
+| "what should I watch?" (after the agent picks) | `show_titles` | the picks replace the row under the agent's label, first one focused; Back or a tab dismisses it |
+| "show me a fireplace", "put the beach on" | `show_ambient`, `hide_ambient` | a relaxing scene fills the screen with its own sound at once — a starter clip shipped with the app — while fal Director makes the full minute behind it and keeps it for next time; Back or "close it" takes it down. See [src/ambient/README.md](src/ambient/README.md) |
+
+In return the app reports what is on screen (`screen_state`) whenever it changes —
+the rail, a window of tiles around the focus, and playback — so the agent can resolve
+"that one" and "the next one". Manual Watch and Save presses go up as `user_event`s.
+The viewer's profile id is the session's `user_id`, which is what the backend keys
+history and memory by; switching profile therefore starts a new session.
+
+`title_id` on the wire is the **bare TMDB id**: the app strips its `id:` prefix on the
+way out and accepts either form on the way in (`lib/tvBridge.ts`). Recommendations come
+from the backend's own catalogue, so the two sides must be loaded from the same TMDB
+dataset for a recommended title to be showable.
+
+Wire types come from `contracts/protocol.d.ts`, which is **generated** from
+`src/tv_avatar/agent/commands.py` — import them, never hand-write them. The HTTP types are the exception:
+`BackendConfig` and `SessionInfo` in `src/lib/avatarClient.ts` *are* hand-written,
+because `/config` and `POST /sessions` answer with ad-hoc dicts that the generator
+never sees — so a change to either endpoint in `app.py` has to be mirrored there by
+hand. The comment above `AvatarInfo` says the same thing at the point of use.
 
 ## Add the dataset
 
@@ -62,6 +135,76 @@ onto user ids the first time this build starts, list and history with them.
 
 Lists saved by a build that filed titles by name are refiled onto ids when a dataset loads. A name shared by a remake can't say which one was meant, so every title with that name takes the entry; unsave the wrong one and the two stay apart from then on.
 
+## Theme
+
+The room behind the glass is one of four skies, one for each season, and by default it follows
+the calendar:
+
+| Months | Sky |
+| --- | --- |
+| March – May | Blossom sky (spring) |
+| June – August | Blue sky (summer) |
+| September – November | Golden hour (autumn) |
+| December – February | Ink sky (winter) |
+
+The **green** key (G on a desktop keyboard) opens the picker. Choosing a sky pins it; **Follow the
+season** hands the room back to the calendar. The choice is saved under `theme` and is shared by
+every profile, like a picture setting on the set. The seasons are whole months in the northern
+hemisphere rather than the equinoxes of wherever the set stands, because a television has no
+location to give; a viewer south of the equator pins the sky they want.
+
+The tab bar carries the same picker behind a small disc of the current sky, next to the profile
+avatar, for a mouse, a keyboard or a remote without colour keys. Under the four skies the picker
+adjusts the one on screen: **Room** (lighter, graded, darker) steps the scrim over the room,
+**Glass** (clearer, standard, smokier) steps the panels, and **Sky** (moving, still) turns the loop
+off. Adjustments are kept per sky and per device under `themeTune`. A notch below graded takes the
+sky under the contrast it was measured for, and the picker says so rather than refusing.
+Back closes the picker, as do its Done button and a click on the room outside the panel.
+
+Each sky sets the whole palette, not just the room. The glass stays translucent and dark enough
+for white ink, but it is smoked with the sky's own deepest stop rather than a neutral black, and so
+are the scrim over the room, the dialogs, the toasts and the placeholder cards behind posters
+(`tokensOf` in `src/lib/theme.ts`): spring's panels are a deep violet glass, autumn's a burnt
+umber, winter's ink. The scrim is graded per sky against the lightest patch its loop ever shows,
+so the focus ring keeps 3:1 on the room and secondary ink on the glass at least what the original
+grey room measured. A little grain is dithered over the sky so it does not
+band on an 8-bit panel; it is drawn once with a canvas at startup rather than shipped as an image.
+
+### The sky moves
+
+Each sky is also a short video loop in `public/sky/` that plays muted under the room's lights
+and fades in once it is running. It is the one thing in the app that does work on every frame,
+and it is allowed because that work happens in the set's hardware decoder, not on the CPU and
+not in a filter. Three rules keep it honest: it pauses while a trailer plays, since a set usually
+has one decoder; it is never mounted under `prefers-reduced-motion`; and if it fails to load or
+to play, the still sky is simply what stays. Only the current sky's loop is ever requested, and
+not before the titles have loaded, so its megabytes never come ahead of the data; a loop held
+still in the picker is not fetched at all. The loops are Git LFS objects, which keeps 45 MB of
+video out of the repository's history.
+
+`npm run sky` builds the loops, and the choices behind the shipped set (which band of each clip)
+are the flags on that script in `package.json`. A sky whose footage sits in `src/videos/`, named after the sky
+(`Golden hour.mp4`) or its id (`golden.mp4`), is cut from it: at 3840×2160, and its last
+second cross-faded into its first, so the clip loops without a cut. The 4K cut is a choice for
+sharpness on large screens; a 16:9 band of a 4K clip holds about 1600×900 real pixels, so it is
+an upscale at four times the bytes of 1080p, and a set has to decode 4K behind the interface.
+`--footage-size 1920x1080` is the stage's own size and the cheaper cut if a set struggles. `--frame x,y,w,h` uses only
+that part of each clip, for footage with a caption in it (`--frame golden=...` for one sky), and `--use ink="Snowfall.mp4"` gives
+a sky a clip whatever it is called. A sky with no footage is synthesised from its own four stops
+at 960×540: slow drifting bands, periodic in time so they loop the same way. The raw footage is
+4K at 20 to 35 MB a clip and stays out of git like the TMDB export does; `public/sky/` is what
+ships, at a few hundred kilobytes synthesised and some ten megabytes per loop cut from footage.
+
+Either way the script solves each sky's `shade` twice, against the still gradient's first stop
+and against the loop's lightest patch, and prints the value to set in `src/lib/theme.ts` when the
+sky has less than the lighter of the two needs. The still is what shows until the loop plays,
+under Sky: Still and under reduced motion, so it has to hold on its own. The script needs numpy
+and an ffmpeg built with libx264, or `pip install imageio-ffmpeg`.
+
+The room fills the browser window rather than the 16:9 stage, so a desktop window of any shape
+shows sky edge to edge with the panels scaled and centred inside it. A television's window is the
+stage, so it sees no difference.
+
 ## Build for the TV
 
 ```bash
@@ -78,6 +221,7 @@ The build targets Chrome 84 (Titan OS TVs from 2020–2022) and uses relative pa
 | OK / Enter | Activate. On a poster, jumps to Watch. |
 | Back (8 on Philips and Sharp, 461 on JVC; Esc on desktop) | Clears search, returns to Popular, then asks "Do you want to exit?" |
 | Red | Save or remove the selected title from My List |
+| Green (G on desktop) | Open the theme picker |
 | Yellow | Import a CSV |
 | Play / Play-Pause | Watch the selected title |
 
@@ -87,7 +231,9 @@ When the TV's text-to-speech setting is on, every focused control is read aloud 
 
 ```
 public/data/          dataset slot (titles.csv goes here)
+public/sky/           the four sky loops the room plays
 scripts/trim_tmdb.py  trims the TMDB export
+scripts/render_sky.py renders public/sky/<id>.mp4 for every sky in theme.ts
 src/config.ts         data URL, image sizes, row and file limits
 src/App.tsx           state, data loading, remote-control handling
 src/lib/csv.ts        CSV parser and column mapping
@@ -95,8 +241,9 @@ src/lib/rows.ts       what each tab shows; which title to resume
 src/lib/maturity.ts   what a kids profile is allowed to see
 src/lib/profiles.ts   profiles, user ids and their saved keys
 src/lib/spatialNav.ts picks the next focus target for each arrow key
+src/lib/theme.ts      the four skies, which season each belongs to, and the room's paint
 src/lib/titan.ts      keycodes, text-to-speech, exit
-src/components/       Stage, PosterRow, Detail, ResumePanel, TabBar, SearchBar, Profiles, ExitDialog, Toast, Art
+src/components/       Stage, PosterRow, Detail, ResumePanel, TabBar, SearchBar, Profiles, ThemePicker, SkyVideo, ExitDialog, Toast, Art
 src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 ```
 
@@ -106,5 +253,5 @@ src/types/            Titan SDK types (sdk.d.ts from Titan's CDN) and app types
 - **The glass look avoids `backdrop-filter`.** Panels are semi-transparent over a pre-blurred background, which is much cheaper on 1–1.5 GB boards.
 - **Images** come from TMDB's image CDN. When one fails to load, a generated title card is shown instead.
 - **TMDB credit** is shown at the bottom of the screen. Turn it off with `SHOW_TMDB_CREDIT` in `src/config.ts` if you use other data.
-- **Fonts** load Sora from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
+- **Fonts** load Schibsted Grotesk from Google Fonts with system fallbacks. For offline or faster startup, self-host the font files.
 - `src/types/sdk.d.ts` is Titan's published type file. Refresh it from https://sdk.titanos.tv/sdk/sdk.d.ts when the SDK changes.

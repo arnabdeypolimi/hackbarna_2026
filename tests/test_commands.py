@@ -46,6 +46,15 @@ def test_seek_requires_exactly_one_of_to_or_delta():
         parse_command("seek", {"to_seconds": 30.0, "delta_seconds": -10.0})
 
 
+def test_show_titles_needs_at_least_one_id_and_caps_the_rail():
+    cmd = parse_command("show_titles", {"title_ids": ["1", "2"]})
+    assert cmd.label == "For you"
+    with pytest.raises(ValueError):
+        parse_command("show_titles", {"title_ids": []})
+    with pytest.raises(ValueError):
+        parse_command("show_titles", {"title_ids": [str(i) for i in range(21)]})
+
+
 def test_every_verb_has_a_model():
     assert set(COMMAND_MODELS) == set(Verb)
 

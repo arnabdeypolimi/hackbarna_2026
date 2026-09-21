@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Title } from '../types/title';
-import { artBackground, posterFontSize } from '../lib/art';
+import { artStyle, posterFontSize } from '../lib/art';
 
 type Load = 'loading' | 'ok' | 'failed';
 
@@ -11,7 +11,7 @@ export function Art({ item, wide = false }: { item: Title; wide?: boolean }) {
   useEffect(() => setLoad(src ? 'loading' : 'failed'), [src]);
 
   return (
-    <div className={`art${load === 'ok' ? ' has-img' : ''}`} style={{ background: artBackground(item.title) }}>
+    <div className={`art${load === 'ok' ? ' has-img' : ''}`} style={artStyle(item.title)}>
       {!wide && <span className="t" style={{ fontSize: posterFontSize(item.title) }}>{item.title}</span>}
       {src && load !== 'failed' && (
         <img src={src} alt="" loading="lazy" onLoad={() => setLoad('ok')} onError={() => setLoad('failed')} />

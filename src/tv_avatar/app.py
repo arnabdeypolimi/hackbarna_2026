@@ -14,7 +14,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from tv_avatar.catalog import LanguageCode, get_catalog
 from tv_avatar.config import Settings, get_settings
@@ -26,6 +26,8 @@ from tv_avatar.pipeline.transport import build_transport
 from tv_avatar.runtime import Runtime, build_runtime
 from tv_avatar.session.manager import SessionManager
 from tv_avatar.session.state import SessionState, SessionStore
+from tv_avatar.shop import get_shop
+from tv_avatar.tracing import setup_tracing, shutdown_tracing
 
 #: How often expired sessions (and their command buses) are reaped.
 SWEEP_INTERVAL_S = 60.0
@@ -35,9 +37,18 @@ _TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
 class CreateSessionRequest(BaseModel):
     """All optional: an empty body yields the catalog defaults and an anonymous viewer."""
-    user_id: str | None = None
+    # The id becomes a directory name under memory_root and a history key, and the TV
+    # app sends whatever its profile store holds — so its shape is the traversal guard.
+    user_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     avatar: str | None = None
     language: LanguageCode | None = None
+
+
+class InjectTextRequest(BaseModel):
+    """What the viewer said, when it did not arrive as speech."""
+    # A cap, not a guess: this text reaches the LLM prompt, and an utterance no
+    # one could say in one breath is a client bug or an injection attempt.
+    text: str = Field(min_length=1, max_length=500)
 
 
 def create_app(
@@ -51,7 +62,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         settings = None if _missing_settings() else get_settings()
-        setup_logging(settings.log_level if settings else "INFO")
+        setup_logging(settings.log_level if settings else "INFO", settings=settings)
+        owns_tracing = settings is not None and setup_tracing(settings)
         if app.state.runtime is None and settings is not None:
             app.state.runtime = build_runtime(settings)
         if app.state.runtime is not None and settings is not None and settings.agent_impl == "sgr":
@@ -67,6 +79,10 @@ def create_app(
             await webrtc.close()
             if app.state.runtime is not None:
                 await app.state.runtime.close()
+            # Flushes the last batch; without it the final turn's spans are lost
+            # on every Ctrl-C / reload.
+            if owns_tracing:
+                shutdown_tracing()
 
     app = FastAPI(title="tv-avatar", lifespan=lifespan)
     app.state.store = store or SessionStore()
@@ -75,6 +91,7 @@ def create_app(
     # Fail at boot on a broken avatars.yaml, as Settings does on a bad .env,
     # rather than turning every /config and POST /sessions into a 500.
     get_catalog()
+    get_shop()
 
     def sweep(now: float | None = None) -> list[str]:
         """Reap expired sessions together with their buses. Returns the ids."""
@@ -107,6 +124,7 @@ def create_app(
             "agent_impl": s.agent_impl,
             "llm_model": s.llm_model,
             "stt_model": s.slng_stt_model,
+            "echo_filter": s.echo_filter,
             "tts_model": s.slng_tts_model,
             "tts_sample_rate": s.slng_tts_sample_rate,
             "catalog_titles": len(rt.catalog) if rt is not None and rt.catalog is not None else 0,
@@ -162,7 +180,9 @@ def create_app(
             app.state.manager.start_pipeline(
                 session_id,
                 run_session(session, bus, transport, with_avatar=avatar,
-                            half_duplex=halfduplex, runtime=app.state.runtime),
+                            half_duplex=halfduplex, runtime=app.state.runtime,
+                            settings=settings,
+                            on_injector=app.state.manager.injector_slot(session_id)),
             )
 
         answer = await webrtc.handle_web_request(request, on_connection)
@@ -178,6 +198,30 @@ def create_app(
     ) -> dict:
         _authenticated(session_id, token)
         await webrtc.handle_patch_request(request)
+        return {"status": "ok"}
+
+    @app.post("/sessions/{session_id}/text")
+    async def say(
+        session_id: str,
+        req: InjectTextRequest,
+        token: str = Header(default="", alias="X-Control-Token"),
+    ) -> dict:
+        """Take a turn from typed words instead of speech.
+
+        Titan OS exposes no microphone API (the whole SDK was checked), so on
+        shipping hardware the remote's keyboard is the fallback input — and it is
+        how the browser tests drive a turn without synthesising audio. The words
+        enter the pipeline where STT would have put them, so turn-taking,
+        barge-in, memory and the agent all run unchanged. Authenticated exactly
+        like the control socket: the token, never the session id.
+        """
+        _authenticated(session_id, token)
+        inject = app.state.manager.injector_for(session_id)
+        # The pipeline starts on the first WebRTC offer, so a session that has one
+        # but no media yet has nothing to say the words to.
+        if inject is None:
+            raise HTTPException(409, "no pipeline is running for this session")
+        await inject(req.text)
         return {"status": "ok"}
 
     @app.delete("/sessions/{session_id}", status_code=204)
@@ -212,7 +256,8 @@ def create_app(
         # The bus deliberately survives this call returning: a dropped control
         # socket is the Degraded state (spec §6) — commands queue until the TV
         # app reconnects with the same session id. Expiry or DELETE reaps it.
-        await ControlChannel(websocket, session, bus, recorder=recorder).run()
+        await ControlChannel(websocket, session, bus, recorder=recorder,
+                             settings=get_settings() if _settings_available() else None).run()
 
     @app.get("/catalog/sample")
     async def catalog_sample(limit: int = Query(default=8, ge=1, le=50)) -> dict:
@@ -224,6 +269,19 @@ def create_app(
              "poster_path": i.poster_path}
             for i in rt.catalog.sample(limit)
         ]}
+
+    @app.get("/shop")
+    async def shop() -> dict:
+        """The whole shop catalogue, for the TV to hold in memory: `show_products` must
+        open the shelf on the ack, not after a round trip."""
+        return get_shop().public()
+
+    @app.get("/shop/{title_id}")
+    async def shop_for_title(title_id: str) -> dict:
+        products = get_shop().products_for(title_id)
+        if not products:
+            raise HTTPException(404, f"nothing to shop for title {title_id}")
+        return {"title_id": title_id, "products": [p.model_dump() for p in products]}
 
     for mount, directory in (("/mock", _TOOLS / "mock_tv_client"), ("/demo", _TOOLS / "demo")):
         if directory.is_dir():

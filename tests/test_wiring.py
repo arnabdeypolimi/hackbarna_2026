@@ -26,6 +26,13 @@ def test_session_round_trips_user_id_and_defaults_to_anon():
         assert anon["user_id"].startswith("anon_sess_")
 
 
+def test_session_rejects_a_user_id_that_could_walk_the_memory_root():
+    with TestClient(create_app()) as c:
+        assert c.post("/sessions", json={"user_id": "../../etc"}).status_code == 422
+        assert c.post("/sessions", json={"user_id": "a" * 65}).status_code == 422
+        assert c.post("/sessions", json={"user_id": "usr_mfdzvhxjxrg6"}).status_code == 200
+
+
 def test_catalog_sample_is_empty_without_a_built_catalog():
     with TestClient(create_app()) as c:
         assert c.get("/catalog/sample").json() == {"titles": []}
@@ -84,9 +91,17 @@ def test_offer_rejects_bad_token():
         assert r.status_code == 401
 
 
-def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
-    """AGENT_IMPL=stub still runs through taps/injector/observers (no keys needed)."""
+def _build_task(settings):
+    from pipecat.processors.frame_processor import FrameProcessor
+
+    from tv_avatar.control.bus import CommandBus
     from tv_avatar.pipeline.builder import build_pipeline
+    from tv_avatar.session.state import SessionState
+
+    class _Passthrough(FrameProcessor):
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
 
     class T:
         def input(self): return _Passthrough()
@@ -94,19 +109,14 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
         def event_handler(self, _name):
             return lambda fn: fn
 
-    from pipecat.processors.frame_processor import FrameProcessor
-
-    class _Passthrough(FrameProcessor):
-        async def process_frame(self, frame, direction):
-            await super().process_frame(frame, direction)
-            await self.push_frame(frame, direction)
-
-    from tv_avatar.control.bus import CommandBus
-    from tv_avatar.session.state import SessionState
-    settings = _settings(tmp_path)
     runtime = build_runtime(settings)
-    task = build_pipeline(T(), SessionState("s", "t", 0, user_id="u1"), CommandBus(),
+    return build_pipeline(T(), SessionState("s", "t", 0, user_id="u1"), CommandBus(),
                           with_avatar=False, runtime=runtime, settings=settings)
+
+
+def _processor_names(settings) -> list[str]:
+    task = _build_task(settings)
+
     def flatten(pipeline):
         for p in pipeline.processors:
             if isinstance(p, Pipeline):
@@ -114,10 +124,55 @@ def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
             else:
                 yield p
 
-    names = [type(p).__name__ for p in flatten(task.pipeline)]
+    return [type(p).__name__ for p in flatten(task.pipeline)]
+
+
+def test_stub_pipeline_builds_with_phase2_processors(tmp_path):
+    """AGENT_IMPL=stub still runs through taps/injector/observers (no keys needed)."""
+    names = _processor_names(_settings(tmp_path))
     for expected in ("MemoryPrefetchTap", "ScreenContextInjector", "StubLLMService", "MemoryIngestTap"):
         assert expected in names, names
     assert EventKind.PLAY_STARTED  # module import sanity for the recorder wiring
+
+
+def test_sgr_pipeline_has_no_injector(tmp_path):
+    """The SGR agent writes its own system prompt; a second writer upstream
+    would stamp Recent activity twice (as it did) and fetch history twice."""
+    names = _processor_names(_settings(tmp_path).model_copy(update={"agent_impl": "sgr"}))
+    assert "SGRAgentService" in names and "ScreenContextInjector" not in names, names
+    assert "MemoryIngestTap" not in names  # the agent ingests at turn end itself
+
+
+def test_echo_guard_is_off_by_default(tmp_path):
+    """It dropped "no die hard" as echo of "No Hard Feelings" (2026-09-20); the
+    whole guard — filter and the observer that feeds it — is now opt-in."""
+    from tv_avatar.pipeline.echo import BotSpeechObserver
+
+    task = _build_task(_settings(tmp_path))
+    assert "EchoTranscriptFilter" not in _processor_names(_settings(tmp_path))
+    assert not any(isinstance(o, BotSpeechObserver) for o in task._observer._observers)
+
+
+def test_echo_guard_is_wired_when_enabled(tmp_path):
+    from tv_avatar.pipeline.echo import BotSpeechObserver
+
+    on = _settings(tmp_path).model_copy(update={"echo_filter": True})
+    names = _processor_names(on)
+    assert names.index("EchoTranscriptFilter") < names.index("MemoryPrefetchTap"), names
+    assert any(isinstance(o, BotSpeechObserver) for o in _build_task(on)._observer._observers)
+
+
+def test_task_carries_tracing_flags_from_settings(tmp_path):
+    """Pipecat's own tracing is switched per task (D14/D17); the private names
+    are the PipelineTask attributes on 1.11.0 — a rename is the signal we want."""
+    on = _settings(tmp_path).model_copy(update={
+        "tracing_enabled": True, "langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
+    task = _build_task(on)
+    assert task._enable_tracing is True
+    assert task._conversation_id == "s"
+    assert task._additional_span_attributes["langfuse.session.id"] == "s"
+    assert task._additional_span_attributes["langfuse.user.id"] == "u1"
+    assert _build_task(_settings(tmp_path))._enable_tracing is False
 
 
 def test_new_offer_for_same_user_stops_that_users_other_pipelines(tmp_path, monkeypatch):

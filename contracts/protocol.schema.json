@@ -115,6 +115,18 @@
       },
       "ScreenState": {
         "properties": {
+          "ambient": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ambient"
+          },
           "focus_index": {
             "anyOf": [
               {
@@ -202,6 +214,11 @@
             "minimum": 0,
             "title": "Position",
             "type": "integer"
+          },
+          "shoppable": {
+            "default": false,
+            "title": "Shoppable",
+            "type": "boolean"
           },
           "title_id": {
             "title": "Title Id",
@@ -313,6 +330,18 @@
         "title_id"
       ],
       "title": "Focus",
+      "type": "object"
+    },
+    "hide_ambient": {
+      "properties": {
+        "verb": {
+          "const": "hide_ambient",
+          "default": "hide_ambient",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "title": "HideAmbient",
       "type": "object"
     },
     "home": {
@@ -474,6 +503,7 @@
             }
           ],
           "default": null,
+          "description": "Relative jump from where playback is: 'skip ahead thirty seconds' is 30, 'go back ten' is -10.",
           "title": "Delta Seconds"
         },
         "to_seconds": {
@@ -487,6 +517,7 @@
             }
           ],
           "default": null,
+          "description": "Absolute position: 'go to the two-minute mark', 'start over' (0).",
           "title": "To Seconds"
         },
         "verb": {
@@ -497,6 +528,31 @@
         }
       },
       "title": "Seek",
+      "type": "object"
+    },
+    "show_ambient": {
+      "description": "Put a relaxing scene on full screen, looping, with its own sound. The TV\nopens with a starter clip it ships with, makes the full video behind it\n(frontend/src/ambient) and keeps that for the next request, so nothing waits\non a session and a scene asked for again costs nothing.",
+      "properties": {
+        "scene": {
+          "enum": [
+            "garden",
+            "beach",
+            "fireplace"
+          ],
+          "title": "Scene",
+          "type": "string"
+        },
+        "verb": {
+          "const": "show_ambient",
+          "default": "show_ambient",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scene"
+      ],
+      "title": "ShowAmbient",
       "type": "object"
     },
     "show_products": {
@@ -529,6 +585,38 @@
         "title_id"
       ],
       "title": "ShowProducts",
+      "type": "object"
+    },
+    "show_titles": {
+      "description": "Put a rail of the agent's picks on screen. `focus` can only highlight a\ntitle already showing; recommendations usually are not, so without this the\nagent could only describe them.",
+      "properties": {
+        "label": {
+          "default": "For you",
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "title_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Title Ids",
+          "type": "array"
+        },
+        "verb": {
+          "const": "show_titles",
+          "default": "show_titles",
+          "title": "Verb",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title_ids"
+      ],
+      "title": "ShowTitles",
       "type": "object"
     }
   },

@@ -3,7 +3,7 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Verb = "back" | "close" | "focus" | "home" | "navigate" | "open_details" | "pause" | "play" | "resume" | "search_catalog" | "seek" | "show_products";
+export type Verb = "back" | "close" | "focus" | "hide_ambient" | "home" | "navigate" | "open_details" | "pause" | "play" | "resume" | "search_catalog" | "seek" | "show_ambient" | "show_products" | "show_titles";
 
 /** Verbs whose handler awaits a `result` message from the TV app. */
 export type AwaitsResult = "search_catalog";
@@ -16,6 +16,8 @@ export interface CloseArgs {}
 export interface FocusArgs {
   title_id: string;
 }
+
+export interface HideAmbientArgs {}
 
 export interface HomeArgs {}
 
@@ -47,15 +49,25 @@ export interface SeekArgs {
   delta_seconds?: number | null;
 }
 
+export interface ShowAmbientArgs {
+  scene: "garden" | "beach" | "fireplace";
+}
+
 export interface ShowProductsArgs {
   title_id: string;
   scene_at?: number | null;
+}
+
+export interface ShowTitlesArgs {
+  title_ids: Array<string>;
+  label?: string;
 }
 
 export interface CommandArgsByVerb {
   "back": BackArgs;
   "close": CloseArgs;
   "focus": FocusArgs;
+  "hide_ambient": HideAmbientArgs;
   "home": HomeArgs;
   "navigate": NavigateArgs;
   "open_details": OpenDetailsArgs;
@@ -64,7 +76,9 @@ export interface CommandArgsByVerb {
   "resume": ResumeArgs;
   "search_catalog": SearchCatalogArgs;
   "seek": SeekArgs;
+  "show_ambient": ShowAmbientArgs;
   "show_products": ShowProductsArgs;
+  "show_titles": ShowTitlesArgs;
 }
 
 // ---- client -> server ----
@@ -95,6 +109,7 @@ export interface ScreenState {
   focus_index?: number | null;
   tiles?: Array<Tile>;
   playback: Playback;
+  ambient?: string | null;
 }
 
 export interface ScreenStateMsg {
@@ -107,6 +122,7 @@ export interface Tile {
   title_id: string;
   name: string;
   position: number;
+  shoppable?: boolean;
 }
 
 export interface UserEventMsg {

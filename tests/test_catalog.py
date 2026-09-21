@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 from qdrant_client import QdrantClient
 
-from tv_avatar.recs.catalog import CatalogFilter, CatalogStore, build_catalog
+from tv_avatar.recs.catalog import (
+    CatalogFilter,
+    CatalogStore,
+    build_catalog,
+    read_title_ids,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "catalog_sample.csv"
 DIMS = 8
@@ -86,6 +91,24 @@ def test_build_is_resumable(tmp_path):
     second = build_catalog(FIXTURE, parquet, client=client, limit=20, embed_fn=counting)
     assert first.embedded == 20 and second.embedded == 0
     assert sum(calls) == 20
+
+
+def test_build_restricted_to_tv_title_ids(tmp_path):
+    """The recommender must never surface a title the TV app cannot show, so an
+    id list from the TV's titles.csv limits the catalog to exactly those titles."""
+    tv_csv = tmp_path / "titles.csv"
+    tv_csv.write_text("id,title\n27205,Inception\n999999999,Not In Source\n")
+    ids = read_title_ids(tv_csv)
+    assert ids == {"27205", "999999999"}
+
+    client = QdrantClient(":memory:")
+    parquet = tmp_path / "c.parquet"
+    report = build_catalog(FIXTURE, parquet, client=client, embed_fn=fake_embed, ids=ids)
+    store = CatalogStore(parquet, client=client)
+    assert report.rows == 1 and len(store) == 1
+    assert store.lookup("27205") is not None
+    hits = store.search([0.1] * DIMS, limit=10)
+    assert hits and all(i.title_id == "27205" for i, _ in hits)
 
 
 def test_index_built_with_another_width_is_rebuilt_not_resumed(tmp_path):

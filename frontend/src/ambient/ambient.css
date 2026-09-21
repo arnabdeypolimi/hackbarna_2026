@@ -1,0 +1,41 @@
+/* Ambient scenes (src/ambient). Everything here is scoped to the plug-in's own classes, or to
+   the room while a scene is up; nothing in styles.css is overridden.
+
+   The scene is appended to the stage by portal, so it paints after everything the app laid out
+   there; the z-index is only insurance against a later sibling mounting over it. */
+.am-scene { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 20; background: #000; overflow: hidden; }
+.am-video {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+  opacity: 0; transition: opacity 1.2s ease;
+}
+.am-video.on { opacity: 1; }
+
+/* The chrome sits where the full-screen player's does, inside the same overscan-safe margins,
+   over a gradient that keeps the title readable on a bright beach. Both fade once the scene
+   simply plays; OK brings them back. */
+.am-veil {
+  position: absolute; left: 0; right: 0; top: 0; height: 300px; pointer-events: none;
+  background: linear-gradient(rgba(0, 0, 0, 0.62), transparent); transition: opacity 0.6s ease;
+}
+.am-chrome {
+  position: absolute; left: 96px; top: 76px; right: 96px; pointer-events: none;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55); transition: opacity 0.6s ease;
+}
+.am-chrome h4 { margin: 0; font-size: 46px; font-weight: 600; letter-spacing: -0.01em; }
+.am-chrome p { margin: 12px 0 0; font-size: 24px; line-height: 1.4; color: var(--ink-2); max-width: 1100px; }
+.am-veil.away, .am-chrome.away, .am-shut.away { opacity: 0; }
+
+/* The close button, for a pointer and for the label read aloud when it takes focus; the remote's
+   Back does the same. Larger than the player's, being alone on the screen. */
+.am-shut {
+  position: absolute; right: 88px; bottom: 72px; width: 72px; height: 72px;
+  background: rgba(255, 255, 255, 0.18); transition: opacity 0.6s ease;
+}
+.am-shut svg { width: 26px; height: 26px; }
+
+/* While the scene is up the room's loops are out: they would only be decoding behind it. */
+html.am-live .room video { visibility: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .am-video, .am-veil, .am-chrome, .am-shut { transition: none; }
+}

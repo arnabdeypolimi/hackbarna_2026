@@ -12,7 +12,6 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 class ThesisStructureMapper:
@@ -66,7 +65,7 @@ class ThesisStructureMapper:
         self.root_dir = self.main_file.parent
         self.visited: set[Path] = set()
         self.structure: list[dict] = []
-        self.template: Optional[str] = None
+        self.template: str | None = None
 
     def map(self) -> list[dict]:
         """Map the thesis structure starting from main file."""
@@ -155,14 +154,14 @@ class ThesisStructureMapper:
 
         return "other"
 
-    def _detect_template(self, content: str) -> Optional[str]:
+    def _detect_template(self, content: str) -> str | None:
         """Detect university template from document class."""
         for template_id, info in self.TEMPLATES.items():
             if re.search(info["pattern"], content):
                 return template_id
         return None
 
-    def get_template_info(self) -> Optional[dict]:
+    def get_template_info(self) -> dict | None:
         """Get information about detected template."""
         if self.template and self.template in self.TEMPLATES:
             return self.TEMPLATES[self.template]

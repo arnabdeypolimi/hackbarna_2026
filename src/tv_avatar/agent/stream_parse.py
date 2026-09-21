@@ -3,9 +3,10 @@
 Feeds raw JSON text a chunk at a time — chunk boundaries are arbitrary — and
 emits `SayDelta` for characters inside the top-level `"say"` string as they
 arrive, `SayDone` when that string closes, `ActionReady` for each completed
-element of `"actions"`, `IntentReady` once the intent string closes, and
-`Done` when the top-level object closes. Handles any key order. Never raises:
-malformed input yields nothing more.
+element of `"actions"`, `IntentReady` once the intent string closes,
+`RequestReady` once the top-level `"request"` object closes, and `Done` when
+the top-level object closes. Handles any key order. Never raises: malformed
+input yields nothing more.
 """
 import json
 from dataclasses import dataclass
@@ -34,11 +35,21 @@ class IntentReady:
 
 
 @dataclass(frozen=True)
+class RequestReady:
+    """The decoded `request` object; arrives before any action in schema order."""
+    request: dict
+
+
+@dataclass(frozen=True)
 class Done:
     pass
 
 
-Event = SayDelta | SayDone | ActionReady | IntentReady | Done
+Event = SayDelta | SayDone | ActionReady | IntentReady | RequestReady | Done
+
+#: Objects captured whole and re-parsed on close: (top-level key, depth of the
+#: object) → the event it becomes.
+_CAPTURED = {("actions", 3): ActionReady, ("request", 2): RequestReady}
 
 
 class EnvelopeStreamer:
@@ -54,7 +65,9 @@ class EnvelopeStreamer:
         self._cur_key = ""
         self._top_key: str | None = None
         self._say_mode = False
-        self._action_buf: list[str] | None = None
+        self._obj_buf: list[str] | None = None
+        self._obj_event: type | None = None
+        self._obj_depth = 0
         self._done = False
         self._dead = False
 
@@ -87,8 +100,8 @@ class EnvelopeStreamer:
         return len(events)
 
     def _collect(self, ch: str) -> None:
-        if self._action_buf is not None:
-            self._action_buf.append(ch)
+        if self._obj_buf is not None:
+            self._obj_buf.append(ch)
 
     def _emit_char(self, ch: str, say: list[str]) -> None:
         self._str_buf.append(ch)
@@ -133,14 +146,15 @@ class EnvelopeStreamer:
             self._depth += 1
             self._stack.append("obj")
             self._expect_key = True
-            if self._depth == 3 and self._top_key == "actions" and self._action_buf is None:
-                self._action_buf = ["{"]
+            captured = _CAPTURED.get((self._top_key or "", self._depth))
+            if captured is not None and self._obj_buf is None:
+                self._obj_buf, self._obj_event, self._obj_depth = ["{"], captured, self._depth
             else:
                 self._collect(ch)
         elif ch == "}":
             self._collect(ch)
-            if self._action_buf is not None and self._depth == 3:
-                self._flush_action(events)
+            if self._obj_buf is not None and self._depth == self._obj_depth:
+                self._flush_object(events)
             self._depth -= 1
             if self._stack:
                 self._stack.pop()
@@ -183,12 +197,12 @@ class EnvelopeStreamer:
                 events.append(IntentReady(text))
             self._top_key = None
 
-    def _flush_action(self, events: list[Event]) -> None:
-        raw = "".join(self._action_buf or [])
-        self._action_buf = None
+    def _flush_object(self, events: list[Event]) -> None:
+        raw, event = "".join(self._obj_buf or []), self._obj_event
+        self._obj_buf = self._obj_event = None
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             return
-        if isinstance(parsed, dict):
-            events.append(ActionReady(parsed))
+        if isinstance(parsed, dict) and event is not None:
+            events.append(event(parsed))
