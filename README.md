@@ -1,369 +1,119 @@
-# tv-avatar
+<div align="center">
 
-A conversational avatar for a television. It sits on a transparent overlay above a live
-TV UI, listens through the microphone, answers in a synthesised voice with a talking-head
-video, and drives the UI — moving the grid, opening details, starting playback — while it
-talks. It is interruptible mid-sentence.
+<img src="docs/screenshots/mira-logo.png" alt="Mira" width="340">
 
-This repository holds the **backend** (`src/tv_avatar/`) and the **TV frontend**
-(`frontend/`). They are separate applications that meet only at the wire protocol in
-`src/tv_avatar/control/protocol.py` and the generated artifacts in `contracts/` — the
-frontend does not import the backend, and the backend serves none of its assets.
+<br>
+
+**A TV that you talk to.**
+
+<br>
+
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![uv](https://img.shields.io/badge/deps-uv-DE5FE9?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
+[![React 18](https://img.shields.io/badge/react-18-149ECA?logo=react&logoColor=white)](frontend/)
+[![Vite](https://img.shields.io/badge/vite-646CFF?logo=vite&logoColor=white)](frontend/)
+[![Pipecat](https://img.shields.io/badge/media-Pipecat-F0834A)](https://github.com/pipecat-ai/pipecat)
+[![Languages](https://img.shields.io/badge/speaks-EN%20%C2%B7%20ES%20%C2%B7%20FR%20%C2%B7%20CA-2A2140)](avatars.yaml)
+[![HackBarna 2026](https://img.shields.io/badge/HackBarna-2026-FF4785)](https://github.com/arnabdeypolimi/hackbarna_2026)
+
+<br>
+
+Mira is a conversational avatar that lives on top of a streaming UI. Say what you're in the
+mood for, and she finds it, talks it through with you, and drives the screen while she
+speaks — moving the rail, opening details, pressing play. Interrupt her mid-sentence; she
+stops and listens.
+
+<br>
+
+<img src="docs/screenshots/mira-home.png" alt="Mira on the home screen: a Recommended rail with Blue Beetle selected, the avatar panel on the right" width="900">
+
+</div>
 
 ---
 
-## Architecture
+## What she does
 
-Two planes, deliberately independent. They meet only at the session store and the command bus.
+- **Voice in, face out.** WebRTC microphone audio → speech-to-text → LLM → text-to-speech →
+  a lip-synced talking head, streamed back as video. End to end, on a real TV.
+- **Drives the UI while talking.** Every turn produces speech *and* a stream of typed
+  commands (`focus`, `open_details`, `play`, `show_titles`, …) that the TV executes as the
+  words land. No "let me do that for you" pause.
+- **Knows the catalogue.** A vector index over TMDB titles and a viewer's own taste profile
+  power recommendations; "something lighter" or "the second one" resolve against what is
+  actually on screen.
+- **Remembers you.** Per-viewer history and a one-paragraph memory rewritten at the end of
+  each session, so the next visit starts where the last one left off.
+- **Speaks four languages.** English, Spanish, French and Catalan, pinned per session.
+- **Kids-safe.** Profiles are adult or kids; a kids profile never sees the adult shelf.
 
-```
-  TV app / browser                     Backend                          External
-  ────────────────                     ───────                          ────────
-  microphone  ──── WebRTC audio ──▶  transport.input
-                                          │
-                                     SlngSTTService  ◀────── wss ─────▶  SLNG (Deepgram Nova 3 STT)
-                                          │
-                                     user aggregator  (VAD + silence timer)
-                                          │
-                                     LLM service      ◀────── https ───▶  Nebius Token Factory
-                                          │
-                                     SlngTTSService   ◀────── wss ─────▶  SLNG (Cartesia Sonic 3)
-                                          │
-                                     AnamVideoService ◀────── SDK ─────▶  Anam Cloud
-                                          │
-  avatar video ◀─── WebRTC A/V ───  transport.output
+<div align="center">
+<table>
+<tr>
+<td><img src="docs/screenshots/mira-kids.png" alt="Kids profile with an animated-film rail"></td>
+<td><img src="docs/screenshots/mira-dark.png" alt="Dark theme: Mira narrowing to 'Lighter picks' from a spoken request"></td>
+</tr>
+<tr>
+<td align="center"><sub>Kids profile — same sofa, different shelf</sub></td>
+<td align="center"><sub>"Something lighter" → a live re-ranked rail, dark theme</sub></td>
+</tr>
+</table>
+</div>
 
-  TV UI       ◀─── WebSocket ────▶  ControlChannel ──▶ CommandBus
-                (control plane)          │
-                                    SessionState (latest screen snapshot)
-```
+---
 
-- **Media plane** — one Pipecat pipeline per session over `SmallWebRTCTransport`.
-- **Control plane** — a separate authenticated WebSocket. Commands go down, screen state
-  comes up. A dropped control socket does not drop the call; commands queue until the TV
-  app reconnects with the same session id.
-- **Screen state is pushed by the client.** The TV app stays the source of truth about its
-  own UI, so "that one" and "the second" resolve with no extra round-trip.
+## How it works
 
-The full design, including the rejected alternatives, is in
-[`docs/superpowers/specs/2026-09-19-tv-avatar-backend-design.md`](docs/superpowers/specs/2026-09-19-tv-avatar-backend-design.md).
+Two independent planes that meet only at the session store and a command bus.
+
+- **Media plane** — one [Pipecat](https://github.com/pipecat-ai/pipecat) pipeline per
+  session. Speech reaches TTS sentence by sentence while actions dispatch in parallel.
+- **Control plane** — an authenticated WebSocket. The TV pushes its screen state; the agent
+  sends commands. A dropped socket does not drop the call.
+- **The agent thinks in envelopes.** Each cycle is one constrained-decoded
+  `{intent, say, actions[]}`; a tool result (e.g. a catalogue search) buys the next cycle.
+  Commands are turn-scoped: barge-in drops anything not yet on the wire.
+
+The vocabulary in `src/tv_avatar/agent/commands.py` is the single source of truth — the
+prompt manifest, `contracts/protocol.schema.json` and `contracts/protocol.d.ts` are all
+generated from it, so the TV cannot compile a command the backend would reject.
 
 ---
 
 ## Quickstart
 
-Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
+Backend — Python 3.11 and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync                      # installs runtime + dev dependencies from uv.lock
-cp .env.example .env         # then fill in the four keys (see below)
+uv sync
+cp .env.example .env        # fill in NEBIUS_API_KEY, SLNG_API_KEY, ANAM_API_KEY
 uv run uvicorn tv_avatar.app:app --reload --port 8000
 ```
 
-Open <http://localhost:8000/> — it redirects to the engineering console at `/demo/`.
-Press **Connect**, allow the microphone, and the avatar greets you first. The console shows
-live WebRTC stats, per-turn timings (user stop → first word → done), the transcript, and a
-raw wire log of every control-plane message.
+TV frontend — Node 20.19+:
 
-`/mock/` serves a second page: a fake content grid that speaks the control protocol and
-reacts to commands. Use it to exercise the protocol without the real TV app.
+```bash
+cd frontend && npm install && npm run dev
+```
 
-Without a `.env` the server still starts, `/config` reports which keys are missing, and the
-console says so in its header — but `POST /sessions/{id}/offer` returns **503**, because
-media cannot be produced without the providers.
+Open the frontend, allow the microphone, and Mira greets you first. Without a `.env` the
+backend still starts and `/config` reports what is missing; the engineering console at
+<http://localhost:8000/demo/> shows live timings, the transcript and every wire message.
 
-### Keys
+```bash
+uv run pytest                                  # backend tests, no keys or network
+uv run python tools/export_schemas.py          # regenerate contracts/ after a vocabulary change
+```
 
-| Variable | Where to get it |
+---
+
+## Repository
+
+| Path | What |
 |---|---|
-| `NEBIUS_API_KEY` | <https://tokenfactory.nebius.com/> — LLM, OpenAI-compatible API |
-| `SLNG_API_KEY` | SLNG gateway — one key covers both STT and TTS |
-| `ANAM_API_KEY` | Anam Cloud — avatar session authentication |
+| `src/tv_avatar/` | FastAPI backend: sessions, WebRTC signalling, agent loop, recommendations, memory |
+| `frontend/` | React TV app — its own toolchain, [`README`](frontend/README.md) and [`design.md`](frontend/design.md) |
+| `contracts/` | Generated wire schema (JSON Schema + TypeScript). Never hand-edit |
+| `avatars.yaml` | Avatars, voices and languages — adding one is a YAML edit |
+| `docs/` | [Design spec](docs/superpowers/specs/2026-09-19-tv-avatar-backend-design.md), plans, observability contract |
 
-Every other setting has a working default in `config.py`. Nothing is hardcoded and no key
-appears in source; `.env` is git-ignored and `.env.example` is committed with blank values.
-
-### Avatars and languages
-
-Avatar ids, their Anam model and their Cartesia voice are not env vars: they live in
-`avatars.yaml` at the repo root (override the path with `AVATARS_FILE`). The file also lists
-the supported session languages — English, Spanish, French, Catalan — and, per avatar, which
-of them it may speak. A session pins one avatar and one language when it is created:
-
-```json
-POST /sessions  {"avatar": "lucia", "language": "es"}
-```
-
-Both fields are optional; an empty body yields the catalog defaults, and omitting the language
-for a single-language avatar picks its own. `GET /config` lists the options (without provider
-ids) so a client can build pickers. Adding an avatar is a YAML edit — no code changes.
-
-Cartesia Sonic has no Catalan, so the `ca` entry carries `tts_language: es`: speech
-recognition and the prompt run in Catalan, the synthesiser voices the Catalan text with its
-Spanish model. The `.yaml` is validated at boot; a broken file stops the server the same way a
-missing key does.
-
----
-
-## HTTP and WebSocket surface
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/config` | Non-secret view of the configured stack; lists missing env vars |
-| `POST` | `/sessions` | Mint a session pinned to an avatar + language; returns token, control and offer URLs |
-| `POST` | `/sessions/{id}/offer?token=` | WebRTC offer → answer. Spawns the session's pipeline |
-| `PATCH` | `/sessions/{id}/offer?token=` | Trickle ICE candidate |
-| `DELETE` | `/sessions/{id}` | Explicit hang-up; token in the `X-Control-Token` header |
-| `WS` | `/sessions/{id}/control?token=` | Control channel |
-| `GET` | `/shop` | The shop catalogue (`products.json`), for the TV to hold in memory |
-| `GET` | `/shop/{title_id}` | One title's shelf; 404 when there is nothing to shop |
-
-The offer endpoint takes two query flags: `avatar=false` runs the voice loop with no
-talking head, and `halfduplex=true` mutes the microphone while the avatar speaks. Half-duplex
-disables barge-in, so it is a diagnostic aid for laptop-speaker setups where the avatar's own
-voice re-enters the microphone — not the product behaviour.
-
-The session id travels in URLs across application boundaries, so it is **not** a credential.
-The control token is. An unknown session and a bad token are reported identically, so neither
-leaks the existence of the other.
-
-### Protocol
-
-Every message carries `"v": 1`. An unknown version is an explicit error, never a silently
-missing field.
-
-- **Client → server:** `screen_state`, `ack`, `result`, `user_event`
-- **Server → client:** `command`, `agent_status`, `transcript`, `error`
-
-Thirteen command verbs are defined in `src/tv_avatar/agent/commands.py`: `play`, `pause`,
-`resume`, `seek`, `navigate`, `focus`, `open_details`, `close`, `back`, `home`,
-`show_products`, `search_catalog`, `show_titles`.
-
-Commands are **fire-and-forget** — the backend never waits for the TV app, because a slow
-client would stall the LLM turn and stall speech with it. `search_catalog` is the single
-exception: it waits for the TV's result, a failed acknowledgment, or turn cancellation,
-with no default deadline. A successful acknowledgment alone does not finish a search.
-The engineering `/demo/` console logs commands but does not answer catalog searches;
-use the TV frontend for catalog replies.
-
-Commands are also **turn-scoped**. When the viewer barges in, commands the interrupted turn
-had queued but not yet sent are dropped. Commands already on the wire are never rolled back.
-
-### Generated contracts
-
-`contracts/protocol.schema.json` and `contracts/protocol.d.ts` are committed artifacts,
-regenerated from the Pydantic models:
-
-```bash
-uv run python tools/export_schemas.py
-```
-
-The TV app cannot compile a command this backend would reject, because both sides derive
-from `agent/commands.py`. Never hand-edit the files in `contracts/`.
-
----
-
-## Layout
-
-```
-src/tv_avatar/
-  config.py               pydantic-settings: keys, models, voices, regions
-  app.py                  FastAPI: sessions, WebRTC signalling, control WS, static mounts
-  agent/
-    commands.py           command schemas — the single source of truth for the vocabulary
-    envelope.py           the SGR turn envelope: intent / say / actions, plus internal tools
-    service.py            SGRAgentService — streams `say` sentence by sentence, dispatches actions
-    stream_parse.py       incremental parser for the streamed envelope
-    loop.py               TurnRunner — the bounded SGR cycle loop, independent of Pipecat
-    turn.py               typed turn state: TurnContext / TurnMetrics / ToolResult / TurnTrace
-    tools.py              internal tools: recommend_titles, reject_title
-    fallback.py           the templated answer for a cycle that blows its budget
-    injector.py           stamps screen / history sections — AGENT_IMPL=stub only
-    prompt.py             system prompts, written for the ear rather than the screen
-    llm.py                provider construction + the deterministic scripted stub
-  memory/
-    lane.py               MemoryLane protocol (prefetch / recall / ingest / finish_session)
-    summary_lane.py       one LLM-written profile per viewer, rewritten when a session ends
-  recs/
-    catalog.py            TMDB catalog: parquet rows + embedded Qdrant index
-    engine.py             retrieve -> filter -> re-rank; query / taste / popular channels
-    embedder.py           local E5 (default) or Nebius embeddings for queries
-  history/
-    store.py              per-viewer viewing log (SQLite): played, shown, rejected
-    recorder.py           screen transitions and tool results -> history events
-  e5.py                   the process-shared multilingual-e5-small
-  runtime.py              process-wide catalog / history / memory / recs, warmed at boot
-  control/
-    protocol.py           wire models, discriminated unions in both directions
-    channel.py            WebSocket read/write loops
-    bus.py                turn-scoped command queue and search correlation
-  pipeline/
-    builder.py            build_pipeline(...) -> PipelineTask
-    transport.py          SmallWebRTC transport parameters
-    services.py           SLNG STT/TTS and Anam construction
-    turns.py              VAD and turn-taking configuration
-    observers.py          frames -> agent_status / transcript events
-    runner.py             run one session's pipeline to completion
-  session/
-    state.py              SessionState, ScreenState snapshot, in-memory SessionStore
-    manager.py            per-session command bus and pipeline task supervision
-tools/
-  demo/                   engineering console (WebRTC + control plane, live metrics)
-  mock_tv_client/         fake content grid that speaks the control protocol
-  export_schemas.py       Pydantic models -> JSON Schema + TypeScript
-  build_catalog.py        TMDB CSV -> data/catalog.parquet + data/qdrant_db (run once)
-  smoke_turn.py           text-mode end-to-end smoke of the agent, memory and recs
-  voice_smoke.py          voice-API smoke harness (STT/TTS round trip, no browser)
-contracts/                generated, committed, consumed by the frontend
-docs/                     design spec, implementation plans, measured findings
-frontend/                 Titan Browse — the React TV UI (own README, own toolchain)
-```
-
-Each unit has one purpose and a defined interface: `commands.py` imports no Pipecat,
-`channel.py` knows the wire format but not the agent, `builder.py` knows Pipecat but not
-the protocol.
-
----
-
-## Tests
-
-```bash
-uv run pytest                    # ~10 s, no network and no API keys needed
-```
-
-Command schemas and the protocol are covered by unit and round-trip tests; the command bus
-has async tests for turn-scoped cancellation and the `search_catalog` timeout; the pipeline
-is exercised with the scripted stub LLM, asserting frame ordering and interruption
-behaviour. End-to-end is manual, through the console at `/demo/`.
-
----
-
-## Tracing
-
-Every session can be seen as one tree in [Langfuse](https://langfuse.com): Pipecat's own
-`conversation → turn → stt / tts` spans, and under each turn the agent's
-`llm → agent.recall / agent.cycle → agent.action → tv.command`, the memory lane
-(`memory.prefetch`, `memory.recall`, `memory.ingest`, `memory.finish_session`), the recommender
-(`recs.recommend`), the observer's `turn.latency` marks and the TV's `tv.command_result` acks —
-with prompts, envelopes, timings and, where the endpoint reports it, token usage. OpenTelemetry is
-the only instrumentation API; Langfuse is an OTLP/HTTP sink (no `langfuse` SDK). Off by default,
-and never on the media path: spans are attribute writes, export is batched on a background thread.
-
-```dotenv
-TRACING_ENABLED=true
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=https://cloud.langfuse.com      # EU; US: https://us.cloud.langfuse.com
-```
-
-```bash
-uv run python tools/langfuse_smoke.py                     # export one span, read it back: 5 s
-npx langfuse-cli api traces list --sessionId <session_id> # read a real session back
-npx langfuse-cli api traces get <trace_id>
-```
-
-Every span of a session carries `sessionId` and `userId` (propagated as OTel baggage), so both
-filter across observations, not just traces. Filterable facts live under
-`langfuse.observation.metadata.*` (`intent`, `cycles`, `fallback`, `interrupted`, `verb`, `status`,
-`source`, `trigger`, `query_embed`); details are `tv.*` attributes on the span. Each span declares
-its Langfuse observation type: `agent.cycle` and `memory.finish_session` are `generation`s,
-`agent.action` and `tv.command` are `tool`s, the recall/recs spans are `retriever`s.
-
-- `TRACE_CONTENT=false` strips prompts, transcripts, envelopes and spoken text from every span
-  (Pipecat's included) before export.
-- Any OTLP/HTTP collector instead of Langfuse: `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
-  (e.g. `docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one`). It wins over the keys.
-- The full span vocabulary and the decisions behind it:
-  [`docs/superpowers/plans/2026-09-19-tv-avatar-observability.md`](docs/superpowers/plans/2026-09-19-tv-avatar-observability.md).
-
----
-
-## Measured decisions
-
-These came out of measurement on 2026-09-19, not from defaults:
-
-- **LLM: `Qwen/Qwen3-30B-A3B-Instruct-2507` on Nebius**, 0.40 s median time to first token.
-  Reasoning models (DeepSeek-V4-Flash, GLM-5.x, Kimi) think for ~1 s before the first word,
-  which is heard as dead air on a voice interface.
-- **Turn-taking is a plain silence timer** (`TURN_SILENCE_S`, default 0.5 s) on top of
-  Silero VAD, not the smart-turn model. A timer is predictable and cannot hold a turn open
-  on a "sounds unfinished" verdict. Speaker echo trips VAD without producing words, so a
-  turn with VAD activity and no transcript is abandoned after 2 s.
-- **The echo guard is opt-in** (`ECHO_FILTER`, default off). It drops user transcripts that
-  mostly repeat the avatar's last words, but word overlap cannot tell echo from a correction
-  that reuses a title: "no, die hard" right after the avatar named "No Hard Feelings" was
-  swallowed. Browser AEC and `BARGE_IN_MIN_WORDS` are the defence without it.
-- **SLNG regional routing is a header**, `X-World-Part-Override`. Per-region hostnames such
-  as `eu.api.slng.ai` do not resolve.
-
-More in [`docs/findings/`](docs/findings/).
-
----
-
-## Status
-
-Milestones M0–M3 of the design spec are done: the voice loop, the avatar with its
-interruption behaviour, the control protocol with a mock client, and the agent layer.
-
-### Agent layer (phase 2)
-
-`AGENT_IMPL=sgr` (default) runs `SGRAgentService`: a Schema-Guided-Reasoning agent whose
-every cycle is one JSON envelope — `intent`, `say`, `actions[]` — produced with constrained
-decoding. `say` streams to TTS sentence by sentence while actions dispatch in parallel. A
-reply from an awaited tool — `recommend_titles` or `search_catalog`, including failures —
-buys one more cycle, up to `AGENT_MAX_CYCLES` (default 2). The final cycle's schema excludes
-observation-returning tools. `CYCLE_FIRST_BYTE_S=0` disables the follow-up speech deadline;
-a positive value enables a first-byte budget and a templated fallback.
-
-- **Recommendations** — a TMDB slice indexed in embedded Qdrant with the local
-  `multilingual-e5-small` (~15 ms per query). Build it once:
-
-  ```bash
-  uv run python tools/build_catalog.py --limit 500      # data/ is git-ignored
-  ```
-
-- **Viewing log** — `data/history.db`: what was played, what the agent offered, what the
-  viewer declined (`reject_title`). The greeting and the recommender take titles from here.
-- **Memory** — one profile per viewer in `data/memory/<user_id>/profile.md`, rewritten by
-  the LLM from the session transcript when the session ends *and* every
-  `MEMORY_REFRESH_EVERY_TURNS` ingests (default 6), so what was said early in a long session
-  is back in the prompt before it ends. Crash-safe: leftovers are folded in at the next start.
-  Durable preferences and tone, readable and editable by hand.
-- **Viewer identity** — `POST /sessions {"user_id": "..."}`; sessions come and go, the
-  couch persists.
-
-Text-mode smoke, no speech keys needed:
-
-```bash
-uv run python tools/smoke_turn.py --user couch_1 "something like Sicario" "no, not the first one"
-```
-
-**M5** shoppable products: `show_products` slides a three-product shelf in under the TV's
-poster row, pulled only when the viewer asks ("what's that jacket?"). The catalogue is
-`products.json` at the repo root (override with `PRODUCTS_FILE`), served at `/shop`; tiles
-the TV can shop carry `shoppable: true` in the screen state and render in the prompt as
-`[shop]`. A separate `# Shop` section lists every shelf's title, items and prices, including
-off-screen titles, so the agent names the item while the shelf arrives.
-
-**M4** latency instrumentation is available through the opt-in tracing described above.
-Persona polish remains. The session store is an in-memory dict — swapping in Redis touches
-`SessionStore` and nothing else.
-
-### The frontend
-
-`frontend/` is Titan Browse: a 10-foot browse screen for Titan OS TVs, driven entirely by a
-remote control. React 18 + TypeScript + Vite, two runtime dependencies, targeting Chrome 84
-on 1–1.5 GB TV boards. It has its own README, its own toolchain and its own dataset:
-
-```bash
-cd frontend && npm install && npm run dev   # http://localhost:5173
-```
-
-The sky loops in `frontend/public/sky/` are Git LFS objects: clone with `git lfs` installed, or
-that folder holds pointer files and the room stays still.
-
-It is **connected to this backend** through WebRTC and the control WebSocket. The avatar
-can search, display recommendation rails, navigate and control the YouTube trailer player,
-which remains the only real playback surface. The TV sends screen state and viewer events
-back to the agent using the generated protocol types. See `frontend/README.md` for setup;
-loading the frontend with a configured backend opens a paid avatar session automatically.
+Built at HackBarna 2026.
