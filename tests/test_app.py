@@ -231,6 +231,69 @@ def test_delete_session_requires_token_and_then_closes_everything():
             assert ws.receive_json()["code"] == "unauthorized"
 
 
+def _with_injector(app, session_id):
+    """Publish a recording stand-in for the running pipeline's text entry point."""
+    said: list[str] = []
+
+    async def inject(text: str) -> None:
+        said.append(text)
+
+    app.state.manager.injector_slot(session_id)(inject)
+    return said
+
+
+def test_typed_text_reaches_the_running_pipeline():
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        sid, tok = body["session_id"], body["control_token"]
+        said = _with_injector(app, sid)
+
+        r = c.post(f"/sessions/{sid}/text", json={"text": "I want to watch Barbie"},
+                   headers={"X-Control-Token": tok})
+
+        assert r.status_code == 200
+        assert said == ["I want to watch Barbie"]
+
+
+def test_typed_text_is_authenticated_by_the_token_not_the_session_id():
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        sid = body["session_id"]
+        said = _with_injector(app, sid)
+        payload = {"text": "play something"}
+
+        assert c.post(f"/sessions/{sid}/text", json=payload).status_code == 401
+        assert c.post(f"/sessions/{sid}/text", json=payload,
+                      headers={"X-Control-Token": "nope"}).status_code == 401
+        assert said == []
+
+
+def test_typed_text_with_no_pipeline_running_is_refused_not_dropped():
+    """A session exists from POST /sessions; the pipeline only from the first offer.
+    Silently accepting in between would look like the agent ignored the viewer."""
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        r = c.post(f"/sessions/{body['session_id']}/text", json={"text": "hello"},
+                   headers={"X-Control-Token": body["control_token"]})
+        assert r.status_code == 409
+
+
+@pytest.mark.parametrize("text", ["", "x" * 501])
+def test_typed_text_rejects_what_no_viewer_would_say(text):
+    app = create_app()
+    with TestClient(app) as c:
+        body = c.post("/sessions").json()
+        sid, tok = body["session_id"], body["control_token"]
+        said = _with_injector(app, sid)
+        r = c.post(f"/sessions/{sid}/text", json={"text": text},
+                   headers={"X-Control-Token": tok})
+        assert r.status_code == 422
+        assert said == []
+
+
 @pytest.mark.parametrize("ok,error", [(False, "catalog unavailable"), (False, None), (True, None)])
 def test_search_ack_releases_only_rejected_searches(ok, error):
     app = create_app()

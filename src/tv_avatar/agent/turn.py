@@ -13,12 +13,13 @@ from typing import Any, ClassVar, Literal
 from pydantic import ValidationError
 
 from tv_avatar import tracing as tel
-from tv_avatar.agent.envelope import REGISTRY, FinalTurnPlan, TurnPlan
+from tv_avatar.agent.envelope import REGISTRY, FinalTurnPlan, Request, TurnPlan
 from tv_avatar.tracing import (
     ATTR_TURN_PREFIX,
     META_CYCLES,
     META_FALLBACK,
     META_INTENT,
+    META_OPERATION,
 )
 
 
@@ -90,6 +91,7 @@ class TurnMetrics:
     cycles: int = 0
     n_actions: int = 0
     intent: str | None = None
+    operation: str | None = None
     recall_ms: int | None = None
     ttft_ms: int | None = None
     first_action_ms: int | None = None
@@ -117,7 +119,8 @@ class TurnMetrics:
     #: The same fields, split for Langfuse (D16, D20): what you filter turns by
     #: goes under observation metadata, the timings are `tv.turn.*` details.
     _FILTERABLE: ClassVar[dict[str, str]] = {
-        "intent": META_INTENT, "cycles": META_CYCLES, "fallback": META_FALLBACK}
+        "intent": META_INTENT, "operation": META_OPERATION, "cycles": META_CYCLES,
+        "fallback": META_FALLBACK}
 
     def as_span_attributes(self) -> dict[str, int | str | bool]:
         """`None` is dropped (OTel rejects it); `fallback` only when true."""
@@ -219,6 +222,11 @@ class CycleOutcome:
     from awaited tools, including successful TV search replies."""
     raw: str
     observations: tuple[ToolResult, ...]
+    #: What the viewer asked for, as this cycle decoded it; the next cycle is
+    #: pinned to its operation.
+    request: Request | None = None
+    #: How many actions this cycle actually dispatched (both gates passed).
+    n_dispatched: int = 0
 
     @property
     def done(self) -> bool:

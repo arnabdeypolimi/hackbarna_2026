@@ -12,7 +12,7 @@ comments (`spec §9`, `D5`) point at that file.
 
 ```bash
 uv sync                                              # install; uv.lock is authoritative
-uv run pytest                                        # 81 tests, ~3 s, no keys or network
+uv run pytest                                        # 401 tests, ~17 s, no keys or network
 uv run pytest tests/test_command_bus.py -k cancel    # single test
 uvx ruff check src tests tools                       # lint (see note below)
 uv run uvicorn tv_avatar.app:app --reload --port 8000
@@ -61,6 +61,12 @@ These are load-bearing. Breaking one is a behaviour regression, not a style choi
   Follow-up speech deadlines are also off by default (`CYCLE_FIRST_BYTE_S=0`); a positive
   value opts back into the budget and templated fallback. Awaiting the TV app anywhere else
   stalls speech. The `/demo/` console logs commands but does not answer catalog searches.
+- **Viewer input has two doors and one path.** Speech arrives as STT
+  `TranscriptionFrame`s; `POST /sessions/{id}/text` (control-token authenticated, like the
+  socket) queues the very same frame into the running pipeline, because Titan OS exposes no
+  microphone API and the browser tests must not synthesise audio. Turn-taking, barge-in,
+  memory and the agent therefore stay on one code path — never add an entry point that
+  reaches the agent without passing `pipeline/turns.py`.
 - **The cycle cap is the schema's, not the loop's.** The last allowed cycle is decoded against
   `turn_plan_schema(final=True)`, whose actions union has no observation-returning tools, and
   `parse_action(final=True)` validates against the same union. The loop (`agent/loop.py`) only
@@ -163,3 +169,18 @@ Shop context is rendered by the shared `agent/prompt.py` helpers: `SGRAgentServi
 `# Shop` and `[shop]` markers in `# Screen`; neither path may depend on the other's prompt.
 A failed command acknowledgment releases a pending search with an error observation;
 a successful acknowledgment still waits for the catalog result.
+
+## Routing verification
+
+`uv run python tools/smoke_turn.py --routing-suite --repeat 3 --max-requests 72`
+runs the real configured text model against isolated synthetic catalog, memory and TV
+fixtures. It does not open the app's Runtime, write viewer profiles, or start voice/avatar
+sessions. It is opt-in and incurs text inference charges; provider retries are disabled
+and the request cap is enforced before each call. A wrong action exits nonzero even when
+the generated JSON is valid. Use `--case watch_shop_id --ablate-context --max-requests 8`
+with `--routing-suite` to compare clean/history-only/memory-only/combined contexts.
+
+The smoke TV consumes commands concurrently with inference. Never move catalog replies
+after the turn finishes: an awaited search cannot finish until the TV answers it.
+Routing assertions with canned model outputs prove plumbing only, not model behavior;
+real-model failures must remain visible rather than relaxing the expected action sequences.

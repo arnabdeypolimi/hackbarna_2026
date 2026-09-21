@@ -30,7 +30,13 @@ from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
 from pydantic import BaseModel, ValidationError
 
 from tv_avatar import tracing as tel
-from tv_avatar.agent.envelope import REGISTRY, parse_action, turn_plan_schema
+from tv_avatar.agent.envelope import (
+    REGISTRY,
+    Request,
+    action_violation,
+    parse_action,
+    turn_plan_schema,
+)
 from tv_avatar.agent.fallback import render_fallback
 from tv_avatar.agent.prompt import tool_results_message
 from tv_avatar.agent.stream_parse import (
@@ -39,6 +45,7 @@ from tv_avatar.agent.stream_parse import (
     EnvelopeStreamer,
     Event,
     IntentReady,
+    RequestReady,
     SayDelta,
     SayDone,
 )
@@ -105,6 +112,12 @@ class _Cycle:
     fire: list[asyncio.Task] = field(default_factory=list)
     n_rejected: int = 0
     first_say_pending: bool = True
+    request: Request | None = None
+    #: Cycle 1's operation, when this is a follow-up: the schema already forbids
+    #: any other, and the gate holds to it should an envelope arrive unconstrained.
+    pinned_operation: str | None = None
+    #: This cycle's decoding contract (final or not, pinned or not).
+    schema: dict = field(default_factory=dict)
     telemetry: CycleTelemetry = field(default_factory=CycleTelemetry)
 
     def ms(self) -> int:
@@ -116,9 +129,16 @@ class TurnRunner:
         self._client = client
         self._cfg = cfg
         self._host = host
-        self._schemas = {final: turn_plan_schema(final=final) for final in (False, True)}
-        self._schema_hashes = {final: hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()
-                               for final, schema in self._schemas.items()}
+        # Keyed by (final, pinned operation); built on first use, a handful at most.
+        self._schemas: dict[tuple[bool, str | None], tuple[dict, str]] = {}
+
+    def _schema(self, *, final: bool, operation: str | None) -> tuple[dict, str]:
+        key = (final, operation)
+        if key not in self._schemas:
+            schema = turn_plan_schema(final=final, operation=operation)
+            self._schemas[key] = (schema, hashlib.sha256(
+                json.dumps(schema, sort_keys=True).encode()).hexdigest())
+        return self._schemas[key]
 
     async def run(self, messages: list[dict], ctx: TurnContext, metrics: TurnMetrics, trace: TurnTrace) -> None:
         max_cycles = self._cfg.agent_max_cycles
@@ -127,9 +147,12 @@ class TurnRunner:
             budget_s = None if cycle == 1 else self._cfg.cycle_first_byte_s or None
             ctx.log.debug("cycle start", step="cycle", cycle=cycle, n_messages=len(messages),
                           budget_ms=None if budget_s is None else round(budget_s * 1000))
+            # The viewer asked once. Results arriving in a later cycle refine the
+            # title and its id, never the operation — the schema pins it.
+            pinned = previous.request.operation if previous is not None and previous.request else None
             try:
                 outcome = await self._cycle(messages, ctx, cycle, metrics, trace,
-                                            final=cycle == max_cycles, budget_s=budget_s)
+                                            final=cycle == max_cycles, budget_s=budget_s, operation=pinned)
             except CycleOverBudget:
                 metrics.fallback = True
                 assert previous is not None  # cycle 1 has no budget
@@ -138,6 +161,12 @@ class TurnRunner:
             trace.add_results(outcome.observations)
             ctx.log.debug("cycle end", step="cycle", cycle=cycle, raw=outcome.raw, done=outcome.done,
                           observed=[r.verb for r in outcome.observations])
+            # A discovery turn that fetched titles, then spoke about them and sent
+            # the TV nothing at all, leaves the viewer looking at the old grid. Seen
+            # live: "You pick. Crime and thrillers, no horror." Deliberately narrow —
+            # a cycle that dispatched anything made its own choice and is left alone.
+            if previous is not None and pinned == "discover" and outcome.n_dispatched == 0:
+                await self._show_fetched(previous.observations, ctx, trace, cycle)
             if outcome.done:
                 return
             feedback = outcome.feedback()
@@ -147,8 +176,28 @@ class TurnRunner:
             }):
                 pass
             messages = [*messages, {"role": "assistant", "content": outcome.raw},
-                        {"role": "user", "content": tool_results_message(feedback)}]
+                        {"role": "user", "content": tool_results_message(
+                            feedback, original_request=trace.user_text)}]
             previous = outcome
+
+    async def _show_fetched(self, results: tuple[ToolResult, ...], ctx: TurnContext,
+                            trace: TurnTrace, cycle: int) -> None:
+        """Put the titles this turn fetched on screen. Not a second opinion on the
+        model's picks — it chose what to fetch — only the guarantee that a viewer
+        who asked for options ends the turn looking at some."""
+        for r in results:
+            if r.failed or r.verb != "recommend_titles":
+                continue
+            titles = r.payload.get("titles") or []
+            if not titles:
+                return
+            args = {"title_ids": [t["title_id"] for t in titles[:20]], "label": "For you"}
+            ctx.log.info("fetched titles put on screen", step="action", cycle=cycle,
+                         n=len(args["title_ids"]))
+            trace.add_action("show_titles", args, after_results=True)
+            with tel.attribute_scope({tel.META_SOURCE: "fetched_rail"}):
+                await self._host.dispatch_action(parse_action({"verb": "show_titles", **args}), ctx)
+            return
 
     async def _speak_fallback(self, results: tuple[ToolResult, ...], ctx: TurnContext,
                               metrics: TurnMetrics, trace: TurnTrace) -> None:
@@ -168,22 +217,23 @@ class TurnRunner:
                     await self._host.dispatch_action(parse_action({"verb": verb, **args}), ctx)
 
     async def _cycle(self, messages: list[dict], ctx: TurnContext, cycle: int, metrics: TurnMetrics,
-                     trace: TurnTrace, *, final: bool, budget_s: float | None) -> CycleOutcome:
+                     trace: TurnTrace, *, final: bool, budget_s: float | None,
+                     operation: str | None = None) -> CycleOutcome:
         # One LLM call = one `generation` (D19). The raw envelope is recorded in
         # the `finally` so a budget-cancelled cycle still shows what it streamed.
         raw: list[str] = []
-        schema = self._schemas[final]
+        schema, schema_hash = self._schema(final=final, operation=operation)
         with tel.attribute_scope({tel.META_TURN_ID: ctx.turn_id, META_CYCLE: cycle}), \
                 observation("agent.cycle", type=OBS_TYPE_GENERATION, **{
             META_CYCLE: cycle, ATTR_CYCLE_MAX: self._cfg.agent_max_cycles,
             tel.META_TURN_ID: ctx.turn_id, tel.META_FINAL_CYCLE: final,
             tel.META_SCHEMA_NAME: schema["name"],
-            tel.META_SCHEMA_HASH: self._schema_hashes[final],
+            tel.META_SCHEMA_HASH: schema_hash,
             tel.META_PROVIDER: urlsplit(self._cfg.nebius_base_url).hostname or "unknown",
             ATTR_GENAI_MODEL: self._cfg.llm_model, ATTR_GENAI_TEMPERATURE: TEMPERATURE,
             ATTR_GENAI_MAX_TOKENS: MAX_TOKENS, ATTR_OBS_INPUT: json.dumps(messages, ensure_ascii=False),
         }) as span:
-            state = _Cycle(ctx, cycle, final, span)
+            state = _Cycle(ctx, cycle, final, span, pinned_operation=operation, schema=schema)
             try:
                 return await self._run_cycle(messages, state, metrics, trace, raw, budget_s)
             except asyncio.CancelledError:
@@ -240,6 +290,8 @@ class TurnRunner:
                     case IntentReady(intent=intent):
                         metrics.mark_once("intent", intent)
                         c.ctx.log.debug("intent", step="intent", cycle=c.n, intent=intent, ms=c.ms())
+                    case RequestReady(request=raw_request):
+                        self._decode_request(raw_request, c, metrics)
                     case SayDelta(text=text):
                         if c.first_say_pending:
                             deadline.reschedule(None)
@@ -261,7 +313,8 @@ class TurnRunner:
                         awaited=len(c.awaited), fire_and_forget=len(c.fire), ms=c.ms())
         c.span.set_attributes({ATTR_CYCLE_N_ACTIONS: len(c.awaited) + len(c.fire),
                                ATTR_CYCLE_N_REJECTED: c.n_rejected})
-        return CycleOutcome("".join(raw), await self._observe(c))
+        return CycleOutcome("".join(raw), await self._observe(c), request=c.request,
+                            n_dispatched=len(c.telemetry.accepted))
 
     async def _stream(self, messages: list[dict], c: _Cycle, raw: list[str]) -> AsyncIterator[Event]:
         """The LLM call as envelope events. Knows the wire, not the product."""
@@ -271,7 +324,7 @@ class TurnRunner:
             stream = await self._client.chat.completions.create(
                 model=self._cfg.llm_model, messages=messages, stream=True,
                 temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
-                response_format={"type": "json_schema", "json_schema": self._schemas[c.final]},
+                response_format={"type": "json_schema", "json_schema": c.schema},
                 extra_body=self._cfg.llm_extra_body or None,
             )
             request_id = getattr(stream, "_request_id", None)
@@ -361,22 +414,43 @@ class TurnRunner:
             ctx.log.debug("agent.speech.submitted", event="agent.speech.submitted", cycle=cycle,
                           source=source, sentence_index=index, text=text.strip())
 
+    def _decode_request(self, raw_request: dict, c: _Cycle, metrics: TurnMetrics) -> None:
+        """The cascade's second step. Constrained decoding guarantees the shape,
+        so a failure here is a canned or truncated envelope: the actions then run
+        unchecked and the plan is reported invalid at the end of the cycle."""
+        try:
+            c.request = Request.model_validate(raw_request)
+        except ValidationError as err:
+            c.ctx.log.warning("undecodable request", step="request", cycle=c.n,
+                              reason=str(err).splitlines()[0])
+            return
+        if c.pinned_operation is not None and c.request.operation != c.pinned_operation:
+            c.ctx.log.warning("follow-up cycle changed the operation; holding to the request",
+                              step="request", cycle=c.n, decoded=c.request.operation,
+                              pinned=c.pinned_operation)
+            c.request = c.request.model_copy(update={"operation": c.pinned_operation})
+        metrics.mark_once("operation", c.request.operation)
+        c.span.set_attribute(tel.META_OPERATION, c.request.operation)
+        c.ctx.log.debug("request", step="request", cycle=c.n, ms=c.ms(),
+                        **c.request.model_dump(exclude_none=True))
+
     def _start_action(self, raw_action: dict, c: _Cycle, metrics: TurnMetrics, trace: TurnTrace) -> None:
-        """Validate against the union this cycle was decoded with and dispatch.
-        On the final cycle an observation tool is unrepresentable for the
-        decoder; a canned envelope that still carries one is rejected here."""
+        """Validate against the union this cycle was decoded with, then against
+        the decoded request, and dispatch. On the final cycle an observation
+        tool is unrepresentable for the decoder; a canned envelope that still
+        carries one is rejected here. An action the request does not license
+        (`play` for a lookup, `show_products` for a watch) is rejected the same
+        way: the viewer hears `say`, and nothing they did not ask for happens."""
         index = len(c.telemetry.accepted) + len(c.telemetry.rejected)
         try:
             action = parse_action(raw_action, final=c.final)
         except ValidationError as err:
-            reason = str(err).splitlines()[0]
-            c.ctx.log.warning("rejected action", verb=raw_action.get("verb"), reason=reason)
-            c.n_rejected += 1
-            c.telemetry.rejected.append({"action_index": index, "action": raw_action,
-                "errors": [{"path": list(e["loc"]), "code": e["type"]}
-                           for e in err.errors(include_input=False, include_context=False)]})
-            c.span.add_event(EVENT_ACTION_REJECTED, {"verb": str(raw_action.get("verb")),
-                                                     "reason": reason, tel.META_ACTION_INDEX: index})
+            errors = [{"path": list(e["loc"]), "code": e["type"]}
+                      for e in err.errors(include_input=False, include_context=False)]
+            self._reject(raw_action, c, index, str(err).splitlines()[0], errors)
+            return
+        if c.request is not None and (reason := action_violation(c.request, action)):
+            self._reject(raw_action, c, index, reason, [{"path": ["actions", index], "code": "off_request"}])
             return
         verb, spec = str(action.verb), REGISTRY[str(action.verb)]
         args = action.model_dump(exclude={"verb"}, exclude_none=True)
@@ -391,6 +465,13 @@ class TurnRunner:
         else:
             c.fire.append(task)
         metrics.mark_once("first_action_ms", c.ctx.elapsed_ms())
+
+    def _reject(self, raw_action: dict, c: _Cycle, index: int, reason: str, errors: list[dict]) -> None:
+        c.ctx.log.warning("rejected action", verb=raw_action.get("verb"), reason=reason)
+        c.n_rejected += 1
+        c.telemetry.rejected.append({"action_index": index, "action": raw_action, "errors": errors})
+        c.span.add_event(EVENT_ACTION_REJECTED, {"verb": str(raw_action.get("verb")),
+                                                 "reason": reason, tel.META_ACTION_INDEX: index})
 
     async def _observe(self, c: _Cycle) -> tuple[ToolResult, ...]:
         """Collect the awaited replies; keep the ones the model must see."""

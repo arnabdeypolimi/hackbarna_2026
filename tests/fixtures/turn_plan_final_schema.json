@@ -161,7 +161,7 @@
       },
       "RejectTitle": {
         "additionalProperties": false,
-        "description": "Internal: the viewer declined a title that was offered. Recorded in the\nviewing log so it is not recommended again or offered at the next greeting.\nFire-and-forget \u2014 no result comes back and no second cycle follows.",
+        "description": "Internal: the viewer declined a title that was offered. Recorded in the\nviewing log so it is not recommended again or offered at the next greeting.\nFire-and-forget — no result comes back and no second cycle follows.",
         "properties": {
           "title_id": {
             "type": "string"
@@ -173,6 +173,52 @@
         },
         "required": [
           "verb",
+          "title_id"
+        ],
+        "type": "object"
+      },
+      "Request": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "description": "play/open/shop need one specific movie the viewer named or pointed at on screen ('the second one'). A mood, a genre, 'you pick', 'surprise me' or 'something ...' is discover, even when they say 'put something on'.",
+            "enum": [
+              "play",
+              "open",
+              "lookup",
+              "discover",
+              "shop",
+              "control",
+              "answer"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The movie the viewer named, verbatim; null when they named none."
+          },
+          "title_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its id when the Screen, Shop, Recent activity, Recommendations or a tool result lists it; null means search first, never guess."
+          }
+        },
+        "required": [
+          "operation",
+          "title",
           "title_id"
         ],
         "type": "object"
@@ -201,7 +247,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Relative jump from where playback is: 'skip ahead thirty seconds' is 30, 'go back ten' is -10."
           },
           "to_seconds": {
             "anyOf": [
@@ -212,7 +259,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Absolute position: 'go to the two-minute mark', 'start over' (0)."
           },
           "verb": {
             "const": "seek",
@@ -374,12 +422,16 @@
         ],
         "type": "string"
       },
+      "request": {
+        "$ref": "#/$defs/Request"
+      },
       "say": {
         "type": "string"
       }
     },
     "required": [
       "intent",
+      "request",
       "say",
       "actions"
     ],

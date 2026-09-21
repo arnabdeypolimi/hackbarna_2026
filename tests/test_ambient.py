@@ -15,7 +15,7 @@ from tv_avatar.agent.commands import (
     Verb,
     parse_command,
 )
-from tv_avatar.agent.envelope import TurnPlan, describe_capabilities
+from tv_avatar.agent.envelope import TurnPlan, describe_capabilities, plan_violations
 from tv_avatar.agent.prompt import build_system_prompt
 from tv_avatar.ambient.scenes import SCENES, describe_scenes
 from tv_avatar.control.protocol import (
@@ -49,12 +49,15 @@ def test_ambient_verbs_never_block_the_turn():
 
 
 def test_turn_plan_can_carry_an_ambient_action():
+    request = {"operation": "control", "title": None, "title_id": None}
     plan = TurnPlan.model_validate({
-        "intent": "control", "say": "Here's the fireplace.",
+        "intent": "control", "request": request, "say": "Here's the fireplace.",
         "actions": [{"verb": "show_ambient", "scene": "fireplace"}]})
     assert plan.actions[0].scene == "fireplace"
+    # Ambient is not title-directed, so no operation licenses or forbids it.
+    assert not plan_violations(plan)
     with pytest.raises(ValidationError):
-        TurnPlan.model_validate({"intent": "control", "say": "",
+        TurnPlan.model_validate({"intent": "control", "request": request, "say": "",
                                  "actions": [{"verb": "show_ambient", "scene": "lava lamp"}]})
 
 

@@ -96,6 +96,7 @@ LEVEL_ERROR = "ERROR"
 # --- Filterable facts: langfuse.observation.metadata.<key> (D20) --------------
 _META = "langfuse.observation.metadata."
 META_INTENT = _META + "intent"
+META_OPERATION = _META + "operation"
 META_CYCLES = _META + "cycles"
 META_CYCLE = _META + "cycle"
 META_FALLBACK = _META + "fallback"
