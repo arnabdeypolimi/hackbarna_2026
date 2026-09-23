@@ -1,4 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type WheelEvent } from 'react';
+import {
+  useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type CSSProperties, type MouseEvent, type ReactNode, type WheelEvent,
+} from 'react';
 import type { Title } from '../types/title';
 import { Art } from './Art';
 import { HeartIcon } from './Icons';
@@ -27,6 +30,7 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
   const [offset, setOffset] = useState(0);
   const [glide, setGlide] = useState(true); // eased only when the selection moved us
   const [drift, setDrift] = useState(0);
+  const savedIds = useMemo(() => new Set(saved), [saved]);
 
   /** The track's own left padding, read from --pad-text rather than copied as a number here:
       the row's scroll maths is in stage units and a token that moved without this moving with
@@ -155,12 +159,12 @@ export function PosterRow({ items, sel, saved, onPick, empty }: Props) {
                   '--fan-away': Math.abs(i - sel),
                 } as CSSProperties : undefined}
                 aria-label={`${it.title}, ${it.typeLabel}${it.years ? ', ' + it.years : ''}${
-                  saved.indexOf(it.id) >= 0 ? ', saved to My List' : ''
+                  savedIds.has(it.id) ? ', saved to My List' : ''
                 }`}
                 onClick={() => onPick(i)}
               >
                 <Art item={it} />
-                {saved.indexOf(it.id) >= 0 && (
+                {savedIds.has(it.id) && (
                   <span className="savemark" aria-hidden="true"><HeartIcon /></span>
                 )}
               </button>

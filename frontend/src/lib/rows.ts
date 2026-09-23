@@ -27,20 +27,34 @@ const FILLER = new Set([
   'movie', 'movies', 'film', 'films', 'show', 'shows', 'series', 'title', 'titles', 'something',
 ]);
 
-export function buildRow(items: Title[], tab: Tab, query: string, myList: string[]): Title[] {
-  if (query) return items.filter((x) => matches(x, query)).slice(0, ROW_MAX);
+/**
+ * The tab's ranking of the whole catalogue, before search or list filtering. Split from
+ * `buildRow` so the caller can memoise it on `[items, tab]` alone: saving a title used to
+ * re-sort 2000 items, even though only My List reads the saved ids.
+ */
+export function rankForTab(items: Title[], tab: Tab): Title[] {
   switch (tab) {
     case 'popular':
-      return (items.some((x) => x.pop) ? [...items].sort((a, b) => b.pop - a.pop) : items).slice(0, ROW_MAX);
+      return items.some((x) => x.pop) ? [...items].sort((a, b) => b.pop - a.pop) : items;
     case 'top': {
       // Only rank titles with at least the median vote count, so one 10/10 vote doesn't top the list.
       const votes = items.map((x) => x.votes).sort((a, b) => a - b);
       const min = votes[Math.floor(votes.length / 2)] || 0;
-      return items.filter((x) => x.votes >= min).sort((a, b) => b.score - a.score).slice(0, ROW_MAX);
+      return items.filter((x) => x.votes >= min).sort((a, b) => b.score - a.score);
     }
     case 'recent':
-      return [...items].sort((a, b) => b.added - a.added).slice(0, ROW_MAX);
+      return [...items].sort((a, b) => b.added - a.added);
     case 'list':
-      return items.filter((x) => myList.includes(x.id));
+      return items;
   }
+}
+
+/** `ranked` is `rankForTab(items, tab)`; `items` is the unranked catalogue the search runs over. */
+export function buildRow(items: Title[], ranked: Title[], tab: Tab, query: string, myList: string[]): Title[] {
+  if (query) return items.filter((x) => matches(x, query)).slice(0, ROW_MAX);
+  if (tab === 'list') {
+    const saved = new Set(myList);
+    return ranked.filter((x) => saved.has(x.id));
+  }
+  return ranked.slice(0, ROW_MAX);
 }

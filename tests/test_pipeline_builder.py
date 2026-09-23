@@ -1,7 +1,7 @@
+from conftest import PERSONA
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transcriptions.language import Language
 
-from conftest import PERSONA
 from tv_avatar.agent.llm import build_llm
 from tv_avatar.catalog import AvatarProfile
 from tv_avatar.config import Settings

@@ -23,6 +23,7 @@ against `turn_plan_schema(final=True)`, whose actions union simply has no
 observation-returning tools, so constrained decoding cannot over-call.
 """
 from dataclasses import dataclass
+from functools import cache
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, TypeAdapter
@@ -240,6 +241,7 @@ def _field_sig(model: type[BaseModel]) -> str:
     return ", ".join(parts) or "no arguments"
 
 
+@cache
 def describe_capabilities() -> str:
     lines = []
     for verb, spec in REGISTRY.items():

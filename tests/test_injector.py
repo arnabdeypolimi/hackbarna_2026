@@ -48,13 +48,16 @@ async def test_injector_rewrites_system_message_with_screen_and_history(catalog,
     ctx.add_message({"role": "system", "content": "stale"})
     ctx.add_message({"role": "user", "content": "play the focused one"})
     injector = ScreenContextInjector(_session(), catalog=catalog, history=history)
-    await run_test(injector, frames_to_send=[LLMContextFrame(context=ctx)], expected_down_frames=[LLMContextFrame])
-
-    messages = ctx.get_messages()
-    assert [m["role"] for m in messages] == ["system", "user"]
-    system = messages[0]["content"]
-    assert "stale" not in system
-    assert "# Capabilities" in system and "# Screen" in system
-    assert "Inception (2010)" in system and "<- focused" in system
-    assert "Recently watched: Inception (2010)" in system
-    await history.close()
+    try:
+        # A cold pipecat start can miss run_test's 1 s default on a busy box.
+        await run_test(injector, frames_to_send=[LLMContextFrame(context=ctx)],
+                       expected_down_frames=[LLMContextFrame], start_timeout=5.0)
+        messages = ctx.get_messages()
+        assert [m["role"] for m in messages] == ["system", "user"]
+        system = messages[0]["content"]
+        assert "stale" not in system
+        assert "# Capabilities" in system and "# Screen" in system
+        assert "Inception (2010)" in system and "<- focused" in system
+        assert "Recently watched: Inception (2010)" in system
+    finally:
+        await history.close()  # an open aiosqlite thread keeps a failed run from exiting

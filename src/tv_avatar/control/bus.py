@@ -45,10 +45,22 @@ class _CommandOrigin:
     attributes: dict
     replies: set[str] = field(default_factory=set)
 
+#: Non-command messages (status, transcripts) kept while no socket is draining
+#: the queue. The observer publishes one per interim transcript, so a voice
+#: session in the Degraded state (TV app disconnected) would otherwise grow the
+#: queue for the whole token TTL. Commands are never dropped here — they are
+#: what the spec says must survive a reconnect; a stale status is worthless.
+MAX_QUEUED_EVENTS = 64
+
 
 class CommandBus:
-    def __init__(self, search_timeout_s: float | None = None) -> None:
+    def __init__(self, search_timeout_s: float | None = None, *,
+                 max_queued_events: int = MAX_QUEUED_EVENTS) -> None:
         self._outbound: deque[ServerMessage] = deque()
+        self._queued_events = 0
+        # At least one: `_enqueue` counts the new event before evicting, so a cap of 0
+        # would find nothing to evict and leave the count permanently off by one.
+        self._max_queued_events = max(1, max_queued_events)
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
@@ -154,16 +166,46 @@ class CommandBus:
         self._enqueue(msg)
 
     def _enqueue(self, msg: ServerMessage) -> None:
+        if not isinstance(msg, CommandMsg):
+            self._queued_events += 1
+            if self._queued_events > self._max_queued_events:
+                self._drop_oldest_event()
         self._outbound.append(msg)
         if isinstance(msg, CommandMsg):
             self._delivery(msg.id, "queued")
         self._ready.set()
 
+    def _drop_oldest_event(self) -> None:
+        for i, queued in enumerate(self._outbound):
+            if not isinstance(queued, CommandMsg):
+                del self._outbound[i]
+                self._queued_events -= 1
+                return
+
     async def next_outbound(self) -> ServerMessage:
+        """Take the next message. See ``peek_outbound`` for the socket writer."""
+        msg = await self.peek_outbound()
+        self.pop_outbound(msg)
+        return msg
+
+    async def peek_outbound(self) -> ServerMessage:
+        """Wait for the next message without removing it, so the writer can send
+        first and pop after: a send that fails mid-disconnect leaves the message
+        queued for the reconnecting client instead of losing it."""
         while not self._outbound:
             self._ready.clear()
             await self._ready.wait()
-        return self._outbound.popleft()
+        return self._outbound[0]
+
+    def pop_outbound(self, sent: ServerMessage) -> None:
+        """Remove ``sent`` once it is on the wire — only if it is still the head.
+        While the send was in flight a barge-in (``cancel_turn``) or the event cap
+        may have removed it already; popping blindly would then discard the
+        message behind it, which nobody has sent."""
+        if not self._outbound or self._outbound[0] is not sent:
+            return
+        if not isinstance(self._outbound.popleft(), CommandMsg):
+            self._queued_events -= 1
 
     def cancel_turn(self, turn_id: str) -> int:
         """Drop queued-but-unsent commands for an interrupted turn.
@@ -181,7 +223,7 @@ class CommandBus:
             if not isinstance(m, CommandMsg) or m.turn_id != turn_id
         )
         dropped = len(self._outbound) - len(keep)
-        self._outbound = keep
+        self._outbound = keep  # only commands were removed; the event count is unchanged
         if not self._outbound:
             self._ready.clear()
 

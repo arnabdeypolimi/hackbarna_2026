@@ -39,6 +39,7 @@ async def test_running_a_turn_dispatches_its_commands():
 import asyncio
 
 import pytest
+from conftest import PERSONA
 from pipecat.frames.frames import (
     InterruptionFrame,
     LLMContextFrame,
@@ -49,7 +50,6 @@ from pipecat.frames.frames import (
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.tests.utils import run_test
 
-from conftest import PERSONA
 from tv_avatar.session.state import SessionStore
 
 

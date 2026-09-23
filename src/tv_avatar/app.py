@@ -133,7 +133,7 @@ def create_app(
 
     @app.post("/sessions")
     async def create_session(
-        req: CreateSessionRequest = Body(default_factory=CreateSessionRequest),
+        req: CreateSessionRequest = Body(default_factory=CreateSessionRequest),  # noqa: B008 — FastAPI idiom
     ) -> dict:
         """Mint a session pinned to one avatar, one language and one viewer (spec §6, D10)."""
         try:

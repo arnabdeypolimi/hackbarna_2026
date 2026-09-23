@@ -98,10 +98,10 @@ class AvatarCatalog(BaseModel):
     def _consistent(self) -> "AvatarCatalog":
         ids = [a.id for a in self.avatars]
         if len(set(ids)) != len(ids):
-            raise ValueError(f"duplicate avatar ids: {sorted(set(i for i in ids if ids.count(i) > 1))}")
+            raise ValueError(f"duplicate avatar ids: {sorted({i for i in ids if ids.count(i) > 1})}")
         codes = [l.code for l in self.languages]
         if len(set(codes)) != len(codes):
-            raise ValueError(f"duplicate language codes: {sorted(set(c for c in codes if codes.count(c) > 1))}")
+            raise ValueError(f"duplicate language codes: {sorted({c for c in codes if codes.count(c) > 1})}")
         if self.default_avatar not in ids:
             raise ValueError(f"default_avatar {self.default_avatar!r} is not one of {ids}")
         if self.default_language not in codes:
@@ -165,7 +165,8 @@ def load_catalog(path: Path) -> AvatarCatalog:
     except yaml.YAMLError as err:
         raise ValueError(f"avatar catalog {path} is not valid YAML: {err}") from err
     if not isinstance(raw, dict):
-        raise ValueError(f"avatar catalog {path} must be a mapping at the top level")
+        # ValueError like the other catalog failures: callers treat "bad yaml" as one class.
+        raise ValueError(f"avatar catalog {path} must be a mapping at the top level")  # noqa: TRY004
     return AvatarCatalog.model_validate(raw)
 
 

@@ -34,6 +34,14 @@ W_POPULARITY = 0.2
 CHANNEL_LIMIT = 50
 PREFIX_CHARS = 20
 QUERY_CACHE_TTL_S = 30.0
+#: Every utterance past the prefetch threshold adds a (user, prefix) → vector entry;
+#: expired ones are swept when the cache passes this size, so it stays bounded
+#: without a timer.
+QUERY_CACHE_SWEEP_AT = 256
+#: How long a user's taste vector (mean of engaged titles) is trusted before the
+#: history DB is re-read. Taste moves at the pace of finished films, so minutes
+#: is plenty — but never "until restart", which is what an unbounded cache meant.
+TASTE_TTL_S = 300.0
 DEFAULT_MIN_VOTES = 50
 #: The embed hop gets this share of the tool budget so a timeout still leaves
 #: room for the taste/popular channels to answer inside the same budget.
@@ -77,7 +85,7 @@ class RecsEngine:
         self._timeout = tool_timeout_s * EMBED_BUDGET_FRACTION
         self._query_cache: dict[tuple[str, str], tuple[float, list[float]]] = {}
         self._inflight: dict[tuple[str, str], asyncio.Task] = {}
-        self._taste_cache: dict[str, list[float] | None] = {}
+        self._taste_cache: dict[str, tuple[float, list[float] | None]] = {}
         self._pop_max = max((i.popularity for i in catalog.top_popular(1)), default=1.0) or 1.0
 
     # --- speculative query embedding ------------------------------------
@@ -93,7 +101,11 @@ class RecsEngine:
 
     async def _embed_and_cache(self, key: tuple[str, str], text: str) -> list[float]:
         vec = (await self._embedder.embed([text]))[0]
-        self._query_cache[key] = (time.monotonic(), vec)
+        now = time.monotonic()
+        if len(self._query_cache) >= QUERY_CACHE_SWEEP_AT:
+            self._query_cache = {k: v for k, v in self._query_cache.items()
+                                 if now - v[0] < QUERY_CACHE_TTL_S}
+        self._query_cache[key] = (now, vec)
         return vec
 
     async def _query_vector(self, ctx: RecsContext) -> list[float] | None:
@@ -127,15 +139,17 @@ class RecsEngine:
     # --- taste ------------------------------------------------------------
 
     async def _taste_vector(self, user_id: str) -> list[float] | None:
-        if user_id in self._taste_cache:
-            return self._taste_cache[user_id]
+        cached = self._taste_cache.get(user_id)
+        if cached and time.monotonic() - cached[0] < TASTE_TTL_S:
+            return cached[1]
         engaged = await self._history.engaged_ids(user_id)
         vectors = list(self._catalog.vectors(engaged[:20]).values()) if engaged else []
         taste = _mean(vectors) if vectors else None
-        self._taste_cache[user_id] = taste
+        self._taste_cache[user_id] = (time.monotonic(), taste)
         return taste
 
-    async def invalidate_taste(self, user_id: str) -> None:
+    def invalidate_taste(self, user_id: str) -> None:
+        """Forget a user's taste now rather than at TTL — for a finished film."""
         self._taste_cache.pop(user_id, None)
 
     # --- public -----------------------------------------------------------

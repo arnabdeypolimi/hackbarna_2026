@@ -21,9 +21,13 @@ def test_tracing_dependencies_import():
     from importlib.util import find_spec
 
     from opentelemetry import trace  # noqa: F401
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # noqa: F401
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+        OTLPSpanExporter,  # noqa: F401
+    )
     from opentelemetry.processor.baggage import BaggageSpanProcessor  # noqa: F401
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: F401
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,  # noqa: F401
+    )
     from pipecat.utils.tracing.setup import is_tracing_available
     assert is_tracing_available()
     assert find_spec("opentelemetry.exporter.otlp.proto.grpc") is None

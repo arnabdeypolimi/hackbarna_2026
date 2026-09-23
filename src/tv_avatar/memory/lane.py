@@ -116,7 +116,7 @@ class BaseMemoryLane(ABC):
 
     async def finish_session(self, user_id: str) -> None:
         """Called once when the user's pipeline ends; lanes that consolidate per session override."""
-        return None
+        return
 
     async def prefetch(self, user_id: str, partial: str) -> None:
         prefix = _prefix(partial)

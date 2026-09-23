@@ -1,9 +1,9 @@
 import json
 
 import pytest
+from conftest import PERSONA
 from fastapi.testclient import TestClient
 
-from conftest import PERSONA
 from tv_avatar.app import create_app
 from tv_avatar.control.protocol import Playback, ScreenState, Tile
 from tv_avatar.session.state import SessionStore

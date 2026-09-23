@@ -53,12 +53,17 @@ def _when(ts: float, now: float | None = None) -> str:
         return "an hour ago" if hours == 1 else f"{hours} hours ago"
     days = int(age // 86400)
     return "yesterday" if days == 1 else f"{days} days ago"
+
+
+# Every read below is "this user's events of kind K, newest first", so ts is in
+# the index; the older (user_id, kind) index is a strict prefix and is dropped.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     user_id TEXT NOT NULL, ts REAL NOT NULL, kind TEXT NOT NULL,
     title_id TEXT, detail_json TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS idx_events_user_kind ON events(user_id, kind);
+DROP INDEX IF EXISTS idx_events_user_kind;
+CREATE INDEX IF NOT EXISTS idx_events_user_kind_ts ON events(user_id, kind, ts DESC);
 """
 
 
@@ -90,13 +95,20 @@ class HistoryStore:
             self._db = None
 
     async def record(self, event: Event) -> None:
+        await self.record_many([event])
+
+    async def record_many(self, events: list[Event]) -> None:
+        """One transaction for a batch — `rec_shown` writes a row per recommended title."""
+        if not events:
+            return
         db = await self._conn()
-        await db.execute(
+        await db.executemany(
             "INSERT INTO events(user_id, ts, kind, title_id, detail_json) VALUES (?, ?, ?, ?, ?)",
-            (event.user_id, event.ts, event.kind.value, event.title_id, json.dumps(event.detail)),
+            [(e.user_id, e.ts, e.kind.value, e.title_id, json.dumps(e.detail)) for e in events],
         )
         await db.commit()
-        logger.bind(user_id=event.user_id).debug("history event", kind=event.kind.value, title_id=event.title_id)
+        for event in events:
+            logger.bind(user_id=event.user_id).debug("history event", kind=event.kind.value, title_id=event.title_id)
 
     async def watched_ids(self, user_id: str) -> set[str]:
         db = await self._conn()
@@ -107,55 +119,39 @@ class HistoryStore:
         ) as cur:
             return {row[0] for row in await cur.fetchall()}
 
-    async def engaged_ids(self, user_id: str, min_watch_s: float = 300) -> list[str]:
+    async def engaged_ids(self, user_id: str, min_watch_s: float = 300, limit: int = 20) -> list[str]:
         """Titles the user finished or watched for at least `min_watch_s`, most recent first."""
         db = await self._conn()
         async with db.execute(
-            "SELECT title_id, kind, detail_json FROM events WHERE user_id=? AND title_id IS NOT NULL "
-            "AND kind IN (?, ?) ORDER BY ts DESC",
-            (user_id, EventKind.PLAY_COMPLETED.value, EventKind.PLAY_ABANDONED.value),
+            "SELECT title_id FROM events WHERE user_id=? AND title_id IS NOT NULL AND "
+            "(kind=? OR (kind=? AND json_extract(detail_json, '$.watched_s') >= ?)) "
+            "GROUP BY title_id ORDER BY MAX(ts) DESC LIMIT ?",
+            (user_id, EventKind.PLAY_COMPLETED.value, EventKind.PLAY_ABANDONED.value, min_watch_s, limit),
         ) as cur:
-            rows = await cur.fetchall()
-        out: list[str] = []
-        for title_id, kind, detail_json in rows:
-            if title_id in out:
-                continue
-            if kind == EventKind.PLAY_COMPLETED.value or json.loads(detail_json).get("watched_s", 0) >= min_watch_s:
-                out.append(title_id)
-        return out
+            return [row[0] for row in await cur.fetchall()]
 
     async def recent_titles(self, user_id: str, limit: int = 10) -> list[str]:
         db = await self._conn()
         async with db.execute(
-            "SELECT title_id FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL ORDER BY ts DESC",
-            (user_id, EventKind.PLAY_STARTED.value),
+            "SELECT title_id FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL "
+            "GROUP BY title_id ORDER BY MAX(ts) DESC LIMIT ?",
+            (user_id, EventKind.PLAY_STARTED.value, limit),
         ) as cur:
-            rows = await cur.fetchall()
-        seen: list[str] = []
-        for (title_id,) in rows:
-            if title_id not in seen:
-                seen.append(title_id)
-            if len(seen) >= limit:
-                break
-        return seen
+            return [row[0] for row in await cur.fetchall()]
 
     async def rejected_ids(self, user_id: str) -> set[str]:
         """Titles the viewer declined and has not played since — kept out of
         recommendations and the greeting until they do."""
         db = await self._conn()
+        # A later play forgives an earlier rejection: the latest rejection must be
+        # newer than the latest play of the same title (or there is no play at all).
         async with db.execute(
-            "SELECT title_id, kind FROM events WHERE user_id=? AND title_id IS NOT NULL AND kind IN (?, ?) "
-            "ORDER BY ts ASC",
+            "SELECT r.title_id FROM events r WHERE r.user_id=? AND r.kind=? AND r.title_id IS NOT NULL "
+            "GROUP BY r.title_id HAVING MAX(r.ts) > COALESCE((SELECT MAX(p.ts) FROM events p "
+            "WHERE p.user_id=r.user_id AND p.title_id=r.title_id AND p.kind=?), -1)",
             (user_id, EventKind.REC_REJECTED.value, EventKind.PLAY_STARTED.value),
         ) as cur:
-            rows = await cur.fetchall()
-        rejected: set[str] = set()
-        for title_id, kind in rows:  # chronological: a later play forgives an earlier rejection
-            if kind == EventKind.REC_REJECTED.value:
-                rejected.add(title_id)
-            else:
-                rejected.discard(title_id)
-        return rejected
+            return {row[0] for row in await cur.fetchall()}
 
     async def recent_events(self, user_id: str, kind: EventKind, limit: int = 20) -> list[Event]:
         db = await self._conn()
@@ -170,19 +166,15 @@ class HistoryStore:
         """Titles the agent recommended to this user and they did not decline,
         newest first, with the event time."""
         db = await self._conn()
+        skip = await self.rejected_ids(user_id)
+        # Over-fetch by the rejected count so the LIMIT still fills after filtering.
         async with db.execute(
-            "SELECT title_id, ts FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL ORDER BY ts DESC",
-            (user_id, EventKind.REC_SHOWN.value),
+            "SELECT title_id, MAX(ts) FROM events WHERE user_id=? AND kind=? AND title_id IS NOT NULL "
+            "GROUP BY title_id ORDER BY MAX(ts) DESC LIMIT ?",
+            (user_id, EventKind.REC_SHOWN.value, limit + len(skip)),
         ) as cur:
             rows = await cur.fetchall()
-        skip = await self.rejected_ids(user_id)
-        out: list[tuple[str, float]] = []
-        for title_id, ts in rows:
-            if title_id not in skip and all(t != title_id for t, _ in out):
-                out.append((title_id, ts))
-            if len(out) >= limit:
-                break
-        return out
+        return [(title_id, ts) for title_id, ts in rows if title_id not in skip][:limit]
 
     async def render_for_prompt(self, user_id: str, catalog: _Named | None = None, limit: int = 5) -> str:
         """Episodic memory for the prompt: what was watched and what was recommended

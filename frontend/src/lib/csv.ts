@@ -2,26 +2,49 @@ import type { Title } from '../types/title';
 import { isKidSafe } from './maturity';
 import { BACKDROP_SIZE, MAX_TITLES, POSTER_SIZE, TMDB_IMAGE_BASE } from '../config';
 
-/** RFC 4180 CSV parser: quoted fields, escaped quotes and newlines inside quotes. */
+/**
+ * RFC 4180 CSV parser: quoted fields, escaped quotes and newlines inside quotes.
+ *
+ * Fields are sliced out as runs, not built a character at a time: this runs on the UI
+ * thread of a TV for files up to 50 MB, and per-character `+=` was the whole import time.
+ */
 export function parseCSV(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
   let quoted = false;
   const src = text.replace(/^\uFEFF/, '');
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
+  const n = src.length;
+  let i = 0;
+  let start = 0; // where the current run of plain characters began
+  while (i < n) {
+    const c = src.charCodeAt(i);
     if (quoted) {
-      if (c === '"') {
-        if (src[i + 1] === '"') { field += '"'; i++; } else quoted = false;
-      } else field += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ',') { row.push(field); field = ''; }
-    else if (c === '\n' || c === '\r') {
-      if (c === '\r' && src[i + 1] === '\n') i++;
-      row.push(field); rows.push(row); row = []; field = '';
-    } else field += c;
+      if (c === 34 /* " */) {
+        field += src.slice(start, i);
+        if (src.charCodeAt(i + 1) === 34) { field += '"'; i += 2; } else { quoted = false; i++; }
+        start = i;
+      } else i++;
+    } else if (c === 34) {
+      field += src.slice(start, i);
+      quoted = true;
+      i++;
+      start = i;
+    } else if (c === 44 /* , */) {
+      row.push(field + src.slice(start, i));
+      field = '';
+      i++;
+      start = i;
+    } else if (c === 10 || c === 13 /* \n \r */) {
+      row.push(field + src.slice(start, i));
+      rows.push(row);
+      row = [];
+      field = '';
+      i += c === 13 && src.charCodeAt(i + 1) === 10 ? 2 : 1;
+      start = i;
+    } else i++;
   }
+  field += src.slice(start, n);
   if (field !== '' || row.length) { row.push(field); rows.push(row); }
   return rows.filter((r) => r.some((v) => v.trim() !== ''));
 }

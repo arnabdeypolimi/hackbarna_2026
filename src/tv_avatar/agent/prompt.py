@@ -13,6 +13,7 @@ instructions most reliably); only the *reply* language is parameterised,
 from the session's LanguageProfile.
 """
 import json
+from functools import cache
 from typing import Protocol
 
 from tv_avatar.agent.envelope import describe_capabilities
@@ -168,6 +169,7 @@ def tool_results_message(feedback: str, *, original_request: str) -> str:
             "several plausible matches -> clarify; none -> not found, no action.")
 
 
+@cache  # LanguageProfile is frozen; the static sections never change within a process
 def build_system_prompt(language: LanguageProfile) -> str:
     return "\n\n".join([
         _PERSONA.format(language=language.name),

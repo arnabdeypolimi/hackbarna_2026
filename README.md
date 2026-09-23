@@ -41,7 +41,9 @@ Two planes, deliberately independent. They meet only at the session store and th
 - **Media plane** — one Pipecat pipeline per session over `SmallWebRTCTransport`.
 - **Control plane** — a separate authenticated WebSocket. Commands go down, screen state
   comes up. A dropped control socket does not drop the call; commands queue until the TV
-  app reconnects with the same session id.
+  app reconnects with the same session id. Delivery is at-least-once: a command whose send
+  was cut off is re-sent on reconnect, so a reconnecting client should ignore a command
+  `id` it has already handled.
 - **Screen state is pushed by the client.** The TV app stays the source of truth about its
   own UI, so "that one" and "the second" resolve with no extra round-trip.
 

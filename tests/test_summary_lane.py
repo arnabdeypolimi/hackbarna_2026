@@ -168,7 +168,8 @@ async def test_profile_is_reread_when_the_file_changes(tmp_path):
     d.mkdir(parents=True)
     (d / PROFILE_FILE).write_text("## Preferences\n- v1\n")
     assert "v1" in (await lane.recall("u1", "a")).render_for_prompt()
-    import os, time
+    import os
+    import time
     (d / PROFILE_FILE).write_text("## Preferences\n- v2 (edited by hand)\n")
     os.utime(d / PROFILE_FILE, (time.time() + 5, time.time() + 5))
     assert "v2" in (await lane.recall("u1", "b")).render_for_prompt()
