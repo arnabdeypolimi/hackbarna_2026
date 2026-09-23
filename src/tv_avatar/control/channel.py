@@ -115,7 +115,10 @@ class ControlChannel:
         while True:
             # Peek, send, then pop: a socket that dies mid-send keeps the message
             # queued for the reconnect (spec §6) instead of losing the one command
-            # that was in flight. The delivery marks are telemetry only.
+            # that was in flight. This makes delivery at-least-once — the bytes may
+            # already be out when the send raises — which is why every command
+            # carries an id the client can dedupe on. The delivery marks are
+            # telemetry only.
             message = await self._bus.peek_outbound()
             try:
                 await self._ws.send_text(message.model_dump_json())

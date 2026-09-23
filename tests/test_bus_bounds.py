@@ -38,6 +38,16 @@ async def test_event_count_tracks_pops_so_the_cap_is_a_window_not_a_lifetime_tot
     assert [(await bus.next_outbound()).text for _ in range(2)] == ["partial 2", "partial 3"]
 
 
+async def test_a_zero_cap_still_queues_the_newest_event():
+    """A cap of 0 has nothing to evict when the new event is counted, so it is clamped
+    to 1 rather than leaving the count off by one for the life of the session."""
+    bus = CommandBus(max_queued_events=0)
+    for i in range(3):
+        bus.publish(_event(i))
+    assert (await bus.next_outbound()).text == "partial 2"
+    assert bus._queued_events == 0
+
+
 async def test_peek_leaves_the_message_for_a_retry():
     bus = CommandBus()
     bus.publish(AgentStatusMsg(state="idle"))

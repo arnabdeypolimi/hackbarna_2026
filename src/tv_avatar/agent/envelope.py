@@ -206,7 +206,6 @@ def plan_violations(plan: TurnPlan | FinalTurnPlan) -> list[str]:
 
 # --- response_format schema ------------------------------------------------
 
-@cache
 def turn_plan_schema(*, final: bool = False, operation: str | None = None) -> dict:
     """The decoding contract for one cycle.
 
@@ -216,9 +215,6 @@ def turn_plan_schema(*, final: bool = False, operation: str | None = None) -> di
     as discover, then the cycle that received the recommendations re-decoded the
     request as play and started the top hit. With the const in the schema that
     envelope is undecodable; the request gate then holds against the pin as well.
-
-    Pure function of module constants; built once per (final, operation) variant,
-    not per LLM request. Callers must not mutate the result.
     """
     model, name = (FinalTurnPlan, "turn_plan_final") if final else (TurnPlan, "turn_plan")
     schema = response_format(model, name)

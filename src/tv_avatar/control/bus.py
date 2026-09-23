@@ -58,7 +58,9 @@ class CommandBus:
                  max_queued_events: int = MAX_QUEUED_EVENTS) -> None:
         self._outbound: deque[ServerMessage] = deque()
         self._queued_events = 0
-        self._max_queued_events = max_queued_events
+        # At least one: `_enqueue` counts the new event before evicting, so a cap of 0
+        # would find nothing to evict and leave the count permanently off by one.
+        self._max_queued_events = max(1, max_queued_events)
         self._ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._pending_turn: dict[str, str] = {}  # command_id -> turn_id
