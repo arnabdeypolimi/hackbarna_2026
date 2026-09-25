@@ -27,6 +27,10 @@ stops and listens.
 
 <img src="docs/screenshots/mira-home.png" alt="Mira on the home screen: a Recommended rail with Blue Beetle selected, the avatar panel on the right" width="900">
 
+<br>
+
+<video src="docs/video/mira-launch.mp4" controls width="900" muted></video>
+
 </div>
 
 ---
