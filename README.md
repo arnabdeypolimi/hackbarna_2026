@@ -29,7 +29,7 @@ stops and listens.
 
 <br>
 
-<video src="docs/video/mira-launch.mp4" controls width="900" muted></video>
+<video src="https://raw.githubusercontent.com/arnabdeypolimi/hackbarna_2026/main/docs/video/mira-launch.mp4" poster="docs/screenshots/mira-home.png" controls width="900"></video>
 
 </div>
 
